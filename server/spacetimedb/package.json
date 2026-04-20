@@ -1,0 +1,20 @@
+{
+  "name": "@no-mans-sky/server",
+  "version": "1.0.0",
+  "description": "",
+  "scripts": {
+    "build": "spacetime build",
+    "dev": "spacetime dev no-mans-sky --project-path .. --module-path . --module-bindings-path ../client/src/module_bindings --client-lang typescript --server local --server-only --yes",
+    "generate": "spacetime generate no-mans-sky --lang typescript --out-dir ../../client/src/module_bindings --module-path . --yes",
+    "publish:local": "spacetime publish no-mans-sky --server local --module-path . --yes"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "spacetimedb": "^2.1.0"
+  },
+  "devDependencies": {
+    "typescript": "~5.6.2"
+  }
+}

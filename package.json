@@ -1,0 +1,18 @@
+{
+  "name": "no-mans-sky",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "packageManager": "pnpm@10.28.0",
+  "scripts": {
+    "dev": "pnpm --dir client dev",
+    "dev:client": "pnpm --dir client dev",
+    "dev:server": "pnpm --dir server/spacetimedb dev",
+    "build": "pnpm -r build",
+    "lint": "pnpm --dir client lint",
+    "spacetime:start": "spacetime start",
+    "spacetime:build": "pnpm --dir server/spacetimedb build",
+    "spacetime:generate": "pnpm --dir server/spacetimedb generate",
+    "spacetime:publish:local": "pnpm --dir server/spacetimedb publish:local"
+  }
+}
