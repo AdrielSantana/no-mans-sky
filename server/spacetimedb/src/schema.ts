@@ -1,11 +1,10 @@
 import { schema, table, t } from 'spacetimedb/server';
 import { ScheduleAt } from 'spacetimedb';
 
+// ── Tabelas ────────────────────────────────────────────────
+
 export const player = table(
-  {
-    name: 'player',
-    public: true,
-  },
+  { name: 'player', public: true },
   {
     id: t.u64().primaryKey().autoInc(),
     identity: t.identity().unique(),
@@ -16,10 +15,7 @@ export const player = table(
 );
 
 export const celestialBody = table(
-  {
-    name: 'celestial_body',
-    public: true,
-  },
+  { name: 'celestial_body', public: true },
   {
     id: t.u64().primaryKey().autoInc(),
     name: t.string(),
@@ -37,13 +33,15 @@ export const celestialBody = table(
   }
 );
 
-// Placeholder resolvido em runtime - o reducer e definido abaixo
-let updateOrbitsReducer: ReturnType<any> | undefined;
+// Referencia lazy: o reducer e definido abaixo, apos schema().
+// O () => wrapper so e avaliado em runtime, quando ambos existem.
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+let _updateOrbitsRef: any;
 
 export const orbitTick = table(
   {
     name: 'orbit_tick',
-    scheduled: () => updateOrbitsReducer,
+    scheduled: () => _updateOrbitsRef,
   },
   {
     scheduledId: t.u64().primaryKey().autoInc(),
@@ -51,13 +49,19 @@ export const orbitTick = table(
   }
 );
 
+// ── Schema ─────────────────────────────────────────────────
+
 const spacetimedb = schema({ player, celestialBody, orbitTick });
 
-export const TICK_INTERVAL = 50_000n; // 50ms em microssegundos (50.000 µs)
+// ── Scheduled reducer ──────────────────────────────────────
+// Precisa ficar em schema.ts pois a tabela orbitTick referencia
+// este reducer via scheduled: () => ...
+
+export const TICK_INTERVAL = 50_000n; // 50ms (50.000 microssegundos)
 
 export const update_orbits = spacetimedb.reducer(
   { arg: orbitTick.rowType },
-  (ctx, { arg }) => {
+  (ctx, { arg: _arg }) => {
     for (const body of ctx.db.celestialBody.iter()) {
       if (body.isSun) {
         ctx.db.celestialBody.id.update({
@@ -68,15 +72,13 @@ export const update_orbits = spacetimedb.reducer(
       }
 
       const newAngle = body.angle + body.speed;
-      const x = body.orbitRadius * Math.cos(newAngle);
-      const z = body.orbitRadius * Math.sin(newAngle);
 
       ctx.db.celestialBody.id.update({
         ...body,
         angle: newAngle,
         rotationAngle: body.rotationAngle + body.rotationSpeed,
-        x,
-        z,
+        x: body.orbitRadius * Math.cos(newAngle),
+        z: body.orbitRadius * Math.sin(newAngle),
       });
     }
 
@@ -86,6 +88,6 @@ export const update_orbits = spacetimedb.reducer(
     });
   }
 );
-updateOrbitsReducer = update_orbits;
+_updateOrbitsRef = update_orbits;
 
 export default spacetimedb;

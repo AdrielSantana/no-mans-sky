@@ -1,6 +1,7 @@
 import { SenderError, t } from 'spacetimedb/server';
 import { ScheduleAt } from 'spacetimedb';
 import spacetimedb, { TICK_INTERVAL } from './schema';
+import { SOLAR_SYSTEM, SUN_CONFIG } from './seed';
 
 // Re-exportar reducer agendado (necessario para SpacetimeDB resolveSchedules)
 export { update_orbits } from './schema';
@@ -10,7 +11,6 @@ const DEFAULT_PLAYER_NAME = 'Explorer';
 export default spacetimedb;
 
 export const init = spacetimedb.init(ctx => {
-  // Evitar re-seed se ja existem corpos celestes
   let hasBodies = false;
   for (const _ of ctx.db.celestialBody.iter()) {
     hasBodies = true;
@@ -21,40 +21,24 @@ export const init = spacetimedb.init(ctx => {
   // Sol
   ctx.db.celestialBody.insert({
     id: 0n,
-    name: 'Sol',
+    name: SUN_CONFIG.name,
     isSun: true,
     orbitRadius: 0,
-    bodySize: 1.5,
-    color: '#ffcc00',
+    bodySize: SUN_CONFIG.bodySize,
+    color: SUN_CONFIG.color,
     angle: 0,
     speed: 0,
     rotationAngle: 0,
-    rotationSpeed: 0.01,
+    rotationSpeed: SUN_CONFIG.rotationSpeed,
     x: 0,
     y: 0,
     z: 0,
   });
 
   // Planetas
-  const planets: Array<{
-    name: string;
-    orbitRadius: number;
-    bodySize: number;
-    color: string;
-    angle: number;
-    speed: number;
-    rotationSpeed: number;
-  }> = [
-    { name: 'Mercurio', orbitRadius: 4, bodySize: 0.3, color: '#aaaaaa', angle: 0, speed: 0.04, rotationSpeed: 0.005 },
-    { name: 'Venus', orbitRadius: 6, bodySize: 0.6, color: '#e8a040', angle: 1.2, speed: 0.025, rotationSpeed: 0.008 },
-    { name: 'Terra', orbitRadius: 8.5, bodySize: 0.65, color: '#4488ff', angle: 2.8, speed: 0.018, rotationSpeed: 0.02 },
-    { name: 'Marte', orbitRadius: 11, bodySize: 0.45, color: '#cc4422', angle: 4.1, speed: 0.012, rotationSpeed: 0.019 },
-    { name: 'Jupiter', orbitRadius: 15, bodySize: 1.2, color: '#d4a060', angle: 5.5, speed: 0.006, rotationSpeed: 0.04 },
-  ];
-
-  for (const p of planets) {
-    const x = p.orbitRadius * Math.cos(p.angle);
-    const z = p.orbitRadius * Math.sin(p.angle);
+  for (const p of SOLAR_SYSTEM) {
+    const x = p.orbitRadius * Math.cos(p.startAngle);
+    const z = p.orbitRadius * Math.sin(p.startAngle);
     ctx.db.celestialBody.insert({
       id: 0n,
       name: p.name,
@@ -62,8 +46,8 @@ export const init = spacetimedb.init(ctx => {
       orbitRadius: p.orbitRadius,
       bodySize: p.bodySize,
       color: p.color,
-      angle: p.angle,
-      speed: p.speed,
+      angle: p.startAngle,
+      speed: p.orbitSpeed,
       rotationAngle: 0,
       rotationSpeed: p.rotationSpeed,
       x,
