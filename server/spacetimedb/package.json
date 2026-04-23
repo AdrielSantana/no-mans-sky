@@ -4,9 +4,9 @@
   "description": "",
   "scripts": {
     "build": "spacetime build",
-    "dev": "spacetime dev no-mans-sky --project-path .. --module-path . --module-bindings-path ../client/src/module_bindings --client-lang typescript --server local --server-only --yes",
-    "generate": "spacetime generate no-mans-sky --lang typescript --out-dir ../../client/src/module_bindings --module-path . --yes",
-    "publish:local": "spacetime publish no-mans-sky --server local --module-path . --yes"
+    "dev": "spacetime dev no-mans-sky --project-path .. --module-bindings-path ../client/src/module_bindings --client-lang typescript --server local --server-only --yes",
+    "generate": "spacetime generate no-mans-sky --lang typescript --out-dir ../../client/src/module_bindings --yes",
+    "publish:local": "spacetime publish no-mans-sky --server local --yes"
   },
   "keywords": [],
   "author": "",
