@@ -261,6 +261,7 @@ varying float vUVY;
 varying float vOpacity;
 varying vec3  vColor;
 varying vec3  vNormal;
+varying float vProgress;
 
 uniform float uHueSpread;
 uniform float uHue;
@@ -321,6 +322,7 @@ void main(void){
   vNormal  = normalize(pWorld);
   vOpacity = uOpacity * (0.5 + aWireRandom.w);
   vColor   = spectrum(aWireRandom.w * uHueSpread + uHue);
+  vProgress = aPos.x;
   gl_Position = uViewProjection * vec4(pWorld, 1.0);
 }
 `
@@ -335,6 +337,7 @@ varying float vUVY;
 varying float vOpacity;
 varying vec3  vColor;
 varying vec3  vNormal;
+varying float vProgress;
 uniform float uAlphaBlended;
 
 void main(void){
@@ -342,6 +345,8 @@ void main(void){
   alpha *= alpha;
   alpha *= vOpacity;
   alpha *= getAlpha(vNormal);
+  // Fade-out suave ao longo do comprimento
+  alpha *= 1.0 - smoothstep(0.5, 1.0, vProgress);
   gl_FragColor = vec4(vColor * alpha, alpha * uAlphaBlended);
 }
 `
@@ -357,6 +362,7 @@ varying float vUVY;
 varying float vOpacity;
 varying vec3  vColor;
 varying vec3  vNormal;
+varying float vProgress;
 
 uniform float uWidth;
 uniform float uAmp;
@@ -418,6 +424,7 @@ void main(void){
   vOpacity *= (1.0 - animPhase);
   vOpacity *= uOpacity;
   vColor = hue(aWireRandom.w * uHueSpread + uHue);
+  vProgress = aPos.x;
   gl_Position = uViewProjection * vec4(pW, 1.0);
 }
 `
@@ -432,6 +439,7 @@ varying float vUVY;
 varying float vOpacity;
 varying vec3  vColor;
 varying vec3  vNormal;
+varying float vProgress;
 uniform float uAlphaBlended;
 
 void main(void){
@@ -439,6 +447,8 @@ void main(void){
   alpha *= alpha;
   alpha *= vOpacity;
   alpha *= getAlpha(vNormal);
+  // Fade-out suave nas pontas
+  alpha *= 1.0 - smoothstep(0.6, 1.0, vProgress);
   gl_FragColor = vec4(vColor * alpha, alpha);
 }
 `
@@ -603,7 +613,7 @@ export class SunRenderer {
   }
 
   private createSunRays(sunSize: number): THREE.ShaderMaterial {
-    const lineCount = 4095
+    const lineCount = 800
     const lineLength = 8
     const sunRadius = sunSize
 
@@ -674,8 +684,8 @@ export class SunRenderer {
         uWidth: { value: 0.03 },
         uLength: { value: 0.25 },
         uOpacity: { value: 0.03 },
-        uNoiseFrequency: { value: 8.0 },
-        uNoiseAmplitude: { value: 0.4 },
+        uNoiseFrequency: { value: 4.0 },
+        uNoiseAmplitude: { value: 0.2 },
         uAlphaBlended: { value: 0.3 },
         uHueSpread: { value: 0.2 },
         uHue: { value: 0.2 },
