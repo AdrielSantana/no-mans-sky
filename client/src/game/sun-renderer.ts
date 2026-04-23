@@ -672,7 +672,7 @@ export class SunRenderer {
         uDirection: { value: this.sunMaterial.uniforms.uDirection.value },
         uLightView: { value: this.lightDirWorld.clone() },
         uWidth: { value: 0.03 },
-        uLength: { value: 0.45 },
+        uLength: { value: 0.25 },
         uOpacity: { value: 0.03 },
         uNoiseFrequency: { value: 8.0 },
         uNoiseAmplitude: { value: 0.4 },
