@@ -30,6 +30,8 @@ export const init = spacetimedb.init(ctx => {
     speed: 0,
     rotationAngle: 0,
     rotationSpeed: SUN_CONFIG.rotationSpeed,
+    axialTilt: SUN_CONFIG.axialTilt,
+    orbitalInclination: 0,
     x: 0,
     y: 0,
     z: 0,
@@ -50,8 +52,10 @@ export const init = spacetimedb.init(ctx => {
       speed: p.orbitSpeed,
       rotationAngle: 0,
       rotationSpeed: p.rotationSpeed,
+      axialTilt: p.axialTilt,
+      orbitalInclination: p.orbitalInclination,
       x,
-      y: 0,
+      y: p.orbitRadius * Math.sin(p.orbitalInclination) * Math.sin(p.startAngle),
       z,
     });
   }

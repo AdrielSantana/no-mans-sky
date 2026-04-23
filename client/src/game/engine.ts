@@ -9,7 +9,6 @@ export class GameEngine {
   private controls: OrbitControls
   private animationId: number | null = null
   private container: HTMLElement
-  private container: HTMLElement
   private boundResize: () => void
 
   private skybox: THREE.Mesh

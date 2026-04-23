@@ -27,6 +27,8 @@ export const celestialBody = table(
     speed: t.f32(),
     rotationAngle: t.f32(),
     rotationSpeed: t.f32(),
+    axialTilt: t.f32(),
+    orbitalInclination: t.f32(),
     x: t.f32(),
     y: t.f32(),
     z: t.f32(),
@@ -72,13 +74,15 @@ export const update_orbits = spacetimedb.reducer(
       }
 
       const newAngle = body.angle + body.speed;
+      const incl = body.orbitalInclination;
 
       ctx.db.celestialBody.id.update({
         ...body,
         angle: newAngle,
         rotationAngle: body.rotationAngle + body.rotationSpeed,
         x: body.orbitRadius * Math.cos(newAngle),
-        z: body.orbitRadius * Math.sin(newAngle),
+        y: body.orbitRadius * Math.sin(incl) * Math.sin(newAngle),
+        z: body.orbitRadius * Math.cos(incl) * Math.sin(newAngle),
       });
     }
 

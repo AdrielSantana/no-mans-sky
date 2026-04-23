@@ -26,7 +26,7 @@ export class CelestialSystem {
         this.scene.add(mesh)
 
         if (!body.isSun && body.orbitRadius > 0) {
-          const line = this.createOrbitLine(body.orbitRadius)
+          const line = this.createOrbitLine(body.orbitRadius, body.orbitalInclination)
           this.orbitLines.set(id, line)
           this.scene.add(line)
         }
@@ -34,7 +34,7 @@ export class CelestialSystem {
 
       mesh.position.set(body.x, body.y, body.z)
       mesh.scale.setScalar(body.bodySize)
-      mesh.rotation.y = body.rotationAngle
+      mesh.rotation.set(0, body.rotationAngle, body.axialTilt)
     }
 
     this.removeInactive(activeIds)
@@ -47,12 +47,16 @@ export class CelestialSystem {
     return new THREE.Mesh(this.geometry, material)
   }
 
-  private createOrbitLine(radius: number): THREE.Line {
+  private createOrbitLine(radius: number, inclination: number): THREE.Line {
     const points: THREE.Vector3[] = []
     const segments = 64
     for (let i = 0; i <= segments; i++) {
       const a = (i / segments) * Math.PI * 2
-      points.push(new THREE.Vector3(radius * Math.cos(a), 0, radius * Math.sin(a)))
+      points.push(new THREE.Vector3(
+        radius * Math.cos(a),
+        radius * Math.sin(inclination) * Math.sin(a),
+        radius * Math.cos(inclination) * Math.sin(a),
+      ))
     }
     const geometry = new THREE.BufferGeometry().setFromPoints(points)
     const material = new THREE.LineBasicMaterial({ color: 0x1a1a3a, transparent: true, opacity: 0.4 })

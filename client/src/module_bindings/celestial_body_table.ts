@@ -21,6 +21,8 @@ export default __t.row({
   speed: __t.f32(),
   rotationAngle: __t.f32().name("rotation_angle"),
   rotationSpeed: __t.f32().name("rotation_speed"),
+  axialTilt: __t.f32().name("axial_tilt"),
+  orbitalInclination: __t.f32().name("orbital_inclination"),
   x: __t.f32(),
   y: __t.f32(),
   z: __t.f32(),

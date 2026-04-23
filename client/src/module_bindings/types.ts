@@ -21,6 +21,8 @@ export const CelestialBody = __t.object("CelestialBody", {
   speed: __t.f32(),
   rotationAngle: __t.f32(),
   rotationSpeed: __t.f32(),
+  axialTilt: __t.f32(),
+  orbitalInclination: __t.f32(),
   x: __t.f32(),
   y: __t.f32(),
   z: __t.f32(),
