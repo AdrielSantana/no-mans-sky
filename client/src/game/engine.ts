@@ -1,5 +1,6 @@
 import * as THREE from 'three'
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js'
+import { createSkybox } from './skybox'
 
 export class GameEngine {
   readonly scene: THREE.Scene
@@ -8,7 +9,10 @@ export class GameEngine {
   private controls: OrbitControls
   private animationId: number | null = null
   private container: HTMLElement
+  private container: HTMLElement
   private boundResize: () => void
+
+  private skybox: THREE.Mesh
 
   constructor(container: HTMLElement) {
     this.container = container
@@ -23,7 +27,9 @@ export class GameEngine {
 
     // Scene
     this.scene = new THREE.Scene()
-    this.scene.background = new THREE.Color(0x020210)
+    this.scene.background = new THREE.Color(0x010108)
+    this.skybox = createSkybox()
+    this.scene.add(this.skybox)
 
     // Camera
     this.camera = new THREE.PerspectiveCamera(55, width / height, 0.1, 500)
@@ -38,7 +44,6 @@ export class GameEngine {
     this.controls.maxDistance = 80
 
     this.setupLights()
-    this.createStarField()
 
     this.boundResize = this.handleResize.bind(this)
     window.addEventListener('resize', this.boundResize)
@@ -49,17 +54,6 @@ export class GameEngine {
     const sunLight = new THREE.PointLight(0xffcc66, 100, 200)
     sunLight.position.set(0, 0, 0)
     this.scene.add(sunLight)
-  }
-
-  private createStarField() {
-    const geometry = new THREE.BufferGeometry()
-    const positions = new Float32Array(4500)
-    for (let i = 0; i < 4500; i++) {
-      positions[i] = (Math.random() - 0.5) * 300
-    }
-    geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3))
-    const material = new THREE.PointsMaterial({ color: 0xffffff, size: 0.12 })
-    this.scene.add(new THREE.Points(geometry, material))
   }
 
   private handleResize() {
