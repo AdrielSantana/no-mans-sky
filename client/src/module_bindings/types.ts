@@ -10,6 +10,29 @@ import {
   type Infer as __Infer,
 } from "spacetimedb";
 
+export const CelestialBody = __t.object("CelestialBody", {
+  id: __t.u64(),
+  name: __t.string(),
+  isSun: __t.bool(),
+  orbitRadius: __t.f32(),
+  bodySize: __t.f32(),
+  color: __t.string(),
+  angle: __t.f32(),
+  speed: __t.f32(),
+  rotationAngle: __t.f32(),
+  rotationSpeed: __t.f32(),
+  x: __t.f32(),
+  y: __t.f32(),
+  z: __t.f32(),
+});
+export type CelestialBody = __Infer<typeof CelestialBody>;
+
+export const OrbitTick = __t.object("OrbitTick", {
+  scheduledId: __t.u64(),
+  scheduledAt: __t.scheduleAt(),
+});
+export type OrbitTick = __Infer<typeof OrbitTick>;
+
 export const Player = __t.object("Player", {
   id: __t.u64(),
   identity: __t.identity(),

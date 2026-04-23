@@ -16,15 +16,16 @@ function Root() {
         .withUri(SPACETIME_URI)
         .withDatabaseName(SPACETIME_DATABASE)
         .withToken(localStorage.getItem(SPACETIME_TOKEN_KEY) ?? undefined)
-        .onConnect((_conn, _identity, token) => {
+        .onConnect((conn, _identity, token) => {
           localStorage.setItem(SPACETIME_TOKEN_KEY, token)
+          conn.subscriptionBuilder().subscribe(['SELECT * FROM celestial_body', 'SELECT * FROM player'])
         }),
     [],
   )
 
   return (
     <SpacetimeDBProvider connectionBuilder={connectionBuilder}>
-      <App databaseName={SPACETIME_DATABASE} />
+      <App />
     </SpacetimeDBProvider>
   )
 }

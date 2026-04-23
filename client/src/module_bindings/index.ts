@@ -39,12 +39,24 @@ import SetNameReducer from "./set_name_reducer";
 // Import all procedure arg schemas
 
 // Import all table schema definitions
+import CelestialBodyRow from "./celestial_body_table";
 import PlayerRow from "./player_table";
 
 /** Type-only namespace exports for generated type groups. */
 
 /** The schema information for all tables in this module. This is defined the same was as the tables would have been defined in the server. */
 const tablesSchema = __schema({
+  celestialBody: __table({
+    name: 'celestial_body',
+    indexes: [
+      { accessor: 'id', name: 'celestial_body_id_idx_btree', algorithm: 'btree', columns: [
+        'id',
+      ] },
+    ],
+    constraints: [
+      { name: 'celestial_body_id_key', constraint: 'unique', columns: ['id'] },
+    ],
+  }, CelestialBodyRow),
   player: __table({
     name: 'player',
     indexes: [
