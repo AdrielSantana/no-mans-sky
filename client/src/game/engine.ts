@@ -1,5 +1,8 @@
 import * as THREE from 'three'
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js'
+import { EffectComposer } from 'three/examples/jsm/postprocessing/EffectComposer.js'
+import { RenderPass } from 'three/examples/jsm/postprocessing/RenderPass.js'
+import { UnrealBloomPass } from 'three/examples/jsm/postprocessing/UnrealBloomPass.js'
 import { createSkybox } from './skybox'
 
 export class GameEngine {
@@ -7,6 +10,7 @@ export class GameEngine {
   readonly renderer: THREE.WebGLRenderer
   readonly camera: THREE.PerspectiveCamera
   private controls: OrbitControls
+  private composer: EffectComposer
   private animationId: number | null = null
   private container: HTMLElement
   private boundResize: () => void
@@ -26,7 +30,7 @@ export class GameEngine {
 
     // Scene
     this.scene = new THREE.Scene()
-    this.scene.background = new THREE.Color(0x010108)
+    this.scene.background = new THREE.Color(0x000000)
     this.skybox = createSkybox()
     this.scene.add(this.skybox)
 
@@ -42,6 +46,20 @@ export class GameEngine {
     this.controls.minDistance = 5
     this.controls.maxDistance = 80
 
+    // Bloom
+    this.composer = new EffectComposer(this.renderer)
+    this.composer.addPass(new RenderPass(this.scene, this.camera))
+    const bloomPass = new UnrealBloomPass(
+      new THREE.Vector2(width, height),
+      1.5,
+      0.4,
+      0.85,
+    )
+    bloomPass.threshold = 0.7
+    bloomPass.strength = 1
+    bloomPass.radius = 0.5
+    this.composer.addPass(bloomPass)
+
     this.setupLights()
 
     this.boundResize = this.handleResize.bind(this)
@@ -49,7 +67,7 @@ export class GameEngine {
   }
 
   private setupLights() {
-    this.scene.add(new THREE.AmbientLight(0x111133, 1))
+    this.scene.add(new THREE.AmbientLight(0x111133, 0.5))
     const sunLight = new THREE.PointLight(0xffcc66, 100, 200)
     sunLight.position.set(0, 0, 0)
     this.scene.add(sunLight)
@@ -65,6 +83,7 @@ export class GameEngine {
     this.camera.aspect = w / h
     this.camera.updateProjectionMatrix()
     this.renderer.setSize(w, h)
+    this.composer.setSize(w, h)
   }
 
   start(onFrame?: (dt: number) => void) {
@@ -74,7 +93,7 @@ export class GameEngine {
       const dt = this.clock.getDelta()
       this.controls.update()
       onFrame?.(dt)
-      this.renderer.render(this.scene, this.camera)
+      this.composer.render()
     }
     loop()
   }
@@ -90,6 +109,7 @@ export class GameEngine {
     this.stop()
     window.removeEventListener('resize', this.boundResize)
     this.controls.dispose()
+    this.composer.dispose()
     this.renderer.dispose()
     this.container.removeChild(this.renderer.domElement)
   }

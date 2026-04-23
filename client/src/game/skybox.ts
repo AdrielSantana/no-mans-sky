@@ -52,18 +52,15 @@ float fbm(vec3 p) {
 void main() {
   vec3 dir = normalize(vDirection);
 
-  // Base
-  vec3 color = vec3(0.004, 0.002, 0.022);
+  // Base - preto total
+  vec3 color = vec3(0.0);
 
-  // Nebulosa - transicoes suaves com smoothstep
+  // Nebulosa - vestígio mínimo
   float n1 = fbm(dir * 3.0 + vec3(10.0, 20.0, 30.0));
-  color += vec3(0.01, 0.025, 0.09) * smoothstep(0.35, 0.6, n1);
+  color += vec3(0.0005, 0.001, 0.005) * smoothstep(0.35, 0.6, n1);
 
   float n2 = fbm(dir * 4.0 + vec3(50.0, 60.0, 70.0));
-  color += vec3(0.05, 0.008, 0.07) * smoothstep(0.4, 0.65, n2);
-
-  float n3 = fbm(dir * 5.5 + vec3(90.0, 100.0, 110.0));
-  color += vec3(0.003, 0.035, 0.05) * smoothstep(0.42, 0.62, n3);
+  color += vec3(0.002, 0.0005, 0.003) * smoothstep(0.4, 0.65, n2);
 
   // Estrelas: grid fixo - quantiza a direcao em celulas estaveis
   float starScale = 200.0;
@@ -73,19 +70,19 @@ void main() {
 
   vec3 starHash = hash33(gridId);
 
-  // Estrelas comuns - ponto suave
+  // Estrelas comuns
   if (starHash.x > 0.988 && distToCenter < 0.35) {
     float falloff = 1.0 - smoothstep(0.0, 0.35, distToCenter);
-    float brightness = (0.3 + starHash.y * 0.5) * falloff;
-    vec3 starColor = mix(vec3(0.8, 0.85, 1.0), vec3(1.0, 0.9, 0.7), starHash.z);
+    float brightness = (0.7 + starHash.y * 0.3) * falloff;
+    vec3 starColor = mix(vec3(0.85, 0.9, 1.0), vec3(1.0, 0.92, 0.75), starHash.z);
     color += starColor * brightness;
   }
 
-  // Estrelas brilhantes raras - ponto mais definido
+  // Estrelas brilhantes raras
   vec3 rareHash = hash33(gridId + vec3(42.0));
   if (rareHash.x > 0.997 && distToCenter < 0.25) {
     float falloff = 1.0 - smoothstep(0.0, 0.25, distToCenter);
-    color += vec3(0.5, 0.45, 0.55) * falloff;
+    color += vec3(1.0, 0.95, 1.0) * falloff;
   }
 
   gl_FragColor = vec4(color, 1.0);
