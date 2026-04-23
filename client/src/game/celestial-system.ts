@@ -1,14 +1,19 @@
 import * as THREE from 'three'
 import type { CelestialBody } from '../module_bindings/types'
+import type { GameEngine } from './engine'
+import { SunRenderer } from './sun-renderer'
 
 export class CelestialSystem {
   private scene: THREE.Scene
+  private engine: GameEngine
   private meshes = new Map<string, THREE.Mesh>()
-  private orbitLines = new Map<string, THREE.Line>()
   private geometry = new THREE.SphereGeometry(1, 32, 32)
+  private sunRenderer: SunRenderer | null = null
+  private sunGroup: THREE.Group | null = null
 
-  constructor(scene: THREE.Scene) {
-    this.scene = scene
+  constructor(engine: GameEngine) {
+    this.engine = engine
+    this.scene = engine.scene
   }
 
   sync(bodies: readonly CelestialBody[]) {
@@ -21,79 +26,75 @@ export class CelestialSystem {
       let mesh = this.meshes.get(id)
 
       if (!mesh) {
-        mesh = this.createMesh(body)
+        if (body.isSun) {
+          const group = new THREE.Group()
+          this.sunGroup = group
+          this.sunRenderer = new SunRenderer(group, this.engine.renderer, this.engine.camera, body.bodySize)
+          this.scene.add(group)
+          mesh = new THREE.Mesh(this.geometry, new THREE.MeshBasicMaterial({ visible: false }))
+          this.meshes.set(id, mesh)
+          continue
+        }
+
+        const material = new THREE.MeshStandardMaterial({
+          color: body.color,
+          roughness: 0.6,
+          metalness: 0.2,
+        })
+        mesh = new THREE.Mesh(this.geometry, material)
         this.meshes.set(id, mesh)
         this.scene.add(mesh)
-
-        if (!body.isSun && body.orbitRadius > 0) {
-          const line = this.createOrbitLine(body.orbitRadius, body.orbitalInclination)
-          this.orbitLines.set(id, line)
-          this.scene.add(line)
-        }
       }
 
-      mesh.position.set(body.x, body.y, body.z)
-      mesh.scale.setScalar(body.bodySize)
-      mesh.rotation.set(0, body.rotationAngle, body.axialTilt)
+      if (body.isSun && this.sunGroup) {
+        this.sunGroup.position.set(body.x, body.y, body.z)
+      } else if (!body.isSun) {
+        mesh.position.set(body.x, body.y, body.z)
+        mesh.scale.setScalar(body.bodySize)
+        mesh.rotation.set(0, body.rotationAngle, body.axialTilt)
+      }
     }
 
     this.removeInactive(activeIds)
   }
 
-  private createMesh(body: CelestialBody): THREE.Mesh {
-    const material = body.isSun
-      ? new THREE.MeshBasicMaterial({ color: body.color })
-      : new THREE.MeshStandardMaterial({ color: body.color, roughness: 0.6, metalness: 0.2 })
-    return new THREE.Mesh(this.geometry, material)
-  }
-
-  private createOrbitLine(radius: number, inclination: number): THREE.Line {
-    const points: THREE.Vector3[] = []
-    const segments = 64
-    for (let i = 0; i <= segments; i++) {
-      const a = (i / segments) * Math.PI * 2
-      points.push(new THREE.Vector3(
-        radius * Math.cos(a),
-        radius * Math.sin(inclination) * Math.sin(a),
-        radius * Math.cos(inclination) * Math.sin(a),
-      ))
-    }
-    const geometry = new THREE.BufferGeometry().setFromPoints(points)
-    const material = new THREE.LineBasicMaterial({ color: 0x1a1a3a, transparent: true, opacity: 0.4 })
-    return new THREE.Line(geometry, material)
+  update(dt: number) {
+    this.sunRenderer?.update(dt)
   }
 
   private removeInactive(activeIds: Set<string>) {
     for (const [id, mesh] of this.meshes) {
       if (!activeIds.has(id)) {
-        this.scene.remove(mesh)
-        ;(mesh.material as THREE.Material).dispose()
-        this.meshes.delete(id)
-
-        const line = this.orbitLines.get(id)
-        if (line) {
-          this.scene.remove(line)
-          line.geometry.dispose()
-          ;(line.material as THREE.Material).dispose()
-          this.orbitLines.delete(id)
+        // If this was the sun, clean up sun renderer
+        if (mesh.material instanceof THREE.MeshBasicMaterial && !mesh.material.visible) {
+          if (this.sunRenderer) {
+            this.sunRenderer.dispose()
+            this.sunRenderer = null
+          }
+          if (this.sunGroup) {
+            this.scene.remove(this.sunGroup)
+            this.sunGroup = null
+          }
         }
+        this.scene.remove(mesh)
+        mesh.material.dispose()
+        this.meshes.delete(id)
       }
     }
   }
 
   dispose() {
-    for (const [id, mesh] of this.meshes) {
+    for (const mesh of this.meshes.values()) {
       this.scene.remove(mesh)
-      ;(mesh.material as THREE.Material).dispose()
-      const line = this.orbitLines.get(id)
-      if (line) {
-        this.scene.remove(line)
-        line.geometry.dispose()
-        ;(line.material as THREE.Material).dispose()
-      }
+      mesh.material.dispose()
+    }
+    if (this.sunRenderer) {
+      this.sunRenderer.dispose()
+    }
+    if (this.sunGroup) {
+      this.scene.remove(this.sunGroup)
     }
     this.meshes.clear()
-    this.orbitLines.clear()
     this.geometry.dispose()
   }
 }

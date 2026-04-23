@@ -4,14 +4,14 @@ import { createSkybox } from './skybox'
 
 export class GameEngine {
   readonly scene: THREE.Scene
-  private renderer: THREE.WebGLRenderer
-  private camera: THREE.PerspectiveCamera
+  readonly renderer: THREE.WebGLRenderer
+  readonly camera: THREE.PerspectiveCamera
   private controls: OrbitControls
   private animationId: number | null = null
   private container: HTMLElement
   private boundResize: () => void
-
   private skybox: THREE.Mesh
+  private clock = new THREE.Clock()
 
   constructor(container: HTMLElement) {
     this.container = container
@@ -21,7 +21,7 @@ export class GameEngine {
     // Renderer
     this.renderer = new THREE.WebGLRenderer({ antialias: true })
     this.renderer.setSize(width, height)
-    this.renderer.setPixelRatio(window.devicePixelRatio)
+    this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2))
     container.appendChild(this.renderer.domElement)
 
     // Scene
@@ -55,6 +55,10 @@ export class GameEngine {
     this.scene.add(sunLight)
   }
 
+  getDeltaTime(): number {
+    return this.clock.getDelta()
+  }
+
   private handleResize() {
     const w = this.container.clientWidth
     const h = this.container.clientHeight
@@ -63,10 +67,13 @@ export class GameEngine {
     this.renderer.setSize(w, h)
   }
 
-  start() {
+  start(onFrame?: (dt: number) => void) {
+    this.clock.start()
     const loop = () => {
       this.animationId = requestAnimationFrame(loop)
+      const dt = this.clock.getDelta()
       this.controls.update()
+      onFrame?.(dt)
       this.renderer.render(this.scene, this.camera)
     }
     loop()

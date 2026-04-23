@@ -15,10 +15,12 @@ export default function Scene() {
     if (!container) return
 
     const engine = new GameEngine(container)
-    const system = new CelestialSystem(engine.scene)
+    const system = new CelestialSystem(engine)
     celestialSystemRef.current = system
 
-    engine.start()
+    engine.start((dt) => {
+      system.update(dt)
+    })
 
     return () => {
       system.dispose()
