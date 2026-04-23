@@ -459,7 +459,6 @@ export class SunRenderer {
   private group: THREE.Group
   private renderer: THREE.WebGLRenderer
   private camera: THREE.Camera
-  private clock = new THREE.Clock()
   private time = 0
 
   // Perlin cubemap

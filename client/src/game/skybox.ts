@@ -3,7 +3,9 @@ import * as THREE from 'three'
 const vertexShader = /* glsl */ `
 varying vec3 vDirection;
 void main() {
-  vec4 worldPos = inverse(projectionMatrix * viewMatrix) * vec4(position.xy, 1.0, 1.0);
+  mat4 viewRot = viewMatrix;
+  viewRot[3] = vec4(0.0, 0.0, 0.0, 1.0);
+  vec4 worldPos = inverse(projectionMatrix * viewRot) * vec4(position.xy, 1.0, 1.0);
   vDirection = normalize(worldPos.xyz / worldPos.w);
   gl_Position = vec4(position.xy, 1.0, 1.0);
 }
@@ -63,7 +65,7 @@ void main() {
   color += vec3(0.002, 0.0005, 0.003) * smoothstep(0.4, 0.65, n2);
 
   // Estrelas: grid fixo - quantiza a direcao em celulas estaveis
-  float starScale = 200.0;
+  float starScale = 500.0;
   vec3 gridId = floor(dir * starScale);
   vec3 gridFrac = fract(dir * starScale) - 0.5;
   float distToCenter = length(gridFrac);

@@ -38,8 +38,8 @@ export class CelestialSystem {
 
         const material = new THREE.MeshStandardMaterial({
           color: body.color,
-          roughness: 0.6,
-          metalness: 0.2,
+          roughness: 0.85,
+          metalness: 0.1,
         })
         mesh = new THREE.Mesh(this.geometry, material)
         this.meshes.set(id, mesh)

@@ -44,7 +44,7 @@ export class GameEngine {
     this.controls.enableDamping = true
     this.controls.dampingFactor = 0.08
     this.controls.minDistance = 5
-    this.controls.maxDistance = 80
+    this.controls.maxDistance = 300
 
     // Bloom
     this.composer = new EffectComposer(this.renderer)
@@ -67,8 +67,8 @@ export class GameEngine {
   }
 
   private setupLights() {
-    this.scene.add(new THREE.AmbientLight(0x111133, 0.5))
-    const sunLight = new THREE.PointLight(0xffcc66, 100, 200)
+    this.scene.add(new THREE.AmbientLight(0x111122, 0.15))
+    const sunLight = new THREE.PointLight(0xffcc66, 200, 0, 1.3)
     sunLight.position.set(0, 0, 0)
     this.scene.add(sunLight)
   }
