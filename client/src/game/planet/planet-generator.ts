@@ -183,9 +183,9 @@ export function createPlanetMaterial(params: {
     vec3 color = mix(deepRock, mix(dryland, lowland, moisture), smoothstep(0.30, 0.58, heightNorm));
     float coast = smoothstep(uSeaHeight - 0.025, uSeaHeight + 0.025, vHeight) * (1.0 - smoothstep(uSeaHeight + 0.025, uSeaHeight + 0.09, vHeight));
     color = mix(color, beach, coast);
-    color = mix(color, highRock, smoothstep(0.58, 0.82, heightNorm));
-    color = mix(color, snow, smoothstep(0.70, 0.92, heightNorm) * smoothstep(0.35, 0.85, latitude));
-    color = mix(color, highRock, saturate(slope * 0.75));
+    color = mix(color, highRock, smoothstep(0.52, 0.76, heightNorm));
+    color = mix(color, snow, smoothstep(0.68, 0.88, heightNorm + latitude * 0.18) * smoothstep(0.48, 0.88, latitude));
+    color = mix(color, highRock, saturate(slope * 0.95));
     return color;
   }
 
@@ -206,11 +206,61 @@ export function createPlanetMaterial(params: {
     return color;
   }
 
+  vec3 materialAlbedoDetail(vec3 color, float heightNorm, float latitude, float moisture, float slope, float coast) {
+    if (uPlanetKind > 0.5 && uPlanetKind < 1.5) return color;
+
+    vec3 sphereDir = normalize(vSphereDir);
+    float macro = terrainFbm(sphereDir * 38.0 + 13.0, uSeed + 601.0, 4, 2.0, 0.5);
+    float grain = terrainFbm(sphereDir * 180.0 + 29.0, uSeed + 701.0, 3, 2.1, 0.45);
+    float cracks = abs(terrainFbm(sphereDir * 72.0 + 53.0, uSeed + 809.0, 3, 2.2, 0.48));
+    cracks = pow(1.0 - cracks, 5.0);
+
+    float snow = smoothstep(0.68, 0.88, heightNorm + latitude * 0.18) * smoothstep(0.48, 0.88, latitude);
+    float dry = saturate(1.0 - moisture);
+    float rock = saturate(slope * 1.4 + smoothstep(0.55, 0.82, heightNorm));
+
+    color *= 0.92 + macro * 0.10 + grain * 0.04;
+    color = mix(color, color * (0.82 + cracks * 0.20), rock * 0.45);
+    color = mix(color, color + vec3(0.07, 0.055, 0.025) * grain, dry * (1.0 - coast) * 0.45);
+    color = mix(color, vec3(0.92, 0.94, 0.93) * (0.95 + grain * 0.04), snow * 0.72);
+    color = mix(color, vec3(0.78, 0.70, 0.52) * (0.93 + grain * 0.08), coast * 0.75);
+    return clamp(color, 0.0, 1.0);
+  }
+
+  vec3 detailNormal(vec3 baseNormal, float latitude, float moisture, float slope, float coast) {
+    if (uPlanetKind > 0.5 && uPlanetKind < 1.5) return baseNormal;
+
+    vec3 sphereDir = normalize(vSphereDir);
+    vec3 tangent = normalize(cross(sphereDir, vec3(0.0, 1.0, 0.0)));
+    if (length(tangent) < 0.01) {
+      tangent = normalize(cross(sphereDir, vec3(1.0, 0.0, 0.0)));
+    }
+    vec3 bitangent = normalize(cross(sphereDir, tangent));
+
+    float rock = terrainFbm(sphereDir * 95.0 + 41.0, uSeed + 301.0, 3, 2.2, 0.48);
+    float grit = terrainFbm(sphereDir * 240.0 + 17.0, uSeed + 407.0, 2, 2.0, 0.42);
+    float dune = terrainFbm(sphereDir * 36.0 + vec3(8.0, 0.0, -6.0), uSeed + 509.0, 3, 2.0, 0.5);
+
+    float cameraDist = distance(cameraPosition, vWorldPos);
+    float nearDetail = 1.0 - smoothstep(1.0, 7.5, cameraDist);
+    float snow = smoothstep(0.68, 0.88, smoothstep(-1.0, 1.0, vHeight) + latitude * 0.18) * smoothstep(0.48, 0.88, latitude);
+    float dry = saturate(1.0 - moisture);
+    float strength = 0.025 + nearDetail * 0.055;
+    strength += slope * (0.065 + nearDetail * 0.05);
+    strength += dry * (1.0 - coast) * (0.022 + nearDetail * 0.03);
+    strength *= 1.0 - snow * 0.55;
+    strength *= 1.0 - coast * 0.45;
+
+    vec2 detail = vec2(rock + grit * 0.45, dune * dry + grit * 0.25);
+    return normalize(baseNormal + tangent * detail.x * strength + bitangent * detail.y * strength);
+  }
+
   void main() {
     float heightNorm = smoothstep(-1.0, 1.0, vHeight);
     float latitude = abs(vSphereDir.y);
     float moisture = saturate(terrainFbm(vSphereDir * (uFrequency * 2.7) + 19.0, uSeed + 31.0, 4, 2.0, 0.5) * 0.5 + 0.5);
     float slope = saturate(1.0 - dot(vNormal, normalize(vSphereDir)));
+    float coast = smoothstep(uSeaHeight - 0.025, uSeaHeight + 0.025, vHeight) * (1.0 - smoothstep(uSeaHeight + 0.025, uSeaHeight + 0.09, vHeight));
     float bands = smoothstep(-0.2, 0.8, sin(vSphereDir.y * 34.0 + terrainFbm(vSphereDir * 8.0, uSeed + 5.0, 3, 2.0, 0.5) * 2.2) * 0.5 + 0.5);
     float turbulence = saturate(vDetail * 0.5 + 0.5);
 
@@ -223,16 +273,18 @@ export function createPlanetMaterial(params: {
       terrainColor = rockyBiome(heightNorm, latitude, moisture, slope);
     }
 
+    terrainColor = materialAlbedoDetail(terrainColor, heightNorm, latitude, moisture, slope, coast);
     terrainColor *= 0.88 + vDetail * 0.08;
 
     // Diffuse lighting
+    vec3 finalNormal = detailNormal(normalize(vNormal), latitude, moisture, slope, coast);
     vec3 lightDir = normalize(uSunPosition - vWorldPos);
-    float diffuse = max(dot(vNormal, lightDir), 0.0);
+    float diffuse = max(dot(finalNormal, lightDir), 0.0);
     float ambient = 0.15;
 
     // Rim highlight
     vec3 viewDir = normalize(cameraPosition - vWorldPos);
-    float rim = 1.0 - max(dot(viewDir, vNormal), 0.0);
+    float rim = 1.0 - max(dot(viewDir, finalNormal), 0.0);
     rim = pow(rim, 3.0) * 0.15;
 
     vec3 finalColor = terrainColor * (ambient + diffuse * 0.85) + vec3(0.3, 0.5, 0.8) * rim;
