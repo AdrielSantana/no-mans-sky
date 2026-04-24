@@ -1,6 +1,9 @@
 import * as THREE from 'three'
 import { SIMPLEX_4D } from './shaders/noise.glsl'
 
+const SUN_DETAIL_ON_DISTANCE_MULTIPLIER = 60
+const SUN_DETAIL_OFF_DISTANCE_MULTIPLIER = 75
+
 // ── Visibility helper ────────────────────────────────────
 const VISIBILITY_GLSL = /* glsl */ `
 uniform float uVisibility;
@@ -395,6 +398,7 @@ export class SunRenderer {
   private renderer: THREE.WebGLRenderer
   private camera: THREE.Camera
   private time = 0
+  private size: number
 
   // Perlin cubemap
   private perlinScene: THREE.Scene
@@ -410,9 +414,12 @@ export class SunRenderer {
 
   // Sun rays
   private sunRaysMaterial: THREE.ShaderMaterial
+  private sunRaysMesh: THREE.Mesh
 
   // Sun flares
   private sunFlaresMaterial: THREE.ShaderMaterial
+  private sunFlaresMesh: THREE.Mesh
+  private showDetailEffects = true
 
   private lightDirWorld = new THREE.Vector3(1, 1, 1).normalize()
 
@@ -425,6 +432,7 @@ export class SunRenderer {
     this.group = group
     this.renderer = renderer
     this.camera = camera
+    this.size = size
 
     this.perlinScene = new THREE.Scene()
 
@@ -480,8 +488,13 @@ export class SunRenderer {
 
     // Glow, rays, flares - all use size
     this.glowMaterial = this.createGlow(size)
-    this.sunRaysMaterial = this.createSunRays(size)
-    this.sunFlaresMaterial = this.createSunFlares(size)
+    const rays = this.createSunRays(size)
+    this.sunRaysMaterial = rays.material
+    this.sunRaysMesh = rays.mesh
+
+    const flares = this.createSunFlares(size)
+    this.sunFlaresMaterial = flares.material
+    this.sunFlaresMesh = flares.mesh
   }
 
   private createGlow(sunSize: number): THREE.ShaderMaterial {
@@ -546,7 +559,7 @@ export class SunRenderer {
     return v
   }
 
-  private createSunRays(sunSize: number): THREE.ShaderMaterial {
+  private createSunRays(sunSize: number): { material: THREE.ShaderMaterial; mesh: THREE.Mesh } {
     const lineCount = 800
     const lineLength = 8
     const sunRadius = sunSize
@@ -633,10 +646,10 @@ export class SunRenderer {
     mesh.frustumCulled = false
     mesh.renderOrder = 3
     this.group.add(mesh)
-    return mat
+    return { material: mat, mesh }
   }
 
-  private createSunFlares(sunSize: number): THREE.ShaderMaterial {
+  private createSunFlares(sunSize: number): { material: THREE.ShaderMaterial; mesh: THREE.Mesh } {
     const sunRadius = sunSize
     const lineCount = 2047
     const lineLength = 16
@@ -733,7 +746,7 @@ export class SunRenderer {
     mesh.frustumCulled = false
     mesh.renderOrder = 1
     this.group.add(mesh)
-    return mat
+    return { material: mat, mesh }
   }
 
   update(deltaTime: number) {
@@ -754,6 +767,7 @@ export class SunRenderer {
     const camPos = new THREE.Vector3()
     this.camera.getWorldPosition(camPos)
     const camUp = new THREE.Vector3(0, 1, 0).applyQuaternion(this.camera.quaternion).normalize()
+    this.updateDetailLod(camPos)
 
     // Glow
     this.glowMaterial.uniforms.uViewProjection.value.copy(vp)
@@ -763,21 +777,41 @@ export class SunRenderer {
     this.glowMaterial.uniforms.uVisibility.value = this.sunMaterial.uniforms.uVisibility.value
     this.glowMaterial.uniforms.uDirection.value = this.sunMaterial.uniforms.uDirection.value
 
-    // Sun rays
-    this.sunRaysMaterial.uniforms.uViewProjection.value.copy(vp)
-    this.sunRaysMaterial.uniforms.uCamPos.value.copy(camPos)
-    this.sunRaysMaterial.uniforms.uTime.value = this.time
-    this.sunRaysMaterial.uniforms.uLightView.value.copy(this.lightDirWorld)
-    this.sunRaysMaterial.uniforms.uVisibility.value = this.sunMaterial.uniforms.uVisibility.value
-    this.sunRaysMaterial.uniforms.uDirection.value = this.sunMaterial.uniforms.uDirection.value
+    if (this.showDetailEffects) {
+      // Sun rays
+      this.sunRaysMaterial.uniforms.uViewProjection.value.copy(vp)
+      this.sunRaysMaterial.uniforms.uCamPos.value.copy(camPos)
+      this.sunRaysMaterial.uniforms.uTime.value = this.time
+      this.sunRaysMaterial.uniforms.uLightView.value.copy(this.lightDirWorld)
+      this.sunRaysMaterial.uniforms.uVisibility.value = this.sunMaterial.uniforms.uVisibility.value
+      this.sunRaysMaterial.uniforms.uDirection.value = this.sunMaterial.uniforms.uDirection.value
 
-    // Sun flares
-    this.sunFlaresMaterial.uniforms.uViewProjection.value.copy(vp)
-    this.sunFlaresMaterial.uniforms.uCamPos.value.copy(camPos)
-    this.sunFlaresMaterial.uniforms.uTime.value = this.time
-    this.sunFlaresMaterial.uniforms.uLightView.value.copy(this.lightDirWorld)
-    this.sunFlaresMaterial.uniforms.uVisibility.value = this.sunMaterial.uniforms.uVisibility.value
-    this.sunFlaresMaterial.uniforms.uDirection.value = this.sunMaterial.uniforms.uDirection.value
+      // Sun flares
+      this.sunFlaresMaterial.uniforms.uViewProjection.value.copy(vp)
+      this.sunFlaresMaterial.uniforms.uCamPos.value.copy(camPos)
+      this.sunFlaresMaterial.uniforms.uTime.value = this.time
+      this.sunFlaresMaterial.uniforms.uLightView.value.copy(this.lightDirWorld)
+      this.sunFlaresMaterial.uniforms.uVisibility.value = this.sunMaterial.uniforms.uVisibility.value
+      this.sunFlaresMaterial.uniforms.uDirection.value = this.sunMaterial.uniforms.uDirection.value
+    }
+  }
+
+  private updateDetailLod(camPos: THREE.Vector3) {
+    const sunPos = new THREE.Vector3()
+    this.group.getWorldPosition(sunPos)
+    const dist = camPos.distanceTo(sunPos)
+    const offDistance = this.size * SUN_DETAIL_OFF_DISTANCE_MULTIPLIER
+    const onDistance = this.size * SUN_DETAIL_ON_DISTANCE_MULTIPLIER
+
+    if (this.showDetailEffects && dist > offDistance) {
+      this.showDetailEffects = false
+      this.sunRaysMesh.visible = false
+      this.sunFlaresMesh.visible = false
+    } else if (!this.showDetailEffects && dist < onDistance) {
+      this.showDetailEffects = true
+      this.sunRaysMesh.visible = true
+      this.sunFlaresMesh.visible = true
+    }
   }
 
   dispose() {
