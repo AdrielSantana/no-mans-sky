@@ -175,7 +175,11 @@ export class PlanetRenderer {
     }
   }
 
-  private updateQuadtree(node: QuadtreeNode, camPos: THREE.Vector3, planetPos: THREE.Vector3) {
+  private updateQuadtree(
+    node: QuadtreeNode,
+    camPos: THREE.Vector3,
+    planetPos: THREE.Vector3,
+  ) {
     const dist = getChunkDistToCamera(node, camPos, planetPos, this.planetRadius)
     const shouldSub =
       node.lod < MAX_LOD &&
@@ -183,6 +187,9 @@ export class PlanetRenderer {
       this.isChunkRelevantForDetail(node, camPos, planetPos)
 
     if (shouldSub) {
+      const key = nodeKey(node.face, node.lod, node.x, node.y)
+      this.pendingCollapseKeys.delete(key)
+
       if (!node.children) {
         node.children = createChildren(node)
       }
