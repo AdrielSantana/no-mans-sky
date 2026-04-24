@@ -35,6 +35,22 @@ export const celestialBody = table(
   }
 );
 
+export const planetParams = table(
+  { name: 'planet_params', public: true },
+  {
+    id: t.u64().primaryKey().autoInc(),
+    bodyId: t.u64(),
+    seed: t.u64(),
+    planetType: t.string(),
+    waterLevel: t.f32(),
+    terrainScale: t.f32(),
+    colorA: t.string(),
+    colorB: t.string(),
+    atmosphereColor: t.string(),
+    atmosphereDensity: t.f32(),
+  }
+);
+
 // Referencia lazy: o reducer e definido abaixo, apos schema().
 // O () => wrapper so e avaliado em runtime, quando ambos existem.
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -53,7 +69,7 @@ export const orbitTick = table(
 
 // ── Schema ─────────────────────────────────────────────────
 
-const spacetimedb = schema({ player, celestialBody, orbitTick });
+const spacetimedb = schema({ player, celestialBody, planetParams, orbitTick });
 
 // ── Scheduled reducer ──────────────────────────────────────
 // Precisa ficar em schema.ts pois a tabela orbitTick referencia

@@ -35,6 +35,20 @@ export const OrbitTick = __t.object("OrbitTick", {
 });
 export type OrbitTick = __Infer<typeof OrbitTick>;
 
+export const PlanetParams = __t.object("PlanetParams", {
+  id: __t.u64(),
+  bodyId: __t.u64(),
+  seed: __t.u64(),
+  planetType: __t.string(),
+  waterLevel: __t.f32(),
+  terrainScale: __t.f32(),
+  colorA: __t.string(),
+  colorB: __t.string(),
+  atmosphereColor: __t.string(),
+  atmosphereDensity: __t.f32(),
+});
+export type PlanetParams = __Infer<typeof PlanetParams>;
+
 export const Player = __t.object("Player", {
   id: __t.u64(),
   identity: __t.identity(),

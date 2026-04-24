@@ -18,7 +18,7 @@ function Root() {
         .withToken(localStorage.getItem(SPACETIME_TOKEN_KEY) ?? undefined)
         .onConnect((conn, _identity, token) => {
           localStorage.setItem(SPACETIME_TOKEN_KEY, token)
-          conn.subscriptionBuilder().subscribe(['SELECT * FROM celestial_body', 'SELECT * FROM player'])
+          conn.subscriptionBuilder().subscribe(['SELECT * FROM celestial_body', 'SELECT * FROM player', 'SELECT * FROM planet_params'])
         }),
     [],
   )

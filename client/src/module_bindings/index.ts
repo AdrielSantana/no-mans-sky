@@ -40,6 +40,7 @@ import SetNameReducer from "./set_name_reducer";
 
 // Import all table schema definitions
 import CelestialBodyRow from "./celestial_body_table";
+import PlanetParamsRow from "./planet_params_table";
 import PlayerRow from "./player_table";
 
 /** Type-only namespace exports for generated type groups. */
@@ -57,6 +58,17 @@ const tablesSchema = __schema({
       { name: 'celestial_body_id_key', constraint: 'unique', columns: ['id'] },
     ],
   }, CelestialBodyRow),
+  planetParams: __table({
+    name: 'planet_params',
+    indexes: [
+      { accessor: 'id', name: 'planet_params_id_idx_btree', algorithm: 'btree', columns: [
+        'id',
+      ] },
+    ],
+    constraints: [
+      { name: 'planet_params_id_key', constraint: 'unique', columns: ['id'] },
+    ],
+  }, PlanetParamsRow),
   player: __table({
     name: 'player',
     indexes: [

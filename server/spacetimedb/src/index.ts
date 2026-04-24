@@ -1,7 +1,7 @@
 import { SenderError, t } from 'spacetimedb/server';
 import { ScheduleAt } from 'spacetimedb';
 import spacetimedb, { TICK_INTERVAL } from './schema';
-import { SOLAR_SYSTEM, SUN_CONFIG } from './seed';
+import { SOLAR_SYSTEM, SUN_CONFIG, PLANET_PARAMS } from './seed';
 
 // Re-exportar reducer agendado (necessario para SpacetimeDB resolveSchedules)
 export { update_orbits } from './schema';
@@ -65,6 +65,29 @@ export const init = spacetimedb.init(ctx => {
     scheduledId: 0n,
     scheduledAt: ScheduleAt.time(ctx.timestamp.microsSinceUnixEpoch + TICK_INTERVAL),
   });
+
+  // Parâmetros de geração procedural dos planetas
+  for (const pp of PLANET_PARAMS) {
+    let bodyId = 0n;
+    for (const body of ctx.db.celestialBody.iter()) {
+      if (body.name === pp.name) {
+        bodyId = body.id;
+        break;
+      }
+    }
+    ctx.db.planetParams.insert({
+      id: 0n,
+      bodyId,
+      seed: BigInt(pp.seed),
+      planetType: pp.planetType,
+      waterLevel: pp.waterLevel,
+      terrainScale: pp.terrainScale,
+      colorA: pp.colorA,
+      colorB: pp.colorB,
+      atmosphereColor: pp.atmosphereColor,
+      atmosphereDensity: pp.atmosphereDensity,
+    });
+  }
 });
 
 export const onConnect = spacetimedb.clientConnected(ctx => {

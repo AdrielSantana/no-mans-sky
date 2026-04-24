@@ -7,6 +7,7 @@ import { CelestialSystem } from './game/celestial-system'
 export default function Scene() {
   const containerRef = useRef<HTMLDivElement>(null)
   const [celestialBodies] = useTable(tables.celestialBody)
+  const [planetParams] = useTable(tables.planetParams)
   const celestialSystemRef = useRef<CelestialSystem | null>(null)
 
   // Setup engine
@@ -29,10 +30,10 @@ export default function Scene() {
     }
   }, [])
 
-  // Sync celestial bodies
+  // Sync celestial bodies with planet params
   useEffect(() => {
-    celestialSystemRef.current?.sync(celestialBodies)
-  }, [celestialBodies])
+    celestialSystemRef.current?.sync(celestialBodies, planetParams)
+  }, [celestialBodies, planetParams])
 
   return <div ref={containerRef} style={{ width: '100%', height: '100vh' }} />
 }

@@ -23,7 +23,7 @@ export class GameEngine {
     const height = container.clientHeight
 
     // Renderer
-    this.renderer = new THREE.WebGLRenderer({ antialias: true })
+    this.renderer = new THREE.WebGLRenderer({ antialias: true, logarithmicDepthBuffer: true })
     this.renderer.setSize(width, height)
     this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2))
     container.appendChild(this.renderer.domElement)
@@ -35,7 +35,7 @@ export class GameEngine {
     this.scene.add(this.skybox)
 
     // Camera
-    this.camera = new THREE.PerspectiveCamera(55, width / height, 0.1, 500)
+    this.camera = new THREE.PerspectiveCamera(55, width / height, 0.01, 10000)
     this.camera.position.set(0, 22, 28)
     this.camera.lookAt(0, 0, 0)
 
@@ -43,8 +43,8 @@ export class GameEngine {
     this.controls = new OrbitControls(this.camera, this.renderer.domElement)
     this.controls.enableDamping = true
     this.controls.dampingFactor = 0.08
-    this.controls.minDistance = 5
-    this.controls.maxDistance = 300
+    this.controls.minDistance = 1
+    this.controls.maxDistance = 1000
 
     // Bloom
     this.composer = new EffectComposer(this.renderer)
