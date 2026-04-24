@@ -82,6 +82,7 @@ export class CelestialSystem {
             colorA: params.colorA,
             colorB: params.colorB,
             atmosphereColor: params.atmosphereColor,
+            atmosphereDensity: params.atmosphereDensity,
           })
           renderer.setPosition(new THREE.Vector3(body.x, body.y, body.z))
           renderer.setSunPosition(this.sunPosition)

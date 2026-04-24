@@ -12,7 +12,13 @@ import {
   getChunkDistToCamera,
 } from './quadtree'
 import { TerrainChunk } from './terrain-chunk'
-import { createPlanetMaterial, PlanetGenerator } from './planet-generator'
+import {
+  createAtmosphereMaterial,
+  createOceanMaterial,
+  createPlanetMaterial,
+  getSeaHeight,
+  PlanetGenerator,
+} from './planet-generator'
 
 const MAX_CHUNKS_PER_FRAME = 8
 
@@ -21,12 +27,17 @@ export class PlanetRenderer {
   private planetRadius: number
   private noiseProfile: { octaves: number; lacunarity: number; gain: number; frequency: number; seed: number }
   private material: THREE.ShaderMaterial
+  private oceanMaterial: THREE.ShaderMaterial | null = null
+  private atmosphereMaterial: THREE.ShaderMaterial | null = null
   private quadtrees: QuadtreeNode[] = []
   private chunks = new Map<string, TerrainChunk>()
   private fallbackSphere: THREE.Mesh
+  private oceanMesh: THREE.Mesh | null = null
+  private atmosphereMesh: THREE.Mesh | null = null
   private sunPosition = new THREE.Vector3(0, 0, 0)
   private terrainScale: number
   private lodDistances: number[]
+  private time = 0
 
   // Chunk generation queue
   private pendingKeys = new Set<string>()
@@ -43,6 +54,7 @@ export class PlanetRenderer {
       colorA: string
       colorB: string
       atmosphereColor: string
+      atmosphereDensity: number
     },
   ) {
     this.planetRadius = planetRadius
@@ -59,6 +71,7 @@ export class PlanetRenderer {
 
     this.material = createPlanetMaterial({
       seed: Number(params.seed),
+      planetType: params.planetType,
       waterLevel: params.waterLevel,
       terrainScale: params.terrainScale,
       colorA: params.colorA,
@@ -77,6 +90,33 @@ export class PlanetRenderer {
     this.fallbackSphere.frustumCulled = false
     this.group.add(this.fallbackSphere)
 
+    const seaHeight = getSeaHeight(params.waterLevel, params.planetType)
+
+    if (params.waterLevel > 0.02 && params.planetType !== 'gas') {
+      const waterRadius = planetRadius * (1 + seaHeight * params.terrainScale + 0.002)
+      const oceanGeo = new THREE.SphereGeometry(waterRadius, 96, 96)
+      this.oceanMaterial = createOceanMaterial({
+        seed: this.noiseProfile.seed,
+        sunPosition: this.sunPosition,
+      })
+      this.oceanMesh = new THREE.Mesh(oceanGeo, this.oceanMaterial)
+      this.oceanMesh.frustumCulled = false
+      this.group.add(this.oceanMesh)
+    }
+
+    if (params.atmosphereDensity > 0.01) {
+      const atmosphereGeo = new THREE.SphereGeometry(planetRadius * 1.08, 96, 96)
+      this.atmosphereMaterial = createAtmosphereMaterial({
+        atmosphereColor: params.atmosphereColor,
+        density: params.atmosphereDensity,
+        sunPosition: this.sunPosition,
+      })
+      this.atmosphereMesh = new THREE.Mesh(atmosphereGeo, this.atmosphereMaterial)
+      this.atmosphereMesh.frustumCulled = false
+      this.atmosphereMesh.renderOrder = 4
+      this.group.add(this.atmosphereMesh)
+    }
+
     // Initialize 6 quadtree roots
     for (let f = 0; f < NUM_FACES; f++) {
       this.quadtrees.push(createRoot(f as CubeFace))
@@ -92,6 +132,8 @@ export class PlanetRenderer {
   }
 
   update(camera: THREE.Camera, _dt: number) {
+    this.time += _dt
+
     const camPos = new THREE.Vector3()
     camera.getWorldPosition(camPos)
 
@@ -103,6 +145,11 @@ export class PlanetRenderer {
 
     // Update sun position uniform
     this.material.uniforms.uSunPosition.value.copy(this.sunPosition)
+    this.oceanMaterial?.uniforms.uSunPosition.value.copy(this.sunPosition)
+    this.atmosphereMaterial?.uniforms.uSunPosition.value.copy(this.sunPosition)
+    if (this.oceanMaterial) {
+      this.oceanMaterial.uniforms.uTime.value = this.time
+    }
     if (this.fallbackSphere.material instanceof THREE.ShaderMaterial) {
       this.fallbackSphere.material.uniforms.uSunPosition.value.copy(this.sunPosition)
     }
@@ -112,11 +159,15 @@ export class PlanetRenderer {
 
     if (!useTerrain) {
       this.fallbackSphere.visible = true
+      if (this.oceanMesh) this.oceanMesh.visible = true
+      if (this.atmosphereMesh) this.atmosphereMesh.visible = true
       this.removeAllChunks()
       return
     }
 
     this.fallbackSphere.visible = false
+    if (this.oceanMesh) this.oceanMesh.visible = true
+    if (this.atmosphereMesh) this.atmosphereMesh.visible = true
 
     // 1. Update quadtree structure (create/destroy children based on distance)
     for (const root of this.quadtrees) {
@@ -355,6 +406,10 @@ export class PlanetRenderer {
   dispose() {
     this.removeAllChunks()
     this.material.dispose()
+    this.oceanMaterial?.dispose()
+    this.atmosphereMaterial?.dispose()
+    this.oceanMesh?.geometry.dispose()
+    this.atmosphereMesh?.geometry.dispose()
     if (this.fallbackSphere.material instanceof THREE.ShaderMaterial) {
       this.fallbackSphere.material.dispose()
     }
