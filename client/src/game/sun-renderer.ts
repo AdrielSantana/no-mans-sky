@@ -74,6 +74,9 @@ void main(){
 
 // ── Sun sphere ───────────────────────────────────────────
 const sunSphereVS = /* glsl */ `
+#include <common>
+#include <logdepthbuf_pars_vertex>
+
 varying vec3 vWorld;
 varying vec3 vNormalView;
 varying vec3 vNormalWorld;
@@ -104,11 +107,13 @@ void main(){
   vNormalWorld = normalize((modelMatrix * vec4(normal, 0.0)).xyz);
   setLayers(normalize(normal));
   gl_Position = projectionMatrix * viewMatrix * world;
+  #include <logdepthbuf_vertex>
 }
 `
 
 const sunSphereFS = /* glsl */ `
 precision highp float;
+#include <logdepthbuf_pars_fragment>
 
 ${VISIBILITY_GLSL}
 ${BRIGHTNESS_COLOR}
@@ -143,12 +148,16 @@ void main(){
   float brightness = ocean() * uBase + uBrightnessOffset + fresnel;
   vec3 col = clamp(brightnessToColor(brightness, uTint, uBrightness), 0.0, 1.0);
   float a = getAlpha(normalize(vNormalWorld));
+  #include <logdepthbuf_fragment>
   gl_FragColor = vec4(col * a, a);
 }
 `
 
 // ── Glow billboard ───────────────────────────────────────
 const glowVS = /* glsl */ `
+#include <common>
+#include <logdepthbuf_pars_vertex>
+
 attribute vec3 aPos;
 varying float vRadial;
 varying vec3 vWorld;
@@ -165,11 +174,13 @@ void main(void){
   vec4 world = vec4(p, 1.0);
   vWorld = world.xyz;
   gl_Position = uViewProjection * world;
+  #include <logdepthbuf_vertex>
 }
 `
 
 const glowFS = /* glsl */ `
 precision highp float;
+#include <logdepthbuf_pars_fragment>
 ${VISIBILITY_GLSL}
 ${BRIGHTNESS_COLOR}
 
@@ -186,11 +197,15 @@ void main(void){
   alpha *= getAlpha(normalize(vWorld));
   gl_FragColor.xyz = brightnessToColor(brightness, uTint, uBrightness) * alpha;
   gl_FragColor.w = alpha;
+  #include <logdepthbuf_fragment>
 }
 `
 
 // ── Sun rays (ribbon geometry) ───────────────────────────
 const sunRaysVS = /* glsl */ `
+#include <common>
+#include <logdepthbuf_pars_vertex>
+
 attribute vec3 aPos;
 attribute vec3 aPos0;
 attribute vec4 aWireRandom;
@@ -208,6 +223,7 @@ uniform float uWidth;
 uniform float uTime;
 uniform float uNoiseFrequency;
 uniform float uNoiseAmplitude;
+uniform float uSunRadius;
 uniform vec3  uCamPos;
 uniform mat4  uViewProjection;
 uniform float uOpacity;
@@ -233,7 +249,7 @@ vec3 getPos(float phase, float animPhase){
   float size = aWireRandom.z + 0.2;
   float d = phase * uLength * size;
   vec3 p = aPos0 + aPos0 * d;
-  p += twistedSineNoise(vec4(p * uNoiseFrequency, uTime), 0.707).xyz * (d * uNoiseAmplitude);
+  p += twistedSineNoise(vec4((p / uSunRadius) * uNoiseFrequency, uTime * 0.22), 0.707).xyz * (d * uNoiseAmplitude);
   return p;
 }
 
@@ -243,7 +259,7 @@ vec3 spectrum(in float d){
 
 void main(void){
   vUVY = aPos.z;
-  float animPhase = fract(uTime * 0.3 * (aWireRandom.y * 0.5) + aWireRandom.x);
+  float animPhase = fract(uTime * 0.08 * (aWireRandom.y * 0.5) + aWireRandom.x);
   vec3 p  = getPos(aPos.x, animPhase);
   vec3 p1 = getPos(aPos.x + 0.01, animPhase);
   vec3 p0w = (modelMatrix * vec4(p, 1.0)).xyz;
@@ -262,6 +278,7 @@ void main(void){
   vColor   = spectrum(aWireRandom.w * uHueSpread + uHue);
   vProgress = aPos.x;
   gl_Position = uViewProjection * vec4(pWorld, 1.0);
+  #include <logdepthbuf_vertex>
 }
 `
 
@@ -269,6 +286,7 @@ const sunRaysFS = /* glsl */ `
 #ifdef GL_ES
 precision highp float;
 #endif
+#include <logdepthbuf_pars_fragment>
 ${VISIBILITY_GLSL}
 
 varying float vUVY;
@@ -285,12 +303,16 @@ void main(void){
   alpha *= getAlpha(vNormal);
   // Fade-out suave ao longo do comprimento
   alpha *= 1.0 - smoothstep(0.5, 1.0, vProgress);
+  #include <logdepthbuf_fragment>
   gl_FragColor = vec4(vColor * alpha, alpha * uAlphaBlended);
 }
 `
 
 // ── Sun flares (arcing magma ribbons) ────────────────────
 const sunFlaresVS = /* glsl */ `
+#include <common>
+#include <logdepthbuf_pars_vertex>
+
 attribute vec3 aPos;
 attribute vec3 aPos0;
 attribute vec3 aPos1;
@@ -307,6 +329,7 @@ uniform float uAmp;
 uniform float uTime;
 uniform float uNoiseFrequency;
 uniform float uNoiseAmplitude;
+uniform float uSunRadius;
 uniform vec3  uCamPos;
 uniform mat4  uViewProjection;
 uniform float uOpacity;
@@ -337,7 +360,7 @@ vec3 getPosOBJ(float phase, float animPhase){
   float amp = sin(phase * 3.14159265) * size * uAmp;
   amp *= animPhase;
   p += n * amp;
-  p += twistedSineNoise(vec4(p * uNoiseFrequency, uTime), 0.707).xyz * (amp * uNoiseAmplitude);
+  p += twistedSineNoise(vec4((p / uSunRadius) * uNoiseFrequency, uTime * 0.2), 0.707).xyz * (amp * uNoiseAmplitude);
   return p;
 }
 
@@ -345,7 +368,7 @@ vec3 getPosOBJ(float phase, float animPhase){
 
 void main(void){
   vUVY = aPos.z;
-  float animPhase = fract(uTime * 0.3 * (aWireRandom.y * 0.5) + aWireRandom.x);
+  float animPhase = fract(uTime * 0.08 * (aWireRandom.y * 0.5) + aWireRandom.x);
   vec3 pOBJ  = getPosOBJ(aPos.x,        animPhase);
   vec3 p1OBJ = getPosOBJ(aPos.x + 0.01, animPhase);
   vec3 pW  = (modelMatrix * vec4(pOBJ,  1.0)).xyz;
@@ -364,6 +387,7 @@ void main(void){
   vColor = hue(aWireRandom.w * uHueSpread + uHue);
   vProgress = aPos.x;
   gl_Position = uViewProjection * vec4(pW, 1.0);
+  #include <logdepthbuf_vertex>
 }
 `
 
@@ -371,6 +395,7 @@ const sunFlaresFS = /* glsl */ `
 #ifdef GL_ES
 precision highp float;
 #endif
+#include <logdepthbuf_pars_fragment>
 ${VISIBILITY_GLSL}
 
 varying float vUVY;
@@ -387,6 +412,7 @@ void main(void){
   alpha *= getAlpha(vNormal);
   // Fade-out suave nas pontas
   alpha *= 1.0 - smoothstep(0.6, 1.0, vProgress);
+  #include <logdepthbuf_fragment>
   gl_FragColor = vec4(vColor * alpha, alpha);
 }
 `
@@ -635,6 +661,7 @@ export class SunRenderer {
         uOpacity: { value: 0.03 },
         uNoiseFrequency: { value: 4.0 },
         uNoiseAmplitude: { value: 0.2 },
+        uSunRadius: { value: sunSize },
         uAlphaBlended: { value: 0.3 },
         uHueSpread: { value: 0.2 },
         uHue: { value: 0.2 },
@@ -737,6 +764,7 @@ export class SunRenderer {
         uHue: { value: 0.0 },
         uNoiseFrequency: { value: 4.0 },
         uNoiseAmplitude: { value: 0.2 },
+        uSunRadius: { value: sunSize },
         uResolution: { value: new THREE.Vector4(lineLength, lineCount, 1 / lineLength, 1 / lineCount) },
         uLineLength: { value: lineLength },
       },

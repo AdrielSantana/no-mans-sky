@@ -4,6 +4,7 @@ import { EffectComposer } from 'three/examples/jsm/postprocessing/EffectComposer
 import { RenderPass } from 'three/examples/jsm/postprocessing/RenderPass.js'
 import { UnrealBloomPass } from 'three/examples/jsm/postprocessing/UnrealBloomPass.js'
 import { createSkybox } from './skybox'
+import { WORLD_SCALE } from './world-scale'
 
 export class GameEngine {
   readonly scene: THREE.Scene
@@ -35,16 +36,16 @@ export class GameEngine {
     this.scene.add(this.skybox)
 
     // Camera
-    this.camera = new THREE.PerspectiveCamera(55, width / height, 0.01, 10000)
-    this.camera.position.set(0, 22, 28)
+    this.camera = new THREE.PerspectiveCamera(55, width / height, WORLD_SCALE.cameraNear, WORLD_SCALE.cameraFar)
+    this.camera.position.set(...WORLD_SCALE.initialCameraPosition)
     this.camera.lookAt(0, 0, 0)
 
     // Controls
     this.controls = new OrbitControls(this.camera, this.renderer.domElement)
     this.controls.enableDamping = true
     this.controls.dampingFactor = 0.08
-    this.controls.minDistance = 1
-    this.controls.maxDistance = 1000
+    this.controls.minDistance = WORLD_SCALE.orbitMinDistance
+    this.controls.maxDistance = WORLD_SCALE.orbitMaxDistance
 
     // Bloom
     this.composer = new EffectComposer(this.renderer)

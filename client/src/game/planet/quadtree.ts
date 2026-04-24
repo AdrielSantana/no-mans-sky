@@ -25,17 +25,17 @@ export interface QuadtreeNode {
 
 // ── LOD distance thresholds ───────────────────────────────
 // Multiplied by planet radius to get actual threshold.
-// E.g. for radius=1.0: LOD 1 activates at 12 units, LOD 7 at ~0.18 units.
-// For radius=0.3: LOD 1 at 3.6 units, LOD 7 at ~0.054 units.
+// Multiplied by planet radius. Tuned for compact playable planets whose
+// radius is in the hundreds of meters, while still allowing human-scale LOD.
 export const LOD_DISTANCE_MULTIPLIERS = [
   Infinity, // LOD 0: always shown
-  12,       // LOD 1: transition from fallback sphere
-  6,        // LOD 2
-  3,        // LOD 3
-  1.5,      // LOD 4
-  0.75,     // LOD 5
-  0.35,     // LOD 6
-  0.18,     // LOD 7
+  5,        // LOD 1: transition from fallback sphere
+  2.5,      // LOD 2
+  1.2,      // LOD 3
+  0.55,     // LOD 4
+  0.25,     // LOD 5
+  0.11,     // LOD 6
+  0.045,    // LOD 7
 ]
 
 export const MAX_LOD = LOD_DISTANCE_MULTIPLIERS.length - 1

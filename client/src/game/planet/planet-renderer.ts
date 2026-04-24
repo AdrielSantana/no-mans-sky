@@ -16,9 +16,11 @@ import {
   createAtmosphereMaterial,
   createOceanMaterial,
   createPlanetMaterial,
+  createPlanetFallbackMaterial,
   getSeaHeight,
   PlanetGenerator,
 } from './planet-generator'
+import { WORLD_SCALE } from '../world-scale'
 
 const MAX_CHUNKS_PER_FRAME = 8
 
@@ -27,6 +29,7 @@ export class PlanetRenderer {
   private planetRadius: number
   private noiseProfile: { octaves: number; lacunarity: number; gain: number; frequency: number; seed: number }
   private material: THREE.ShaderMaterial
+  private fallbackMaterial: THREE.ShaderMaterial
   private oceanMaterial: THREE.ShaderMaterial | null = null
   private atmosphereMaterial: THREE.ShaderMaterial | null = null
   private quadtrees: QuadtreeNode[] = []
@@ -74,6 +77,8 @@ export class PlanetRenderer {
       planetType: params.planetType,
       waterLevel: params.waterLevel,
       terrainScale: params.terrainScale,
+      localDetailNear: WORLD_SCALE.localDetailNear,
+      localDetailFar: WORLD_SCALE.localDetailFar,
       colorA: params.colorA,
       colorB: params.colorB,
       atmosphereColor: params.atmosphereColor,
@@ -85,22 +90,37 @@ export class PlanetRenderer {
 
     // Fallback low-poly sphere for distant view
     const fallbackGeo = new THREE.SphereGeometry(planetRadius, 32, 32)
-    const fallbackMat = this.material.clone()
-    this.fallbackSphere = new THREE.Mesh(fallbackGeo, fallbackMat)
+    this.fallbackMaterial = createPlanetFallbackMaterial({
+      seed: Number(params.seed),
+      planetType: params.planetType,
+      waterLevel: params.waterLevel,
+      colorA: params.colorA,
+      colorB: params.colorB,
+      sunPosition: this.sunPosition,
+      octaves: this.noiseProfile.octaves,
+      frequency: this.noiseProfile.frequency,
+    })
+    this.fallbackSphere = new THREE.Mesh(fallbackGeo, this.fallbackMaterial)
     this.fallbackSphere.frustumCulled = false
     this.group.add(this.fallbackSphere)
 
     const seaHeight = getSeaHeight(params.waterLevel, params.planetType)
 
     if (params.waterLevel > 0.02 && params.planetType !== 'gas') {
-      const waterRadius = planetRadius * (1 + seaHeight * params.terrainScale + 0.002)
+      const waterRadius = planetRadius * (1 + seaHeight * params.terrainScale) + 2
       const oceanGeo = new THREE.SphereGeometry(waterRadius, 96, 96)
       this.oceanMaterial = createOceanMaterial({
         seed: this.noiseProfile.seed,
+        planetType: params.planetType,
+        waterLevel: params.waterLevel,
+        planetRadius,
+        octaves: this.noiseProfile.octaves,
+        frequency: this.noiseProfile.frequency,
         sunPosition: this.sunPosition,
       })
       this.oceanMesh = new THREE.Mesh(oceanGeo, this.oceanMaterial)
       this.oceanMesh.frustumCulled = false
+      this.oceanMesh.renderOrder = 2
       this.group.add(this.oceanMesh)
     }
 
@@ -145,22 +165,21 @@ export class PlanetRenderer {
 
     // Update sun position uniform
     this.material.uniforms.uSunPosition.value.copy(this.sunPosition)
+    this.fallbackMaterial.uniforms.uSunPosition.value.copy(this.sunPosition)
     this.oceanMaterial?.uniforms.uSunPosition.value.copy(this.sunPosition)
     this.atmosphereMaterial?.uniforms.uSunPosition.value.copy(this.sunPosition)
     if (this.oceanMaterial) {
       this.oceanMaterial.uniforms.uTime.value = this.time
+      const farBlend = THREE.MathUtils.smoothstep(surfaceDist, this.planetRadius * 1.1, this.planetRadius * 4.0)
+      this.oceanMaterial.uniforms.uOceanLift.value = farBlend * Math.max(1.5, this.planetRadius * 0.008)
     }
-    if (this.fallbackSphere.material instanceof THREE.ShaderMaterial) {
-      this.fallbackSphere.material.uniforms.uSunPosition.value.copy(this.sunPosition)
-    }
-
     // Decide: show fallback sphere or quadtree terrain
     const useTerrain = surfaceDist < this.lodDistances[1]
 
     if (!useTerrain) {
       this.fallbackSphere.visible = true
       if (this.oceanMesh) this.oceanMesh.visible = true
-      if (this.atmosphereMesh) this.atmosphereMesh.visible = true
+      if (this.atmosphereMesh) this.atmosphereMesh.visible = false
       this.removeAllChunks()
       return
     }
@@ -406,6 +425,7 @@ export class PlanetRenderer {
   dispose() {
     this.removeAllChunks()
     this.material.dispose()
+    this.fallbackMaterial.dispose()
     this.oceanMaterial?.dispose()
     this.atmosphereMaterial?.dispose()
     this.oceanMesh?.geometry.dispose()
