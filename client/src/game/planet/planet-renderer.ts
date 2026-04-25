@@ -14,6 +14,7 @@ import {
 import { TerrainChunk } from './terrain-chunk'
 import {
   createAtmosphereMaterial,
+  createPlanetFarMaterial,
   createOceanMaterial,
   createPlanetMaterial,
   createPlanetFallbackMaterial,
@@ -23,12 +24,15 @@ import {
 import { WORLD_SCALE } from '../world-scale'
 
 const MAX_CHUNKS_PER_FRAME = 8
+const DETAILED_MATERIAL_MIN_LOD = 7
+const DETAILED_MATERIAL_DISTANCE = WORLD_SCALE.localDetailNear * 1.5
 
 export class PlanetRenderer {
   private group: THREE.Group
   private planetRadius: number
   private noiseProfile: { octaves: number; lacunarity: number; gain: number; frequency: number; seed: number }
   private material: THREE.ShaderMaterial
+  private farMaterial: THREE.ShaderMaterial
   private fallbackMaterial: THREE.ShaderMaterial
   private oceanMaterial: THREE.ShaderMaterial | null = null
   private atmosphereMaterial: THREE.ShaderMaterial | null = null
@@ -82,6 +86,18 @@ export class PlanetRenderer {
       colorA: params.colorA,
       colorB: params.colorB,
       atmosphereColor: params.atmosphereColor,
+      sunPosition: this.sunPosition,
+      planetRadius: planetRadius,
+      octaves: this.noiseProfile.octaves,
+      frequency: this.noiseProfile.frequency,
+    })
+    this.farMaterial = createPlanetFarMaterial({
+      seed: Number(params.seed),
+      planetType: params.planetType,
+      waterLevel: params.waterLevel,
+      terrainScale: params.terrainScale,
+      colorA: params.colorA,
+      colorB: params.colorB,
       sunPosition: this.sunPosition,
       planetRadius: planetRadius,
       octaves: this.noiseProfile.octaves,
@@ -151,6 +167,36 @@ export class PlanetRenderer {
     this.sunPosition.copy(pos)
   }
 
+  getDebugStats(camera: THREE.Camera) {
+    const camPos = new THREE.Vector3()
+    camera.getWorldPosition(camPos)
+
+    const planetPos = new THREE.Vector3()
+    this.group.getWorldPosition(planetPos)
+
+    const byLod: Record<string, number> = {}
+    let visible = 0
+    let detailedMaterialChunks = 0
+    for (const [key, chunk] of this.chunks) {
+      const lod = key.split('_')[1] ?? '?'
+      byLod[lod] = (byLod[lod] ?? 0) + 1
+      if (chunk.mesh.visible) visible++
+      if (chunk.mesh.material === this.material) detailedMaterialChunks++
+    }
+
+    return {
+      radius: this.planetRadius,
+      surfaceDistance: camPos.distanceTo(planetPos) - this.planetRadius,
+      chunks: this.chunks.size,
+      visible,
+      detailedMaterialChunks,
+      pending: this.pendingKeys.size,
+      pendingCollapses: this.pendingCollapseKeys.size,
+      byLod,
+      usingTerrain: !this.fallbackSphere.visible,
+    }
+  }
+
   update(camera: THREE.Camera, _dt: number) {
     this.time += _dt
 
@@ -165,13 +211,14 @@ export class PlanetRenderer {
 
     // Update sun position uniform
     this.material.uniforms.uSunPosition.value.copy(this.sunPosition)
+    this.farMaterial.uniforms.uSunPosition.value.copy(this.sunPosition)
     this.fallbackMaterial.uniforms.uSunPosition.value.copy(this.sunPosition)
     this.oceanMaterial?.uniforms.uSunPosition.value.copy(this.sunPosition)
     this.atmosphereMaterial?.uniforms.uSunPosition.value.copy(this.sunPosition)
     if (this.oceanMaterial) {
       this.oceanMaterial.uniforms.uTime.value = this.time
       const farBlend = THREE.MathUtils.smoothstep(surfaceDist, this.planetRadius * 1.1, this.planetRadius * 4.0)
-      this.oceanMaterial.uniforms.uOceanLift.value = farBlend * Math.max(1.5, this.planetRadius * 0.008)
+      this.oceanMaterial.uniforms.uOceanLift.value = farBlend * Math.max(3.0, this.planetRadius * 0.014)
     }
     // Decide: show fallback sphere or quadtree terrain
     const useTerrain = surfaceDist < this.lodDistances[1]
@@ -241,6 +288,11 @@ export class PlanetRenderer {
         this.chunks.delete(key)
       } else {
         chunk.mesh.visible = renderKeys.has(key)
+        if (chunk.mesh.visible) {
+          chunk.mesh.material = this.shouldUseDetailedMaterial(chunk, camPos, planetPos)
+            ? this.material
+            : this.farMaterial
+        }
       }
     }
   }
@@ -302,6 +354,17 @@ export class PlanetRenderer {
 
     const facing = getNodeCenter(node).dot(camDir.normalize())
     return facing > -0.15
+  }
+
+  private shouldUseDetailedMaterial(
+    chunk: TerrainChunk,
+    camPos: THREE.Vector3,
+    planetPos: THREE.Vector3,
+  ): boolean {
+    if (chunk.node.lod < DETAILED_MATERIAL_MIN_LOD) return false
+
+    const chunkCenter = getNodeCenter(chunk.node).multiplyScalar(this.planetRadius).add(planetPos)
+    return camPos.distanceTo(chunkCenter) < DETAILED_MATERIAL_DISTANCE
   }
 
   private isNodeCovered(node: QuadtreeNode): boolean {
@@ -395,7 +458,7 @@ export class PlanetRenderer {
       this.terrainScale,
       this.noiseProfile.seed,
       this.noiseProfile.octaves,
-      this.material,
+      this.farMaterial,
     )
   }
 
@@ -425,6 +488,7 @@ export class PlanetRenderer {
   dispose() {
     this.removeAllChunks()
     this.material.dispose()
+    this.farMaterial.dispose()
     this.fallbackMaterial.dispose()
     this.oceanMaterial?.dispose()
     this.atmosphereMaterial?.dispose()

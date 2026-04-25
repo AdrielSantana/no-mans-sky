@@ -7,6 +7,7 @@ const SKIRT_DEPTH = 0.08
 export class TerrainChunk {
   readonly mesh: THREE.Mesh
   readonly key: string
+  readonly node: QuadtreeNode
   private geometry: THREE.BufferGeometry
 
   constructor(
@@ -17,6 +18,7 @@ export class TerrainChunk {
     _octaves: number,
     material: THREE.Material,
   ) {
+    this.node = { ...node, children: null }
     this.key = nodeKey(node.face, node.lod, node.x, node.y)
     this.geometry = this.buildGeometry(node, planetRadius, terrainScale)
     this.mesh = new THREE.Mesh(this.geometry, material)

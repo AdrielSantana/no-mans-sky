@@ -123,6 +123,17 @@ export class CelestialSystem {
     }
   }
 
+  getDebugStats() {
+    return {
+      planets: Array.from(this.planetRenderers, ([id, renderer]) => ({
+        id,
+        ...renderer.getDebugStats(this.engine.camera),
+      })),
+      simpleMeshes: this.meshes.size,
+      hasSun: this.sunRenderer !== null,
+    }
+  }
+
   private removeInactive(activeIds: Set<string>) {
     for (const [id, mesh] of this.meshes) {
       if (!activeIds.has(id)) {

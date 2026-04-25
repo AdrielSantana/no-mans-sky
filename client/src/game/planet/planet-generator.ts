@@ -99,12 +99,15 @@ export function createPlanetMaterial(params: {
   uniform float uFrequency;
   uniform float uOctaves;
   uniform float uPlanetKind;
+  uniform float uLocalDetailNear;
+  uniform float uLocalDetailFar;
 
   varying vec3 vNormal;
   varying vec3 vWorldPos;
   varying float vHeight;
   varying vec3 vSphereDir;
   varying float vDetail;
+  varying float vNearDetail;
 
   float getHeight(vec3 sphereDir) {
     float continental = terrainFbm(sphereDir * uFrequency, uSeed, int(uOctaves), 2.0, 0.5);
@@ -132,24 +135,30 @@ export function createPlanetMaterial(params: {
     float r = uPlanetRadius + h * uTerrainScale * uPlanetRadius;
     float skirtOffset = max(uPlanetRadius - length(position), 0.0);
     vec3 displaced = sphereDir * (r - skirtOffset);
+    vec4 worldPos = modelMatrix * vec4(displaced, 1.0);
+    float cameraDist = distance(cameraPosition, worldPos.xyz);
+    vNearDetail = 1.0 - smoothstep(uLocalDetailNear, uLocalDetailFar, cameraDist);
 
     // Normal via finite differences
-    float eps = 0.001;
-    vec3 tangent = normalize(cross(sphereDir, vec3(0.0, 1.0, 0.0)));
-    if (length(cross(sphereDir, vec3(0.0, 1.0, 0.0))) < 0.01) {
-      tangent = normalize(cross(sphereDir, vec3(1.0, 0.0, 0.0)));
+    if (vNearDetail > 0.02) {
+      float eps = 0.001;
+      vec3 tangent = normalize(cross(sphereDir, vec3(0.0, 1.0, 0.0)));
+      if (length(cross(sphereDir, vec3(0.0, 1.0, 0.0))) < 0.01) {
+        tangent = normalize(cross(sphereDir, vec3(1.0, 0.0, 0.0)));
+      }
+      vec3 bitangent = normalize(cross(sphereDir, tangent));
+
+      float hR = getHeight(normalize(sphereDir + tangent * eps));
+      float hU = getHeight(normalize(sphereDir + bitangent * eps));
+
+      vec3 pR = normalize(sphereDir + tangent * eps) * (uPlanetRadius + hR * uTerrainScale * uPlanetRadius);
+      vec3 pU = normalize(sphereDir + bitangent * eps) * (uPlanetRadius + hU * uTerrainScale * uPlanetRadius);
+
+      vNormal = normalize(cross(pR - displaced, pU - displaced));
+    } else {
+      vNormal = sphereDir;
     }
-    vec3 bitangent = normalize(cross(sphereDir, tangent));
 
-    float hR = getHeight(normalize(sphereDir + tangent * eps));
-    float hU = getHeight(normalize(sphereDir + bitangent * eps));
-
-    vec3 pR = normalize(sphereDir + tangent * eps) * (uPlanetRadius + hR * uTerrainScale * uPlanetRadius);
-    vec3 pU = normalize(sphereDir + bitangent * eps) * (uPlanetRadius + hU * uTerrainScale * uPlanetRadius);
-
-    vNormal = normalize(cross(pR - displaced, pU - displaced));
-
-    vec4 worldPos = modelMatrix * vec4(displaced, 1.0);
     vWorldPos = worldPos.xyz;
     gl_Position = projectionMatrix * viewMatrix * worldPos;
     #include <logdepthbuf_vertex>
@@ -175,6 +184,7 @@ export function createPlanetMaterial(params: {
   varying float vHeight;
   varying vec3 vSphereDir;
   varying float vDetail;
+  varying float vNearDetail;
 
   float saturate(float v) {
     return clamp(v, 0.0, 1.0);
@@ -216,6 +226,7 @@ export function createPlanetMaterial(params: {
 
   vec3 materialAlbedoDetail(vec3 color, float heightNorm, float latitude, float moisture, float slope, float coast) {
     if (uPlanetKind > 0.5 && uPlanetKind < 1.5) return color;
+    if (vNearDetail <= 0.01) return color;
 
     vec3 sphereDir = normalize(vSphereDir);
     float macro = terrainFbm(sphereDir * 38.0 + 13.0, uSeed + 601.0, 4, 2.0, 0.5);
@@ -232,7 +243,7 @@ export function createPlanetMaterial(params: {
     color = mix(color, color + vec3(0.07, 0.055, 0.025) * grain, dry * (1.0 - coast) * 0.45);
     color = mix(color, vec3(0.92, 0.94, 0.93) * (0.95 + grain * 0.04), snow * 0.72);
     color = mix(color, vec3(0.78, 0.70, 0.52) * (0.93 + grain * 0.08), coast * 0.75);
-    return clamp(color, 0.0, 1.0);
+    return mix(color, clamp(color, 0.0, 1.0), vNearDetail);
   }
 
   vec3 applyOceanFloor(vec3 color, float height, float slope) {
@@ -261,13 +272,11 @@ export function createPlanetMaterial(params: {
     float grit = terrainFbm(sphereDir * 240.0 + 17.0, uSeed + 407.0, 2, 2.0, 0.42);
     float dune = terrainFbm(sphereDir * 36.0 + vec3(8.0, 0.0, -6.0), uSeed + 509.0, 3, 2.0, 0.5);
 
-    float cameraDist = distance(cameraPosition, vWorldPos);
-    float nearDetail = 1.0 - smoothstep(uLocalDetailNear, uLocalDetailFar, cameraDist);
     float snow = smoothstep(0.68, 0.88, smoothstep(-1.0, 1.0, vHeight) + latitude * 0.18) * smoothstep(0.48, 0.88, latitude);
     float dry = saturate(1.0 - moisture);
-    float strength = 0.025 + nearDetail * 0.055;
-    strength += slope * (0.065 + nearDetail * 0.05);
-    strength += dry * (1.0 - coast) * (0.022 + nearDetail * 0.03);
+    float strength = 0.025 + vNearDetail * 0.055;
+    strength += slope * (0.065 + vNearDetail * 0.05);
+    strength += dry * (1.0 - coast) * (0.022 + vNearDetail * 0.03);
     strength *= 1.0 - snow * 0.55;
     strength *= 1.0 - coast * 0.45;
 
@@ -327,6 +336,147 @@ export function createPlanetMaterial(params: {
       uPlanetKind: { value: planetKind },
       uLocalDetailNear: { value: params.localDetailNear },
       uLocalDetailFar: { value: params.localDetailFar },
+      uSeaHeight: { value: getSeaHeight(params.waterLevel, params.planetType) },
+      uColorA: { value: colorA },
+      uColorB: { value: colorB },
+      uSunPosition: { value: params.sunPosition.clone() },
+    },
+  })
+}
+
+export function createPlanetFarMaterial(params: {
+  seed: number
+  planetType: string
+  waterLevel: number
+  terrainScale: number
+  colorA: string
+  colorB: string
+  sunPosition: THREE.Vector3
+  planetRadius: number
+  octaves: number
+  frequency: number
+}): THREE.ShaderMaterial {
+  const colorA = new THREE.Color(params.colorA)
+  const colorB = new THREE.Color(params.colorB)
+  const planetKind = params.planetType === 'gas'
+    ? PlanetKind.Gas
+    : params.planetType === 'ice'
+      ? PlanetKind.Ice
+      : PlanetKind.Rocky
+
+  const vertexShader = /* glsl */ `
+  ${TERRAIN_NOISE}
+  #include <common>
+  #include <logdepthbuf_pars_vertex>
+
+  uniform float uSeed;
+  uniform float uTerrainScale;
+  uniform float uPlanetRadius;
+  uniform float uFrequency;
+  uniform float uPlanetKind;
+
+  varying vec3 vWorldPos;
+  varying vec3 vNormal;
+  varying vec3 vSphereDir;
+  varying float vHeight;
+  varying float vMacro;
+
+  float getHeight(vec3 sphereDir) {
+    float continental = terrainFbm(sphereDir * uFrequency, uSeed, 4, 2.0, 0.5);
+    float ridges = abs(terrainFbm(sphereDir * (uFrequency * 3.2) + 17.0, uSeed + 9.7, 2, 2.1, 0.45));
+    ridges = pow(1.0 - ridges, 2.6);
+
+    if (uPlanetKind > 0.5 && uPlanetKind < 1.5) {
+      return continental * 0.05;
+    }
+
+    return continental * 0.62 + ridges * smoothstep(0.25, 0.72, continental) * 0.16;
+  }
+
+  void main() {
+    vec3 sphereDir = normalize(position);
+    vSphereDir = sphereDir;
+
+    float h = getHeight(sphereDir);
+    vHeight = h;
+    vMacro = terrainFbm(sphereDir * (uFrequency * 2.4) + 19.0, uSeed + 31.0, 3, 2.0, 0.5);
+
+    float r = uPlanetRadius + h * uTerrainScale * uPlanetRadius;
+    float skirtOffset = max(uPlanetRadius - length(position), 0.0);
+    vec3 displaced = sphereDir * (r - skirtOffset);
+    vec4 worldPos = modelMatrix * vec4(displaced, 1.0);
+
+    vWorldPos = worldPos.xyz;
+    vNormal = normalize((modelMatrix * vec4(sphereDir, 0.0)).xyz);
+    gl_Position = projectionMatrix * viewMatrix * worldPos;
+    #include <logdepthbuf_vertex>
+  }
+  `
+
+  const fragmentShader = /* glsl */ `
+  ${TERRAIN_NOISE}
+  #include <logdepthbuf_pars_fragment>
+
+  uniform vec3 uColorA;
+  uniform vec3 uColorB;
+  uniform vec3 uSunPosition;
+  uniform float uSeaHeight;
+  uniform float uPlanetKind;
+
+  varying vec3 vWorldPos;
+  varying vec3 vNormal;
+  varying vec3 vSphereDir;
+  varying float vHeight;
+  varying float vMacro;
+
+  void main() {
+    float heightNorm = smoothstep(-1.0, 1.0, vHeight);
+    float latitude = abs(vSphereDir.y);
+    float moisture = clamp(vMacro * 0.5 + 0.5, 0.0, 1.0);
+    float coast = smoothstep(uSeaHeight - 0.025, uSeaHeight + 0.025, vHeight) * (1.0 - smoothstep(uSeaHeight + 0.025, uSeaHeight + 0.09, vHeight));
+
+    vec3 terrain = mix(uColorA * 0.70, uColorB, heightNorm);
+    if (uPlanetKind > 0.5 && uPlanetKind < 1.5) {
+      float bands = smoothstep(-0.2, 0.8, sin(vSphereDir.y * 34.0 + vMacro * 2.2) * 0.5 + 0.5);
+      vec3 bandA = mix(uColorA, vec3(0.95, 0.74, 0.48), 0.35);
+      vec3 bandB = mix(uColorB, vec3(0.60, 0.34, 0.18), 0.35);
+      terrain = mix(bandA, bandB, bands);
+    } else if (uPlanetKind > 1.5) {
+      terrain = mix(vec3(0.46, 0.68, 0.80), vec3(0.86, 0.91, 0.95), smoothstep(0.28, 0.8, heightNorm + latitude * 0.25));
+    } else {
+      vec3 lowland = mix(uColorA, vec3(0.16, 0.32, 0.13), moisture * 0.7);
+      vec3 dryland = mix(uColorA, vec3(0.62, 0.50, 0.30), 1.0 - moisture);
+      terrain = mix(dryland, lowland, moisture);
+      terrain = mix(terrain, uColorB, smoothstep(0.56, 0.84, heightNorm));
+      terrain = mix(terrain, vec3(0.84, 0.88, 0.90), smoothstep(0.72, 0.92, heightNorm + latitude * 0.16) * smoothstep(0.52, 0.9, latitude));
+      terrain = mix(terrain, vec3(0.76, 0.67, 0.48), coast * 0.75);
+    }
+
+    if (uPlanetKind < 0.5 && uSeaHeight > -1.0) {
+      float underwater = smoothstep(uSeaHeight + 0.018, uSeaHeight - 0.018, vHeight);
+      float shelf = smoothstep(uSeaHeight - 0.18, uSeaHeight + 0.02, vHeight);
+      vec3 oceanFloor = mix(vec3(0.012, 0.045, 0.070), vec3(0.045, 0.115, 0.125), shelf);
+      terrain = mix(terrain, oceanFloor, underwater);
+    }
+
+    vec3 lightDir = normalize(uSunPosition - vWorldPos);
+    float diffuse = max(dot(normalize(vNormal), lightDir), 0.0);
+    vec3 finalColor = terrain * (0.18 + diffuse * 0.82);
+    #include <logdepthbuf_fragment>
+    gl_FragColor = vec4(finalColor, 1.0);
+  }
+  `
+
+  return new THREE.ShaderMaterial({
+    vertexShader,
+    fragmentShader,
+    side: THREE.DoubleSide,
+    uniforms: {
+      uSeed: { value: params.seed },
+      uTerrainScale: { value: params.terrainScale },
+      uPlanetRadius: { value: params.planetRadius },
+      uFrequency: { value: params.frequency },
+      uPlanetKind: { value: planetKind },
       uSeaHeight: { value: getSeaHeight(params.waterLevel, params.planetType) },
       uColorA: { value: colorA },
       uColorB: { value: colorB },
