@@ -9,7 +9,6 @@ import {
   createChildren,
   nodeKey,
   getNodeCenter,
-  getChunkDistToCamera,
 } from './quadtree'
 import { TerrainChunk } from './terrain-chunk'
 import {
@@ -24,8 +23,9 @@ import {
 import { WORLD_SCALE } from '../world-scale'
 
 const MAX_CHUNKS_PER_FRAME = 8
-const DETAILED_MATERIAL_MIN_LOD = 7
-const DETAILED_MATERIAL_DISTANCE = WORLD_SCALE.localDetailNear * 1.5
+const DETAILED_MATERIAL_MIN_LOD = 6
+const DETAILED_MATERIAL_DISTANCE = WORLD_SCALE.localDetailNear * 2.2
+const LOD_COLLAPSE_HYSTERESIS = 1.35
 
 export class PlanetRenderer {
   private group: THREE.Group
@@ -113,6 +113,7 @@ export class PlanetRenderer {
       colorA: params.colorA,
       colorB: params.colorB,
       sunPosition: this.sunPosition,
+      planetRadius,
       octaves: this.noiseProfile.octaves,
       frequency: this.noiseProfile.frequency,
     })
@@ -123,7 +124,8 @@ export class PlanetRenderer {
     const seaHeight = getSeaHeight(params.waterLevel, params.planetType)
 
     if (params.waterLevel > 0.02 && params.planetType !== 'gas') {
-      const waterRadius = planetRadius * (1 + seaHeight * params.terrainScale) + 2
+      const coastClearance = Math.max(0.08, planetRadius * 0.00025)
+      const waterRadius = planetRadius * (1 + seaHeight * params.terrainScale) + coastClearance
       const oceanGeo = new THREE.SphereGeometry(waterRadius, 96, 96)
       this.oceanMaterial = createOceanMaterial({
         seed: this.noiseProfile.seed,
@@ -163,8 +165,18 @@ export class PlanetRenderer {
     this.group.position.copy(pos)
   }
 
+  setRotation(rotationAngle: number, axialTilt: number) {
+    this.group.rotation.set(0, rotationAngle, axialTilt)
+  }
+
   setSunPosition(pos: THREE.Vector3) {
     this.sunPosition.copy(pos)
+  }
+
+  setDebugWireframe(enabled: boolean) {
+    this.material.wireframe = enabled
+    this.farMaterial.wireframe = enabled
+    this.fallbackMaterial.wireframe = enabled
   }
 
   getDebugStats(camera: THREE.Camera) {
@@ -205,6 +217,10 @@ export class PlanetRenderer {
 
     const planetPos = new THREE.Vector3()
     this.group.getWorldPosition(planetPos)
+    const planetQuat = new THREE.Quaternion()
+    this.group.getWorldQuaternion(planetQuat)
+    const inversePlanetQuat = planetQuat.clone().invert()
+    const localCamPos = camPos.clone().sub(planetPos).applyQuaternion(inversePlanetQuat)
 
     const distToCenter = camPos.distanceTo(planetPos)
     const surfaceDist = distToCenter - this.planetRadius
@@ -218,7 +234,7 @@ export class PlanetRenderer {
     if (this.oceanMaterial) {
       this.oceanMaterial.uniforms.uTime.value = this.time
       const farBlend = THREE.MathUtils.smoothstep(surfaceDist, this.planetRadius * 1.1, this.planetRadius * 4.0)
-      this.oceanMaterial.uniforms.uOceanLift.value = farBlend * Math.max(3.0, this.planetRadius * 0.014)
+      this.oceanMaterial.uniforms.uOceanLift.value = farBlend * Math.max(2.0, this.planetRadius * 0.01)
     }
     // Decide: show fallback sphere or quadtree terrain
     const useTerrain = surfaceDist < this.lodDistances[1]
@@ -237,7 +253,7 @@ export class PlanetRenderer {
 
     // 1. Update quadtree structure (create/destroy children based on distance)
     for (const root of this.quadtrees) {
-      this.updateQuadtree(root, camPos, planetPos)
+      this.updateQuadtree(root, localCamPos)
     }
 
     // 2. Queue chunks that are needed for the next stable transition.
@@ -299,14 +315,15 @@ export class PlanetRenderer {
 
   private updateQuadtree(
     node: QuadtreeNode,
-    camPos: THREE.Vector3,
-    planetPos: THREE.Vector3,
+    localCamPos: THREE.Vector3,
   ) {
-    const dist = getChunkDistToCamera(node, camPos, planetPos, this.planetRadius)
+    const dist = this.getLocalChunkDistToCamera(node, localCamPos)
+    const splitDistance = this.lodDistances[node.lod + 1]
+    const keepChildrenDistance = splitDistance * LOD_COLLAPSE_HYSTERESIS
     const shouldSub =
       node.lod < MAX_LOD &&
-      dist < this.lodDistances[node.lod + 1] &&
-      this.isChunkRelevantForDetail(node, camPos, planetPos)
+      dist < (node.children ? keepChildrenDistance : splitDistance) &&
+      this.isChunkRelevantForDetail(node, localCamPos)
 
     if (shouldSub) {
       const key = nodeKey(node.face, node.lod, node.x, node.y)
@@ -316,7 +333,7 @@ export class PlanetRenderer {
         node.children = createChildren(node)
       }
       for (const child of node.children) {
-        this.updateQuadtree(child, camPos, planetPos)
+        this.updateQuadtree(child, localCamPos)
       }
     } else {
       if (node.children) {
@@ -348,11 +365,21 @@ export class PlanetRenderer {
     }
   }
 
-  private isChunkRelevantForDetail(node: QuadtreeNode, camPos: THREE.Vector3, planetPos: THREE.Vector3): boolean {
-    const camDir = camPos.clone().sub(planetPos)
-    if (camDir.lengthSq() === 0) return true
+  private getLocalChunkDistToCamera(node: QuadtreeNode, localCamPos: THREE.Vector3): number {
+    const center = getNodeCenter(node).multiplyScalar(this.planetRadius)
+    return Math.max(0, localCamPos.distanceTo(center) - this.getNodeBoundingRadius(node))
+  }
 
-    const facing = getNodeCenter(node).dot(camDir.normalize())
+  private getNodeBoundingRadius(node: QuadtreeNode): number {
+    const levelCells = 1 << node.lod
+    const approxFacePatch = (2 / levelCells) * this.planetRadius
+    return approxFacePatch * 1.5
+  }
+
+  private isChunkRelevantForDetail(node: QuadtreeNode, localCamPos: THREE.Vector3): boolean {
+    if (localCamPos.lengthSq() === 0) return true
+
+    const facing = getNodeCenter(node).dot(localCamPos.clone().normalize())
     return facing > -0.15
   }
 
@@ -363,7 +390,9 @@ export class PlanetRenderer {
   ): boolean {
     if (chunk.node.lod < DETAILED_MATERIAL_MIN_LOD) return false
 
-    const chunkCenter = getNodeCenter(chunk.node).multiplyScalar(this.planetRadius).add(planetPos)
+    const planetQuat = new THREE.Quaternion()
+    this.group.getWorldQuaternion(planetQuat)
+    const chunkCenter = getNodeCenter(chunk.node).multiplyScalar(this.planetRadius).applyQuaternion(planetQuat).add(planetPos)
     return camPos.distanceTo(chunkCenter) < DETAILED_MATERIAL_DISTANCE
   }
 

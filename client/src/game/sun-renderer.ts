@@ -168,12 +168,17 @@ uniform vec3 uCamPos;
 
 void main(void){
   vRadial = aPos.z;
-  vec3 side = normalize(cross(normalize(-uCamPos), uCamUp));
+  vec3 center = (modelMatrix * vec4(0.0, 0.0, 0.0, 1.0)).xyz;
+  vec3 viewDir = normalize(center - uCamPos);
+  vec3 side = normalize(cross(viewDir, uCamUp));
+  if (length(side) < 1e-5) {
+    side = vec3(1.0, 0.0, 0.0);
+  }
   vec3 p = aPos.x * side + aPos.y * uCamUp;
   p *= 1.0 + aPos.z * uRadius;
-  vec4 world = vec4(p, 1.0);
-  vWorld = world.xyz;
-  gl_Position = uViewProjection * world;
+  vec4 world = vec4(center + p, 1.0);
+  vWorld = p;
+  gl_Position = projectionMatrix * viewMatrix * world;
   #include <logdepthbuf_vertex>
 }
 `
@@ -277,7 +282,7 @@ void main(void){
   vOpacity = uOpacity * (0.5 + aWireRandom.w);
   vColor   = spectrum(aWireRandom.w * uHueSpread + uHue);
   vProgress = aPos.x;
-  gl_Position = uViewProjection * vec4(pWorld, 1.0);
+  gl_Position = projectionMatrix * viewMatrix * vec4(pWorld, 1.0);
   #include <logdepthbuf_vertex>
 }
 `
@@ -386,7 +391,7 @@ void main(void){
   vOpacity *= uOpacity;
   vColor = hue(aWireRandom.w * uHueSpread + uHue);
   vProgress = aPos.x;
-  gl_Position = uViewProjection * vec4(pW, 1.0);
+  gl_Position = projectionMatrix * viewMatrix * vec4(pW, 1.0);
   #include <logdepthbuf_vertex>
 }
 `

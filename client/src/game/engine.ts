@@ -17,6 +17,7 @@ export class GameEngine {
   private boundResize: () => void
   private skybox: THREE.Mesh
   private clock = new THREE.Clock()
+  private pixelRatioLimit = Math.min(window.devicePixelRatio, 2)
 
   constructor(container: HTMLElement) {
     this.container = container
@@ -26,7 +27,7 @@ export class GameEngine {
     // Renderer
     this.renderer = new THREE.WebGLRenderer({ antialias: true, logarithmicDepthBuffer: true })
     this.renderer.setSize(width, height)
-    this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2))
+    this.renderer.setPixelRatio(this.pixelRatioLimit)
     container.appendChild(this.renderer.domElement)
 
     // Scene
@@ -49,6 +50,7 @@ export class GameEngine {
 
     // Bloom
     this.composer = new EffectComposer(this.renderer)
+    this.composer.setPixelRatio(this.pixelRatioLimit)
     this.composer.addPass(new RenderPass(this.scene, this.camera))
     const bloomPass = new UnrealBloomPass(
       new THREE.Vector2(width, height),
@@ -76,6 +78,21 @@ export class GameEngine {
 
   getDeltaTime(): number {
     return this.clock.getDelta()
+  }
+
+  setOrbitControlsEnabled(enabled: boolean) {
+    this.controls.enabled = enabled
+  }
+
+  setPixelRatioLimit(limit: number) {
+    this.pixelRatioLimit = Math.min(window.devicePixelRatio, limit)
+    this.renderer.setPixelRatio(this.pixelRatioLimit)
+    this.composer.setPixelRatio(this.pixelRatioLimit)
+    this.handleResize()
+  }
+
+  getDomElement(): HTMLCanvasElement {
+    return this.renderer.domElement
   }
 
   private handleResize() {

@@ -29,13 +29,13 @@ export interface QuadtreeNode {
 // radius is in the hundreds of meters, while still allowing human-scale LOD.
 export const LOD_DISTANCE_MULTIPLIERS = [
   Infinity, // LOD 0: always shown
-  5,        // LOD 1: transition from fallback sphere
-  2.5,      // LOD 2
-  1.2,      // LOD 3
-  0.55,     // LOD 4
-  0.25,     // LOD 5
-  0.11,     // LOD 6
-  0.045,    // LOD 7
+  5.5,      // LOD 1: transition from fallback sphere
+  3.0,      // LOD 2
+  1.55,     // LOD 3
+  0.78,     // LOD 4
+  0.38,     // LOD 5
+  0.18,     // LOD 6
+  0.085,    // LOD 7
 ]
 
 export const MAX_LOD = LOD_DISTANCE_MULTIPLIERS.length - 1

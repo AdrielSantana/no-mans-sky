@@ -3,6 +3,8 @@ import type { CelestialBody } from '../module_bindings/types'
 import type { GameEngine } from './engine'
 import { SunRenderer } from './sun-renderer'
 import { PlanetRenderer } from './planet/planet-renderer'
+import { PlanetGenerator } from './planet/planet-generator'
+import { PlanetWalkerController, type PlanetWalkerTarget } from './planet-walker-controller'
 
 interface PlanetParamsRow {
   bodyId: bigint
@@ -16,6 +18,15 @@ interface PlanetParamsRow {
   atmosphereDensity: number
 }
 
+interface BodyRenderState {
+  currentPosition: THREE.Vector3
+  targetPosition: THREE.Vector3
+  currentRotationAngle: number
+  targetRotationAngle: number
+  currentAxialTilt: number
+  targetAxialTilt: number
+}
+
 export class CelestialSystem {
   private scene: THREE.Scene
   private engine: GameEngine
@@ -26,23 +37,31 @@ export class CelestialSystem {
   private sunPosition = new THREE.Vector3(0, 0, 0)
   private geometry = new THREE.SphereGeometry(1, 32, 32)
   private planetRenderers = new Map<string, PlanetRenderer>()
+  private bodyStates = new Map<string, BodyRenderState>()
+  private walkerTerrainById = new Map<string, PlanetWalkerTarget['terrain']>()
+  private walkerController: PlanetWalkerController
+  private debugWireframe = false
+  private readonly onKeyDown = (event: KeyboardEvent) => this.handleKeyDown(event)
 
   constructor(engine: GameEngine) {
     this.engine = engine
     this.scene = engine.scene
+    this.walkerController = new PlanetWalkerController(engine)
+    window.addEventListener('keydown', this.onKeyDown)
   }
 
   sync(bodies: readonly CelestialBody[], planetParams?: readonly PlanetParamsRow[]) {
     const activeIds = new Set<string>()
+    const activePlanetIds = new Set<string>()
 
     for (const body of bodies) {
       const id = body.id.toString()
       activeIds.add(id)
+      const renderState = this.upsertBodyState(id, body)
 
       // Sun handling
       if (body.isSun) {
         this.sunId = id
-        this.sunPosition.set(body.x, body.y, body.z)
         if (!this.sunRenderer) {
           const group = new THREE.Group()
           this.sunGroup = group
@@ -50,7 +69,7 @@ export class CelestialSystem {
           this.scene.add(group)
         }
         if (this.sunGroup) {
-          this.sunGroup.position.set(body.x, body.y, body.z)
+          this.applyObjectTransform(this.sunGroup, renderState)
         }
         continue
       }
@@ -84,13 +103,27 @@ export class CelestialSystem {
             atmosphereColor: params.atmosphereColor,
             atmosphereDensity: params.atmosphereDensity,
           })
-          renderer.setPosition(new THREE.Vector3(body.x, body.y, body.z))
+          renderer.setPosition(renderState.currentPosition)
+          renderer.setRotation(renderState.currentRotationAngle, renderState.currentAxialTilt)
           renderer.setSunPosition(this.sunPosition)
+          renderer.setDebugWireframe(this.debugWireframe)
           this.planetRenderers.set(id, renderer)
-        } else {
-          existingRenderer.setPosition(new THREE.Vector3(body.x, body.y, body.z))
-          existingRenderer.setSunPosition(this.sunPosition)
         }
+
+        const profile = PlanetGenerator.fromParams({
+          seed: params.seed,
+          planetType: params.planetType,
+          terrainScale: params.terrainScale,
+        })
+        activePlanetIds.add(id)
+        this.walkerTerrainById.set(id, {
+          seed: Number(params.seed),
+          planetType: params.planetType,
+          radius: body.bodySize,
+          terrainScale: params.terrainScale,
+          frequency: profile.frequency,
+          octaves: profile.octaves,
+        })
       } else {
         // No params — simple sphere (backward compatible)
         if (!this.meshes.has(id) && !this.planetRenderers.has(id)) {
@@ -106,17 +139,22 @@ export class CelestialSystem {
 
         const mesh = this.meshes.get(id)
         if (mesh) {
-          mesh.position.set(body.x, body.y, body.z)
+          this.applyObjectTransform(mesh, renderState)
           mesh.scale.setScalar(body.bodySize)
-          mesh.rotation.set(0, body.rotationAngle, body.axialTilt)
         }
       }
     }
 
+    for (const id of this.walkerTerrainById.keys()) {
+      if (!activePlanetIds.has(id)) this.walkerTerrainById.delete(id)
+    }
     this.removeInactive(activeIds)
   }
 
   update(dt: number) {
+    this.interpolateBodies(dt)
+    this.updateWalkerTargets()
+    this.walkerController.update(dt)
     this.sunRenderer?.update(dt)
     for (const renderer of this.planetRenderers.values()) {
       renderer.update(this.engine.camera, dt)
@@ -144,6 +182,7 @@ export class CelestialSystem {
           mesh.material.dispose()
         }
         this.meshes.delete(id)
+        this.bodyStates.delete(id)
       }
     }
 
@@ -151,6 +190,8 @@ export class CelestialSystem {
       if (!activeIds.has(id)) {
         renderer.dispose()
         this.planetRenderers.delete(id)
+        this.bodyStates.delete(id)
+        this.walkerTerrainById.delete(id)
       }
     }
 
@@ -162,10 +203,101 @@ export class CelestialSystem {
         this.scene.remove(this.sunGroup)
         this.sunGroup = null
       }
+      this.bodyStates.delete(this.sunId)
+    }
+  }
+
+  private upsertBodyState(id: string, body: CelestialBody): BodyRenderState {
+    const targetPosition = new THREE.Vector3(body.x, body.y, body.z)
+    const existing = this.bodyStates.get(id)
+    if (existing) {
+      existing.targetPosition.copy(targetPosition)
+      existing.targetRotationAngle = body.rotationAngle
+      existing.targetAxialTilt = body.axialTilt
+      return existing
+    }
+
+    const state = {
+      currentPosition: targetPosition.clone(),
+      targetPosition,
+      currentRotationAngle: body.rotationAngle,
+      targetRotationAngle: body.rotationAngle,
+      currentAxialTilt: body.axialTilt,
+      targetAxialTilt: body.axialTilt,
+    }
+    this.bodyStates.set(id, state)
+    return state
+  }
+
+  private interpolateBodies(dt: number) {
+    const alpha = 1 - Math.exp(-dt * 14)
+    for (const [id, state] of this.bodyStates) {
+      state.currentPosition.lerp(state.targetPosition, alpha)
+      state.currentRotationAngle = this.lerpAngle(state.currentRotationAngle, state.targetRotationAngle, alpha)
+      state.currentAxialTilt = THREE.MathUtils.lerp(state.currentAxialTilt, state.targetAxialTilt, alpha)
+
+      if (id === this.sunId && this.sunGroup) {
+        this.applyObjectTransform(this.sunGroup, state)
+        this.sunPosition.copy(state.currentPosition)
+        continue
+      }
+
+      const renderer = this.planetRenderers.get(id)
+      if (renderer) {
+        renderer.setPosition(state.currentPosition)
+        renderer.setRotation(state.currentRotationAngle, state.currentAxialTilt)
+        renderer.setSunPosition(this.sunPosition)
+        continue
+      }
+
+      const mesh = this.meshes.get(id)
+      if (mesh) {
+        this.applyObjectTransform(mesh, state)
+      }
+    }
+  }
+
+  private updateWalkerTargets() {
+    const targets: PlanetWalkerTarget[] = []
+    for (const [id, terrain] of this.walkerTerrainById) {
+      const state = this.bodyStates.get(id)
+      if (!state) continue
+      targets.push({
+        id,
+        worldPosition: state.currentPosition.clone(),
+        worldQuaternion: this.getBodyQuaternion(state),
+        terrain,
+      })
+    }
+    this.walkerController.setTargets(targets)
+  }
+
+  private applyObjectTransform(object: THREE.Object3D, state: BodyRenderState) {
+    object.position.copy(state.currentPosition)
+    object.rotation.set(0, state.currentRotationAngle, state.currentAxialTilt)
+  }
+
+  private getBodyQuaternion(state: BodyRenderState): THREE.Quaternion {
+    return new THREE.Quaternion().setFromEuler(new THREE.Euler(0, state.currentRotationAngle, state.currentAxialTilt))
+  }
+
+  private lerpAngle(current: number, target: number, alpha: number): number {
+    let delta = (target - current) % (Math.PI * 2)
+    if (delta > Math.PI) delta -= Math.PI * 2
+    if (delta < -Math.PI) delta += Math.PI * 2
+    return current + delta * alpha
+  }
+
+  private handleKeyDown(event: KeyboardEvent) {
+    if (event.code !== 'KeyV' || event.repeat) return
+    this.debugWireframe = !this.debugWireframe
+    for (const renderer of this.planetRenderers.values()) {
+      renderer.setDebugWireframe(this.debugWireframe)
     }
   }
 
   dispose() {
+    window.removeEventListener('keydown', this.onKeyDown)
     for (const mesh of this.meshes.values()) {
       this.scene.remove(mesh)
       if (Array.isArray(mesh.material)) {
@@ -180,11 +312,14 @@ export class CelestialSystem {
     if (this.sunRenderer) {
       this.sunRenderer.dispose()
     }
+    this.walkerController.dispose()
     if (this.sunGroup) {
       this.scene.remove(this.sunGroup)
     }
     this.meshes.clear()
     this.planetRenderers.clear()
+    this.bodyStates.clear()
+    this.walkerTerrainById.clear()
     this.geometry.dispose()
   }
 }

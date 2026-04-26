@@ -13,11 +13,11 @@ interface PlanetConfig {
 }
 
 export const SOLAR_SYSTEM: PlanetConfig[] = [
-  { name: 'Mercurio', orbitRadius: 2400 * 3,  bodySize: 220, color: '#aaaaaa', startAngle: 0,   orbitSpeed: 0,  rotationSpeed: 0.005, axialTilt: 0.03,  orbitalInclination: 0.12 },
-  { name: 'Venus',    orbitRadius: 4200 * 3,  bodySize: 430, color: '#e8a040', startAngle: 1.2, orbitSpeed: 0, rotationSpeed: 0.008, axialTilt: 3.09,  orbitalInclination: 0.06 },
-  { name: 'Terra',    orbitRadius: 6500 * 3,  bodySize: WORLD_SCALE.mediumPlayablePlanetRadius, color: '#4488ff', startAngle: 2.8, orbitSpeed: 0, rotationSpeed: 0.02,  axialTilt: 0.41,  orbitalInclination: 0.0 },
-  { name: 'Marte',    orbitRadius: 9200 * 3,  bodySize: WORLD_SCALE.smallPlayablePlanetRadius, color: '#cc4422', startAngle: 4.1, orbitSpeed: 0, rotationSpeed: 0.019, axialTilt: 0.44,  orbitalInclination: 0.03 },
-  { name: 'Jupiter',  orbitRadius: 14500 * 3, bodySize: WORLD_SCALE.largePlayablePlanetRadius, color: '#d4a060', startAngle: 5.5, orbitSpeed: 0, rotationSpeed: 0.04,  axialTilt: 0.05,  orbitalInclination: 0.02 },
+  { name: 'Mercurio', orbitRadius: 2400 * 3,  bodySize: 220, color: '#aaaaaa', startAngle: 0,   orbitSpeed: 0.001,  rotationSpeed: 0.005, axialTilt: 0.03,  orbitalInclination: 0.12 },
+  { name: 'Venus',    orbitRadius: 4200 * 3,  bodySize: 430, color: '#e8a040', startAngle: 1.2, orbitSpeed: 0.001, rotationSpeed: 0.008, axialTilt: 3.09,  orbitalInclination: 0.06 },
+  { name: 'Terra',    orbitRadius: 6500 * 3,  bodySize: WORLD_SCALE.mediumPlayablePlanetRadius, color: '#4488ff', startAngle: 2.8, orbitSpeed: 0.001, rotationSpeed: 0.02,  axialTilt: 0.41,  orbitalInclination: 0.0 },
+  { name: 'Marte',    orbitRadius: 9200 * 3,  bodySize: WORLD_SCALE.smallPlayablePlanetRadius, color: '#cc4422', startAngle: 4.1, orbitSpeed: 0.001, rotationSpeed: 0.019, axialTilt: 0.44,  orbitalInclination: 0.03 },
+  { name: 'Jupiter',  orbitRadius: 14500 * 3, bodySize: WORLD_SCALE.largePlayablePlanetRadius, color: '#d4a060', startAngle: 5.5, orbitSpeed: 0.001, rotationSpeed: 0.04,  axialTilt: 0.05,  orbitalInclination: 0.02 },
 ]
 
 export const SUN_CONFIG = {
