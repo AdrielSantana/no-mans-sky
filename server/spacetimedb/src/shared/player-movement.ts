@@ -31,6 +31,7 @@ export interface WalkerState {
 
 export interface WalkerParams {
   terrain: PlanetTerrainParams
+  sampleSurfaceRadius?: (dir: Vec3Like) => number | null
   eyeHeight: number
   walkSpeed: number
   sprintSpeed: number
@@ -160,7 +161,7 @@ export function simulatePlanetWalker(
 
 function sampleStableGroundRadius(up: Vec3Like, state: WalkerState, params: WalkerParams): number {
   if (params.footProbeRadius <= 0) {
-    return samplePlanetRadius(up, params.terrain)
+    return params.sampleSurfaceRadius?.(up) ?? samplePlanetRadius(up, params.terrain)
   }
 
   const basis = getWalkerBasis({ ...state, localPosition: up })
@@ -175,7 +176,7 @@ function sampleStableGroundRadius(up: Vec3Like, state: WalkerState, params: Walk
 
   let radius = -Infinity
   for (const dir of dirs) {
-    radius = Math.max(radius, samplePlanetRadius(dir, params.terrain))
+    radius = Math.max(radius, params.sampleSurfaceRadius?.(dir) ?? samplePlanetRadius(dir, params.terrain))
   }
   return radius
 }

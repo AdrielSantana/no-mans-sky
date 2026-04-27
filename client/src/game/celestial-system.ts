@@ -262,11 +262,13 @@ export class CelestialSystem {
     for (const [id, terrain] of this.walkerTerrainById) {
       const state = this.bodyStates.get(id)
       if (!state) continue
+      const renderer = this.planetRenderers.get(id)
       targets.push({
         id,
         worldPosition: state.currentPosition.clone(),
         worldQuaternion: this.getBodyQuaternion(state),
         terrain,
+        sampleSurfaceRadius: renderer ? dir => renderer.sampleSurfaceRadius(dir) : undefined,
       })
     }
     this.walkerController.setTargets(targets)

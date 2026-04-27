@@ -21,6 +21,8 @@ import {
   PlanetGenerator,
 } from './planet-generator'
 import { WORLD_SCALE } from '../world-scale'
+import { samplePlanetHeight, samplePlanetRadius, type PlanetTerrainParams } from '../../../../server/spacetimedb/src/shared/planet-terrain'
+import type { Vec3Like } from '../../../../server/spacetimedb/src/shared/vector'
 
 const MAX_CHUNKS_PER_FRAME = 8
 const DETAILED_MATERIAL_MIN_LOD = 6
@@ -42,7 +44,7 @@ export class PlanetRenderer {
   private oceanMesh: THREE.Mesh | null = null
   private atmosphereMesh: THREE.Mesh | null = null
   private sunPosition = new THREE.Vector3(0, 0, 0)
-  private terrainScale: number
+  private terrainParams: PlanetTerrainParams
   private lodDistances: number[]
   private time = 0
 
@@ -65,7 +67,6 @@ export class PlanetRenderer {
     },
   ) {
     this.planetRadius = planetRadius
-    this.terrainScale = params.terrainScale
     this.group = new THREE.Group()
     scene.add(this.group)
 
@@ -74,6 +75,14 @@ export class PlanetRenderer {
 
     this.noiseProfile = {
       ...PlanetGenerator.fromParams(params),
+    }
+    this.terrainParams = {
+      seed: this.noiseProfile.seed,
+      planetType: params.planetType,
+      radius: planetRadius,
+      terrainScale: params.terrainScale,
+      frequency: this.noiseProfile.frequency,
+      octaves: this.noiseProfile.octaves,
     }
 
     this.material = createPlanetMaterial({
@@ -105,7 +114,7 @@ export class PlanetRenderer {
     })
 
     // Fallback low-poly sphere for distant view
-    const fallbackGeo = new THREE.SphereGeometry(planetRadius, 32, 32)
+    const fallbackGeo = this.createFallbackGeometry(planetRadius)
     this.fallbackMaterial = createPlanetFallbackMaterial({
       seed: Number(params.seed),
       planetType: params.planetType,
@@ -177,6 +186,11 @@ export class PlanetRenderer {
     this.material.wireframe = enabled
     this.farMaterial.wireframe = enabled
     this.fallbackMaterial.wireframe = enabled
+  }
+
+  sampleSurfaceRadius(dir: Vec3Like): number {
+    const chunk = this.findVisibleChunkForDirection(dir)
+    return chunk?.sampleVisualRadius(dir) ?? samplePlanetRadius(dir, this.terrainParams)
   }
 
   getDebugStats(camera: THREE.Camera) {
@@ -396,6 +410,43 @@ export class PlanetRenderer {
     return camPos.distanceTo(chunkCenter) < DETAILED_MATERIAL_DISTANCE
   }
 
+  private findVisibleChunkForDirection(dir: Vec3Like): TerrainChunk | null {
+    const faceUv = this.directionToFaceUv(dir)
+    if (!faceUv) return null
+
+    for (let lod = MAX_LOD; lod >= 0; lod--) {
+      const cells = 1 << lod
+      const x = Math.min(cells - 1, Math.max(0, Math.floor(((faceUv.u + 1) * 0.5) * cells)))
+      const y = Math.min(cells - 1, Math.max(0, Math.floor(((faceUv.v + 1) * 0.5) * cells)))
+      const chunk = this.chunks.get(nodeKey(faceUv.face, lod, x, y))
+      if (chunk?.mesh.visible) return chunk
+    }
+
+    return null
+  }
+
+  private directionToFaceUv(dir: Vec3Like): { face: CubeFace; u: number; v: number } | null {
+    const ax = Math.abs(dir.x)
+    const ay = Math.abs(dir.y)
+    const az = Math.abs(dir.z)
+    const m = Math.max(ax, ay, az)
+    if (m <= 0) return null
+
+    if (m === ax) {
+      return dir.x >= 0
+        ? { face: CubeFace.PX, u: dir.z / ax, v: dir.y / ax }
+        : { face: CubeFace.NX, u: -dir.z / ax, v: dir.y / ax }
+    }
+    if (m === ay) {
+      return dir.y >= 0
+        ? { face: CubeFace.PY, u: dir.x / ay, v: dir.z / ay }
+        : { face: CubeFace.NY, u: dir.x / ay, v: -dir.z / ay }
+    }
+    return dir.z >= 0
+      ? { face: CubeFace.PZ, u: dir.x / az, v: dir.y / az }
+      : { face: CubeFace.NZ, u: -dir.x / az, v: dir.y / az }
+  }
+
   private isNodeCovered(node: QuadtreeNode): boolean {
     const key = nodeKey(node.face, node.lod, node.x, node.y)
     if (this.chunks.has(key)) return true
@@ -483,12 +534,24 @@ export class PlanetRenderer {
 
     return new TerrainChunk(
       node,
-      this.planetRadius,
-      this.terrainScale,
-      this.noiseProfile.seed,
-      this.noiseProfile.octaves,
+      this.terrainParams,
       this.farMaterial,
     )
+  }
+
+  private createFallbackGeometry(planetRadius: number): THREE.SphereGeometry {
+    const geometry = new THREE.SphereGeometry(planetRadius, 32, 32)
+    const positions = geometry.getAttribute('position')
+    const heights = new Float32Array(positions.count)
+    const dir = new THREE.Vector3()
+
+    for (let i = 0; i < positions.count; i++) {
+      dir.fromBufferAttribute(positions, i).normalize()
+      heights[i] = samplePlanetHeight(dir, this.terrainParams)
+    }
+
+    geometry.setAttribute('terrainHeight', new THREE.BufferAttribute(heights, 1))
+    return geometry
   }
 
   private removeAllChunks() {

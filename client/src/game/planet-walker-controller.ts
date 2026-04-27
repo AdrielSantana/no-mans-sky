@@ -15,6 +15,7 @@ export interface PlanetWalkerTarget {
   worldPosition: THREE.Vector3
   worldQuaternion: THREE.Quaternion
   terrain: PlanetTerrainParams
+  sampleSurfaceRadius?: (dir: Vec3Like) => number
 }
 
 function toVec3Like(v: THREE.Vector3): Vec3Like {
@@ -66,7 +67,10 @@ export class PlanetWalkerController {
     const result = simulatePlanetWalker(
       this.state,
       input,
-      defaultWalkerParams(this.activeTarget.terrain),
+      {
+        ...defaultWalkerParams(this.activeTarget.terrain),
+        sampleSurfaceRadius: this.activeTarget.sampleSurfaceRadius,
+      },
       Math.min(dt, 1 / 20),
     )
     this.state = result.state
@@ -142,7 +146,7 @@ export class PlanetWalkerController {
     const local = cameraPos.clone().sub(nearest.worldPosition).applyQuaternion(inverseTargetRotation)
     const dir = normalize(toVec3Like(local.lengthSq() > 1e-6 ? local : new THREE.Vector3(0, 1, 0)))
     const params = defaultWalkerParams(nearest.terrain)
-    const radius = samplePlanetRadius(dir, nearest.terrain) + params.eyeHeight
+    const radius = (nearest.sampleSurfaceRadius?.(dir) ?? samplePlanetRadius(dir, nearest.terrain)) + params.eyeHeight
     this.activeTarget = nearest
     const yaw = this.computeInitialYaw(dir)
     this.state = createWalkerState(scale(dir, radius), yaw)
