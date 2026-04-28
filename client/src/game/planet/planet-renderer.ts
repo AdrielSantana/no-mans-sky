@@ -33,6 +33,7 @@ export class PlanetRenderer {
   private planetRadius: number
   private noiseProfile: { octaves: number; lacunarity: number; gain: number; frequency: number; seed: number }
   private maxLod: number
+  private gridSize: number
   private material: THREE.ShaderMaterial
   private farMaterial: THREE.ShaderMaterial
   private fallbackMaterial: THREE.ShaderMaterial
@@ -66,9 +67,11 @@ export class PlanetRenderer {
       atmosphereDensity: number
       noiseProfile?: { octaves: number; lacunarity: number; gain: number; frequency: number }
       lodMultipliers?: number[]
+      gridSize?: number
     },
   ) {
     this.planetRadius = planetRadius
+    this.gridSize = params.gridSize ?? 33
     this.group = new THREE.Group()
     scene.add(this.group)
 
@@ -542,6 +545,7 @@ export class PlanetRenderer {
       node,
       this.terrainParams,
       this.farMaterial,
+      this.gridSize,
     )
   }
 

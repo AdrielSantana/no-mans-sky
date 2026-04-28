@@ -15,6 +15,8 @@ export interface EditorParams {
   frequency: number
   // LOD multipliers (LOD 1-N, index 0 = LOD 1)
   lodMultipliers: number[]
+  // Chunk resolution
+  gridSize: number
 }
 
 /** Default LOD multipliers matching quadtree.ts LOD_DISTANCE_MULTIPLIERS[1-7] */
@@ -35,6 +37,7 @@ export const DEFAULT_PARAMS: EditorParams = {
   gain: 0.5,
   frequency: 2.0,
   lodMultipliers: [...DEFAULT_LOD_MULTIPLIERS],
+  gridSize: 33,
 }
 
 export const RANGES = {
@@ -47,6 +50,7 @@ export const RANGES = {
   gain: { min: 0.1, max: 0.9, step: 0.01 },
   frequency: { min: 0.5, max: 10.0, step: 0.1 },
   lodMultiplier: { min: 0.01, max: 10.0, step: 0.01 },
+  gridSize: { min: 9, max: 129, step: 2 },
 } as const
 
 /** Per-type presets for noise profile */

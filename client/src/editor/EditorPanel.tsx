@@ -141,7 +141,20 @@ export function EditorPanel({ params, onChange }: Props) {
       </div>
 
       <div className="editor-section">
-        <div className="editor-section-title">LOD Distances ({params.lodMultipliers.length} levels)</div>
+        <div className="editor-section-title">LOD ({params.lodMultipliers.length} levels)</div>
+        <div className="editor-row">
+          <span className="editor-label">Grid Size</span>
+          <input
+            className="editor-slider"
+            type="range"
+            min={RANGES.gridSize.min}
+            max={RANGES.gridSize.max}
+            step={RANGES.gridSize.step}
+            value={params.gridSize}
+            onChange={e => set('gridSize', Number(e.target.value))}
+          />
+          <span className="editor-value">{params.gridSize}</span>
+        </div>
         {params.lodMultipliers.map((val, i) => (
           <div className="editor-row" key={i}>
             <span className="editor-label">LOD {i + 1}</span>
