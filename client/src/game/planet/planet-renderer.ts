@@ -2,7 +2,6 @@ import * as THREE from 'three'
 import {
   CubeFace,
   NUM_FACES,
-  MAX_LOD,
   LOD_DISTANCE_MULTIPLIERS,
   type QuadtreeNode,
   createRoot,
@@ -33,6 +32,7 @@ export class PlanetRenderer {
   private group: THREE.Group
   private planetRadius: number
   private noiseProfile: { octaves: number; lacunarity: number; gain: number; frequency: number; seed: number }
+  private maxLod: number
   private material: THREE.ShaderMaterial
   private farMaterial: THREE.ShaderMaterial
   private fallbackMaterial: THREE.ShaderMaterial
@@ -77,6 +77,7 @@ export class PlanetRenderer {
       ? [Infinity, ...params.lodMultipliers]
       : LOD_DISTANCE_MULTIPLIERS
     this.lodDistances = multipliers.map(m => m === Infinity ? Infinity : m * planetRadius)
+    this.maxLod = multipliers.length - 1
 
     this.noiseProfile = params.noiseProfile
       ? { seed: Number(params.seed), ...params.noiseProfile }
@@ -340,7 +341,7 @@ export class PlanetRenderer {
     const splitDistance = this.lodDistances[node.lod + 1]
     const keepChildrenDistance = splitDistance * LOD_COLLAPSE_HYSTERESIS
     const shouldSub =
-      node.lod < MAX_LOD &&
+      node.lod < this.maxLod &&
       dist < (node.children ? keepChildrenDistance : splitDistance) &&
       this.isChunkRelevantForDetail(node, localCamPos)
 
@@ -419,7 +420,7 @@ export class PlanetRenderer {
     const faceUv = this.directionToFaceUv(dir)
     if (!faceUv) return null
 
-    for (let lod = MAX_LOD; lod >= 0; lod--) {
+    for (let lod = this.maxLod; lod >= 0; lod--) {
       const cells = 1 << lod
       const x = Math.min(cells - 1, Math.max(0, Math.floor(((faceUv.u + 1) * 0.5) * cells)))
       const y = Math.min(cells - 1, Math.max(0, Math.floor(((faceUv.v + 1) * 0.5) * cells)))

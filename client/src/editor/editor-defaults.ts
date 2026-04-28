@@ -13,7 +13,7 @@ export interface EditorParams {
   lacunarity: number
   gain: number
   frequency: number
-  // LOD multipliers (LOD 1-7, index 0 = LOD 1)
+  // LOD multipliers (LOD 1-N, index 0 = LOD 1)
   lodMultipliers: number[]
 }
 
