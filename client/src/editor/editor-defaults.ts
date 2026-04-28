@@ -26,8 +26,9 @@ export interface EditorParams {
  * Calibrated so default config (R=650, G=33, 7 levels) is the baseline.
  */
 export function computeAutoLod(radius: number, gridSize: number): number[] {
-  // Vertex spacing at max LOD with default config: (2 * 650 / 2^7) / 32 ≈ 0.317
-  const targetSpacing = (2 * 650 / 128) / 32
+  // Target vertex spacing at max LOD. Calibrated for R=650, G=33 → 5 levels.
+  // Larger value = fewer levels = bigger triangles.
+  const targetSpacing = (2 * 650 / 32) / 32 // ≈ 1.27
 
   // N = ceil(log2(2R / ((G-1) * targetSpacing)))
   const numLevels = Math.max(1, Math.min(15, Math.ceil(
@@ -43,8 +44,8 @@ export function computeAutoLod(radius: number, gridSize: number): number[] {
   return multipliers
 }
 
-/** Default LOD multipliers matching quadtree.ts LOD_DISTANCE_MULTIPLIERS[1-7] */
-export const DEFAULT_LOD_MULTIPLIERS = [5.5, 3.0, 1.55, 0.78, 0.38, 0.18, 0.085]
+/** Default LOD multipliers for manual mode (5 levels) */
+export const DEFAULT_LOD_MULTIPLIERS = [5.5, 2.8205, 1.4464, 0.7417, 0.3804]
 
 export const DEFAULT_PARAMS: EditorParams = {
   seed: 42,
