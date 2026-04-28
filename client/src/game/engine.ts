@@ -84,6 +84,11 @@ export class GameEngine {
     this.controls.enabled = enabled
   }
 
+  setOrbitBounds(min: number, max: number) {
+    this.controls.minDistance = min
+    this.controls.maxDistance = max
+  }
+
   setPixelRatioLimit(limit: number) {
     this.pixelRatioLimit = Math.min(window.devicePixelRatio, limit)
     this.renderer.setPixelRatio(this.pixelRatioLimit)

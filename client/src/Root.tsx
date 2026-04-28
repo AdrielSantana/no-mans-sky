@@ -9,7 +9,9 @@ const SPACETIME_URI =
 const SPACETIME_DATABASE =
   import.meta.env.VITE_SPACETIMEDB_DATABASE ?? 'no-mans-sky'
 
-function Root() {
+const isEditor = new URLSearchParams(window.location.search).has('editor')
+
+function GameRoot() {
   const connectionBuilder = useMemo(
     () =>
       DbConnection.builder()
@@ -28,6 +30,10 @@ function Root() {
       <App />
     </SpacetimeDBProvider>
   )
+}
+
+function Root() {
+  return isEditor ? <App /> : <GameRoot />
 }
 
 export default Root
