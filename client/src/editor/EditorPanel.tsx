@@ -141,20 +141,26 @@ export function EditorPanel({ params, onChange }: Props) {
       </div>
 
       <div className="editor-section">
-        <div className="editor-section-title">LOD</div>
-        <div className="editor-row">
-          <span className="editor-label">Distance Scale</span>
-          <input
-            className="editor-slider"
-            type="range"
-            min={RANGES.lodScale.min}
-            max={RANGES.lodScale.max}
-            step={RANGES.lodScale.step}
-            value={params.lodScale}
-            onChange={e => set('lodScale', Number(e.target.value))}
-          />
-          <span className="editor-value">{params.lodScale.toFixed(1)}</span>
-        </div>
+        <div className="editor-section-title">LOD Distances</div>
+        {params.lodMultipliers.map((val, i) => (
+          <div className="editor-row" key={i}>
+            <span className="editor-label">LOD {i + 1}</span>
+            <input
+              className="editor-slider"
+              type="range"
+              min={RANGES.lodMultiplier.min}
+              max={RANGES.lodMultiplier.max}
+              step={RANGES.lodMultiplier.step}
+              value={val}
+              onChange={e => {
+                const next = [...params.lodMultipliers]
+                next[i] = Number(e.target.value)
+                set('lodMultipliers', next)
+              }}
+            />
+            <span className="editor-value">{val.toFixed(2)}</span>
+          </div>
+        ))}
       </div>
 
       <div className="editor-section">

@@ -25,7 +25,7 @@ function createPlanet(scene: THREE.Scene, params: EditorParams): PlanetRenderer 
       gain: params.gain,
       frequency: params.frequency,
     },
-    lodScale: params.lodScale,
+    lodMultipliers: params.lodMultipliers,
   })
 }
 

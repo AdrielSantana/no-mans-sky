@@ -13,9 +13,12 @@ export interface EditorParams {
   lacunarity: number
   gain: number
   frequency: number
-  // LOD
-  lodScale: number
+  // LOD multipliers (LOD 1-7, index 0 = LOD 1)
+  lodMultipliers: number[]
 }
+
+/** Default LOD multipliers matching quadtree.ts LOD_DISTANCE_MULTIPLIERS[1-7] */
+export const DEFAULT_LOD_MULTIPLIERS = [5.5, 3.0, 1.55, 0.78, 0.38, 0.18, 0.085]
 
 export const DEFAULT_PARAMS: EditorParams = {
   seed: 42,
@@ -31,7 +34,7 @@ export const DEFAULT_PARAMS: EditorParams = {
   lacunarity: 2.0,
   gain: 0.5,
   frequency: 2.0,
-  lodScale: 1.0,
+  lodMultipliers: [...DEFAULT_LOD_MULTIPLIERS],
 }
 
 export const RANGES = {
@@ -43,7 +46,7 @@ export const RANGES = {
   lacunarity: { min: 1.0, max: 4.0, step: 0.1 },
   gain: { min: 0.1, max: 0.9, step: 0.01 },
   frequency: { min: 0.5, max: 10.0, step: 0.1 },
-  lodScale: { min: 0.2, max: 5.0, step: 0.1 },
+  lodMultiplier: { min: 0.01, max: 10.0, step: 0.01 },
 } as const
 
 /** Per-type presets for noise profile */
