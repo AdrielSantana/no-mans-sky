@@ -2,7 +2,6 @@ import { useEffect, useRef } from 'react'
 import * as THREE from 'three'
 import { GameEngine } from '../game/engine'
 import { PlanetRenderer } from '../game/planet/planet-renderer'
-import { PlanetGenerator } from '../game/planet/planet-generator'
 import { PlanetWalkerController, type PlanetWalkerTarget } from '../game/planet-walker-controller'
 import type { EditorParams } from './editor-defaults'
 
@@ -20,15 +19,17 @@ function createPlanet(scene: THREE.Scene, params: EditorParams): PlanetRenderer 
     colorB: params.colorB,
     atmosphereColor: params.atmosphereColor,
     atmosphereDensity: params.atmosphereDensity,
+    noiseProfile: {
+      octaves: params.octaves,
+      lacunarity: params.lacunarity,
+      gain: params.gain,
+      frequency: params.frequency,
+    },
+    lodScale: params.lodScale,
   })
 }
 
 function buildWalkerTarget(params: EditorParams, renderer: PlanetRenderer): PlanetWalkerTarget {
-  const profile = PlanetGenerator.fromParams({
-    seed: BigInt(params.seed),
-    planetType: params.planetType,
-    terrainScale: params.terrainScale,
-  })
   return {
     id: 'editor-planet',
     worldPosition: new THREE.Vector3(0, 0, 0),
@@ -38,8 +39,8 @@ function buildWalkerTarget(params: EditorParams, renderer: PlanetRenderer): Plan
       planetType: params.planetType,
       radius: params.planetRadius,
       terrainScale: params.terrainScale,
-      frequency: profile.frequency,
-      octaves: profile.octaves,
+      frequency: params.frequency,
+      octaves: params.octaves,
     },
     sampleSurfaceRadius: dir => renderer.sampleSurfaceRadius(dir),
   }

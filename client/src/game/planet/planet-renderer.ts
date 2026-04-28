@@ -64,6 +64,8 @@ export class PlanetRenderer {
       colorB: string
       atmosphereColor: string
       atmosphereDensity: number
+      noiseProfile?: { octaves: number; lacunarity: number; gain: number; frequency: number }
+      lodScale?: number
     },
   ) {
     this.planetRadius = planetRadius
@@ -71,11 +73,12 @@ export class PlanetRenderer {
     scene.add(this.group)
 
     // Precompute LOD distances scaled to planet radius
-    this.lodDistances = LOD_DISTANCE_MULTIPLIERS.map(m => m === Infinity ? Infinity : m * planetRadius)
+    const lodScale = params.lodScale ?? 1
+    this.lodDistances = LOD_DISTANCE_MULTIPLIERS.map(m => m === Infinity ? Infinity : m * lodScale * planetRadius)
 
-    this.noiseProfile = {
-      ...PlanetGenerator.fromParams(params),
-    }
+    this.noiseProfile = params.noiseProfile
+      ? { seed: Number(params.seed), ...params.noiseProfile }
+      : { ...PlanetGenerator.fromParams(params) }
     this.terrainParams = {
       seed: this.noiseProfile.seed,
       planetType: params.planetType,

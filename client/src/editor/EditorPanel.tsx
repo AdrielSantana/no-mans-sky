@@ -1,5 +1,5 @@
 import type { EditorParams } from './editor-defaults'
-import { DEFAULT_PARAMS, RANGES } from './editor-defaults'
+import { DEFAULT_PARAMS, RANGES, TYPE_PRESETS } from './editor-defaults'
 import './EditorPanel.css'
 
 interface Props {
@@ -10,6 +10,11 @@ interface Props {
 export function EditorPanel({ params, onChange }: Props) {
   const set = <K extends keyof EditorParams>(key: K, value: EditorParams[K]) => {
     onChange({ ...params, [key]: value })
+  }
+
+  const setPlanetType = (planetType: string) => {
+    const preset = TYPE_PRESETS[planetType]
+    onChange({ ...params, planetType, ...preset })
   }
 
   return (
@@ -23,7 +28,7 @@ export function EditorPanel({ params, onChange }: Props) {
           <select
             className="editor-select"
             value={params.planetType}
-            onChange={e => set('planetType', e.target.value)}
+            onChange={e => setPlanetType(e.target.value)}
           >
             <option value="rocky">Rocky</option>
             <option value="gas">Gas Giant</option>
@@ -76,6 +81,79 @@ export function EditorPanel({ params, onChange }: Props) {
             onChange={e => set('terrainScale', Number(e.target.value))}
           />
           <span className="editor-value">{params.terrainScale.toFixed(2)}</span>
+        </div>
+      </div>
+
+      <div className="editor-section">
+        <div className="editor-section-title">World Gen</div>
+        <div className="editor-row">
+          <span className="editor-label">Octaves</span>
+          <input
+            className="editor-slider"
+            type="range"
+            min={RANGES.octaves.min}
+            max={RANGES.octaves.max}
+            step={RANGES.octaves.step}
+            value={params.octaves}
+            onChange={e => set('octaves', Number(e.target.value))}
+          />
+          <span className="editor-value">{params.octaves}</span>
+        </div>
+        <div className="editor-row">
+          <span className="editor-label">Lacunarity</span>
+          <input
+            className="editor-slider"
+            type="range"
+            min={RANGES.lacunarity.min}
+            max={RANGES.lacunarity.max}
+            step={RANGES.lacunarity.step}
+            value={params.lacunarity}
+            onChange={e => set('lacunarity', Number(e.target.value))}
+          />
+          <span className="editor-value">{params.lacunarity.toFixed(1)}</span>
+        </div>
+        <div className="editor-row">
+          <span className="editor-label">Gain</span>
+          <input
+            className="editor-slider"
+            type="range"
+            min={RANGES.gain.min}
+            max={RANGES.gain.max}
+            step={RANGES.gain.step}
+            value={params.gain}
+            onChange={e => set('gain', Number(e.target.value))}
+          />
+          <span className="editor-value">{params.gain.toFixed(2)}</span>
+        </div>
+        <div className="editor-row">
+          <span className="editor-label">Frequency</span>
+          <input
+            className="editor-slider"
+            type="range"
+            min={RANGES.frequency.min}
+            max={RANGES.frequency.max}
+            step={RANGES.frequency.step}
+            value={params.frequency}
+            onChange={e => set('frequency', Number(e.target.value))}
+          />
+          <span className="editor-value">{params.frequency.toFixed(1)}</span>
+        </div>
+      </div>
+
+      <div className="editor-section">
+        <div className="editor-section-title">LOD</div>
+        <div className="editor-row">
+          <span className="editor-label">Distance Scale</span>
+          <input
+            className="editor-slider"
+            type="range"
+            min={RANGES.lodScale.min}
+            max={RANGES.lodScale.max}
+            step={RANGES.lodScale.step}
+            value={params.lodScale}
+            onChange={e => set('lodScale', Number(e.target.value))}
+          />
+          <span className="editor-value">{params.lodScale.toFixed(1)}</span>
         </div>
       </div>
 
