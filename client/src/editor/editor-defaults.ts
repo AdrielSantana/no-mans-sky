@@ -17,6 +17,30 @@ export interface EditorParams {
   lodMultipliers: number[]
   // Chunk resolution
   gridSize: number
+  // Auto-calculate LOD levels from radius + gridSize
+  autoLod: boolean
+}
+
+/**
+ * Compute LOD levels needed to maintain consistent vertex spacing.
+ * Calibrated so default config (R=650, G=33, 7 levels) is the baseline.
+ */
+export function computeAutoLod(radius: number, gridSize: number): number[] {
+  // Vertex spacing at max LOD with default config: (2 * 650 / 2^7) / 32 ≈ 0.317
+  const targetSpacing = (2 * 650 / 128) / 32
+
+  // N = ceil(log2(2R / ((G-1) * targetSpacing)))
+  const numLevels = Math.max(1, Math.min(15, Math.ceil(
+    Math.log2(2 * radius / ((gridSize - 1) * targetSpacing)),
+  )))
+
+  const multipliers: number[] = []
+  let m = 5.5
+  for (let i = 0; i < numLevels; i++) {
+    multipliers.push(parseFloat(m.toFixed(4)))
+    m /= 1.95
+  }
+  return multipliers
 }
 
 /** Default LOD multipliers matching quadtree.ts LOD_DISTANCE_MULTIPLIERS[1-7] */
@@ -38,6 +62,7 @@ export const DEFAULT_PARAMS: EditorParams = {
   frequency: 2.0,
   lodMultipliers: [...DEFAULT_LOD_MULTIPLIERS],
   gridSize: 33,
+  autoLod: true,
 }
 
 export const RANGES = {

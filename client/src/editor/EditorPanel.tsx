@@ -155,6 +155,17 @@ export function EditorPanel({ params, onChange }: Props) {
           />
           <span className="editor-value">{params.gridSize}</span>
         </div>
+        <div className="editor-row">
+          <label style={{ display: 'flex', alignItems: 'center', gap: 6, cursor: 'pointer' }}>
+            <input
+              type="checkbox"
+              checked={params.autoLod}
+              onChange={e => set('autoLod', e.target.checked)}
+              style={{ accentColor: '#2dd4a7' }}
+            />
+            <span className="editor-label" style={{ width: 'auto' }}>Auto LOD</span>
+          </label>
+        </div>
         {params.lodMultipliers.map((val, i) => (
           <div className="editor-row" key={i}>
             <span className="editor-label">LOD {i + 1}</span>
@@ -165,6 +176,7 @@ export function EditorPanel({ params, onChange }: Props) {
               max={RANGES.lodMultiplier.max}
               step={RANGES.lodMultiplier.step}
               value={val}
+              disabled={params.autoLod}
               onChange={e => {
                 const next = [...params.lodMultipliers]
                 next[i] = Number(e.target.value)
@@ -174,25 +186,27 @@ export function EditorPanel({ params, onChange }: Props) {
             <span className="editor-value">{val.toFixed(2)}</span>
           </div>
         ))}
-        <div className="editor-btn-row">
-          <button
-            className="editor-btn"
-            disabled={params.lodMultipliers.length <= 1}
-            onClick={() => set('lodMultipliers', params.lodMultipliers.slice(0, -1))}
-          >
-            Remove Last
-          </button>
-          <button
-            className="editor-btn"
-            disabled={params.lodMultipliers.length >= 15}
-            onClick={() => {
-              const last = params.lodMultipliers[params.lodMultipliers.length - 1] ?? 1
-              set('lodMultipliers', [...params.lodMultipliers, Math.max(0.01, last * 0.45)])
-            }}
-          >
-            Add Level
-          </button>
-        </div>
+        {!params.autoLod && (
+          <div className="editor-btn-row">
+            <button
+              className="editor-btn"
+              disabled={params.lodMultipliers.length <= 1}
+              onClick={() => set('lodMultipliers', params.lodMultipliers.slice(0, -1))}
+            >
+              Remove Last
+            </button>
+            <button
+              className="editor-btn"
+              disabled={params.lodMultipliers.length >= 15}
+              onClick={() => {
+                const last = params.lodMultipliers[params.lodMultipliers.length - 1] ?? 1
+                set('lodMultipliers', [...params.lodMultipliers, Math.max(0.01, last * 0.45)])
+              }}
+            >
+              Add Level
+            </button>
+          </div>
+        )}
       </div>
 
       <div className="editor-section">
