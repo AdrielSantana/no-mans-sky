@@ -23,7 +23,7 @@ export const DEFAULT_PARAMS: EditorParams = {
 }
 
 export const RANGES = {
-  planetRadius: { min: 100, max: 2000, step: 10 },
+  planetRadius: { min: 100, max: 10000, step: 10 },
   terrainScale: { min: 0.01, max: 1.0, step: 0.01 },
   waterLevel: { min: 0, max: 1, step: 0.01 },
   atmosphereDensity: { min: 0, max: 1, step: 0.01 },
