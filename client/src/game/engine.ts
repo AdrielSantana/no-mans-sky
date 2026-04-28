@@ -82,11 +82,20 @@ export class GameEngine {
 
   setOrbitControlsEnabled(enabled: boolean) {
     this.controls.enabled = enabled
+    if (enabled) this.resetOrbitControls()
   }
 
   setOrbitBounds(min: number, max: number) {
     this.controls.minDistance = min
     this.controls.maxDistance = max
+  }
+
+  resetOrbitControls() {
+    this.camera.up.set(0, 1, 0)
+    this.controls.target.copy(this.camera.position).add(
+      new THREE.Vector3(0, 0, -1).applyQuaternion(this.camera.quaternion),
+    )
+    this.controls.update()
   }
 
   setPixelRatioLimit(limit: number) {
