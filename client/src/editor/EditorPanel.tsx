@@ -366,6 +366,62 @@ export function EditorPanel({ params, onChange }: Props) {
       </div>
 
       <div className="editor-section">
+        <div className="editor-section-title">Textures</div>
+        <div className="editor-row">
+          <span className="editor-label">Scale</span>
+          <input
+            className="editor-slider"
+            type="range"
+            min={RANGES.textureScale.min}
+            max={RANGES.textureScale.max}
+            step={RANGES.textureScale.step}
+            value={params.textureScale}
+            onChange={e => set('textureScale', Number(e.target.value))}
+          />
+          <span className="editor-value">{params.textureScale.toFixed(0)}</span>
+        </div>
+        <div className="editor-row">
+          <span className="editor-label">Strength</span>
+          <input
+            className="editor-slider"
+            type="range"
+            min={RANGES.textureBlend.min}
+            max={RANGES.textureBlend.max}
+            step={RANGES.textureBlend.step}
+            value={params.textureBlend}
+            onChange={e => set('textureBlend', Number(e.target.value))}
+          />
+          <span className="editor-value">{params.textureBlend.toFixed(2)}</span>
+        </div>
+        <div className="editor-row">
+          <span className="editor-label">Near Dist</span>
+          <input
+            className="editor-slider"
+            type="range"
+            min={RANGES.textureNearDistance.min}
+            max={RANGES.textureNearDistance.max}
+            step={RANGES.textureNearDistance.step}
+            value={params.textureNearDistance}
+            onChange={e => set('textureNearDistance', Number(e.target.value))}
+          />
+          <span className="editor-value">{params.textureNearDistance.toFixed(0)}</span>
+        </div>
+        <div className="editor-row">
+          <span className="editor-label">Fade Dist</span>
+          <input
+            className="editor-slider"
+            type="range"
+            min={RANGES.textureFadeDistance.min}
+            max={RANGES.textureFadeDistance.max}
+            step={RANGES.textureFadeDistance.step}
+            value={params.textureFadeDistance}
+            onChange={e => set('textureFadeDistance', Number(e.target.value))}
+          />
+          <span className="editor-value">{params.textureFadeDistance.toFixed(0)}</span>
+        </div>
+      </div>
+
+      <div className="editor-section">
         <div className="editor-section-title">Atmosphere</div>
         <div className="editor-row">
           <span className="editor-label">Color</span>

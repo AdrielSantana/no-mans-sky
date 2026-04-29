@@ -32,6 +32,13 @@ const MAX_TERRAIN_WORKERS = 8
 const DETAILED_MATERIAL_MIN_LOD = 6
 const DETAILED_MATERIAL_DISTANCE = WORLD_SCALE.localDetailNear * 2.2
 const LOD_COLLAPSE_HYSTERESIS = 1.35
+const FAR_TEXTURE_LOD_BANDS = [
+  { maxLod: 2, detailScale: 0.060, farScale: 0.035, farStrength: 0.62 },
+  { maxLod: 4, detailScale: 0.120, farScale: 0.050, farStrength: 0.58 },
+  { maxLod: 6, detailScale: 0.240, farScale: 0.075, farStrength: 0.52 },
+  { maxLod: 8, detailScale: 0.420, farScale: 0.110, farStrength: 0.48 },
+  { maxLod: Infinity, detailScale: 0.650, farScale: 0.160, farStrength: 0.44 },
+]
 
 interface TerrainWorkerSlot {
   worker: Worker
@@ -39,6 +46,38 @@ interface TerrainWorkerSlot {
   key: string | null
   jobId: number | null
   epoch: number
+}
+
+interface PlanetRendererParams {
+  seed: bigint
+  planetType: string
+  terrainScale: number
+  waterLevel: number
+  colorA: string
+  colorB: string
+  textureScale?: number
+  textureBlend?: number
+  textureNearDistance?: number
+  textureFadeDistance?: number
+  atmosphereColor: string
+  atmosphereDensity: number
+  noiseProfile?: {
+    octaves: number
+    lacunarity: number
+    gain: number
+    frequency: number
+    warpStrength?: number
+    continentalScale?: number
+    mountainScale?: number
+    erosionStrength?: number
+    thermalStrength?: number
+    detailStrength?: number
+  }
+  lodMultipliers?: number[]
+  gridSize?: number
+  skirts?: boolean
+  horizonMargin?: number
+  terrainWorkers?: number
 }
 
 export class PlanetRenderer {
@@ -63,6 +102,7 @@ export class PlanetRenderer {
   private horizonMargin: number
   private material: THREE.ShaderMaterial
   private farMaterial: THREE.ShaderMaterial
+  private farLodMaterials: THREE.ShaderMaterial[] = []
   private fallbackMaterial: THREE.ShaderMaterial
   private simpleTerrainMaterial = new THREE.MeshBasicMaterial({ color: 0x8f927f })
   private oceanMaterial: THREE.ShaderMaterial | null = null
@@ -101,33 +141,7 @@ export class PlanetRenderer {
   constructor(
     scene: THREE.Scene,
     planetRadius: number,
-    params: {
-      seed: bigint
-      planetType: string
-      terrainScale: number
-      waterLevel: number
-      colorA: string
-      colorB: string
-      atmosphereColor: string
-      atmosphereDensity: number
-      noiseProfile?: {
-        octaves: number
-        lacunarity: number
-        gain: number
-        frequency: number
-        warpStrength?: number
-        continentalScale?: number
-        mountainScale?: number
-        erosionStrength?: number
-        thermalStrength?: number
-        detailStrength?: number
-      }
-      lodMultipliers?: number[]
-      gridSize?: number
-      skirts?: boolean
-      horizonMargin?: number
-      terrainWorkers?: number
-    },
+    params: PlanetRendererParams,
   ) {
     this.planetRadius = planetRadius
     this.gridSize = params.gridSize ?? 33
@@ -189,6 +203,13 @@ export class PlanetRenderer {
       localDetailFar: WORLD_SCALE.localDetailFar,
       colorA: params.colorA,
       colorB: params.colorB,
+      textureScale: params.textureScale ?? 92,
+      textureBlend: params.textureBlend ?? 0.48,
+      textureNearDistance: params.textureNearDistance ?? 180,
+      textureFadeDistance: params.textureFadeDistance ?? 420,
+      textureDetailScale: 1.0,
+      textureFarScale: 0.14,
+      textureFarStrength: 0.42,
       atmosphereColor: params.atmosphereColor,
       sunPosition: this.sunPosition,
       planetRadius: planetRadius,
@@ -202,6 +223,13 @@ export class PlanetRenderer {
       terrainScale: params.terrainScale,
       colorA: params.colorA,
       colorB: params.colorB,
+      textureScale: params.textureScale ?? 92,
+      textureBlend: params.textureBlend ?? 0.48,
+      textureNearDistance: params.textureNearDistance ?? 180,
+      textureFadeDistance: params.textureFadeDistance ?? 420,
+      textureDetailScale: FAR_TEXTURE_LOD_BANDS[0].detailScale,
+      textureFarScale: FAR_TEXTURE_LOD_BANDS[0].farScale,
+      textureFarStrength: FAR_TEXTURE_LOD_BANDS[0].farStrength,
       sunPosition: this.sunPosition,
       planetRadius: planetRadius,
       octaves: this.noiseProfile.octaves,
@@ -215,6 +243,10 @@ export class PlanetRenderer {
       thermalStrength: this.noiseProfile.thermalStrength,
       detailStrength: this.noiseProfile.detailStrength,
     })
+    this.farLodMaterials = [
+      this.farMaterial,
+      ...FAR_TEXTURE_LOD_BANDS.slice(1).map(band => this.createFarLodMaterial(params, band)),
+    ]
 
     // Fallback low-poly sphere for distant view
     const fallbackGeo = this.createFallbackGeometry(planetRadius)
@@ -224,6 +256,13 @@ export class PlanetRenderer {
       waterLevel: params.waterLevel,
       colorA: params.colorA,
       colorB: params.colorB,
+      textureScale: params.textureScale ?? 92,
+      textureBlend: (params.textureBlend ?? 0.48) * 0.28,
+      textureNearDistance: params.textureNearDistance ?? 180,
+      textureFadeDistance: params.textureFadeDistance ?? 420,
+      textureDetailScale: 0.09,
+      textureFarScale: 0.045,
+      textureFarStrength: 1.0,
       sunPosition: this.sunPosition,
       planetRadius,
       octaves: this.noiseProfile.octaves,
@@ -292,6 +331,39 @@ export class PlanetRenderer {
     this.initTerrainWorkers()
   }
 
+  private createFarLodMaterial(
+    params: PlanetRendererParams,
+    band: (typeof FAR_TEXTURE_LOD_BANDS)[number],
+  ): THREE.ShaderMaterial {
+    return createPlanetFarMaterial({
+      seed: Number(params.seed),
+      planetType: params.planetType,
+      waterLevel: params.waterLevel,
+      terrainScale: params.terrainScale,
+      colorA: params.colorA,
+      colorB: params.colorB,
+      textureScale: params.textureScale ?? 92,
+      textureBlend: params.textureBlend ?? 0.48,
+      textureNearDistance: params.textureNearDistance ?? 180,
+      textureFadeDistance: params.textureFadeDistance ?? 420,
+      textureDetailScale: band.detailScale,
+      textureFarScale: band.farScale,
+      textureFarStrength: band.farStrength,
+      sunPosition: this.sunPosition,
+      planetRadius: this.planetRadius,
+      octaves: this.noiseProfile.octaves,
+      frequency: this.noiseProfile.frequency,
+      lacunarity: this.noiseProfile.lacunarity,
+      gain: this.noiseProfile.gain,
+      warpStrength: this.noiseProfile.warpStrength,
+      continentalScale: this.noiseProfile.continentalScale,
+      mountainScale: this.noiseProfile.mountainScale,
+      erosionStrength: this.noiseProfile.erosionStrength,
+      thermalStrength: this.noiseProfile.thermalStrength,
+      detailStrength: this.noiseProfile.detailStrength,
+    })
+  }
+
   setPosition(pos: THREE.Vector3) {
     this.group.position.copy(pos)
   }
@@ -306,7 +378,9 @@ export class PlanetRenderer {
 
   setDebugWireframe(enabled: boolean) {
     this.material.wireframe = enabled
-    this.farMaterial.wireframe = enabled
+    for (const material of this.farLodMaterials) {
+      material.wireframe = enabled
+    }
     this.fallbackMaterial.wireframe = enabled
     if (this.oceanMaterial) this.oceanMaterial.wireframe = enabled
   }
@@ -462,7 +536,9 @@ export class PlanetRenderer {
 
     // Update sun position uniform
     this.material.uniforms.uSunPosition.value.copy(this.sunPosition)
-    this.farMaterial.uniforms.uSunPosition.value.copy(this.sunPosition)
+    for (const material of this.farLodMaterials) {
+      material.uniforms.uSunPosition.value.copy(this.sunPosition)
+    }
     this.fallbackMaterial.uniforms.uSunPosition.value.copy(this.sunPosition)
     this.oceanMaterial?.uniforms.uSunPosition.value.copy(this.sunPosition)
     this.atmosphereMaterial?.uniforms.uSunPosition.value.copy(this.sunPosition)
@@ -546,7 +622,7 @@ export class PlanetRenderer {
           } else if (this.shouldUseDetailedMaterial(chunk, camPos, planetPos)) {
             chunk.mesh.material = this.debugNearTerrainShader ? this.material : this.simpleTerrainMaterial
           } else {
-            chunk.mesh.material = this.debugFarTerrainShader ? this.farMaterial : this.simpleTerrainMaterial
+            chunk.mesh.material = this.debugFarTerrainShader ? this.getFarLodMaterial(chunk.node.lod) : this.simpleTerrainMaterial
           }
         }
       }
@@ -672,6 +748,11 @@ export class PlanetRenderer {
     this.group.getWorldQuaternion(planetQuat)
     const chunkCenter = getNodeCenter(chunk.node).multiplyScalar(this.planetRadius).applyQuaternion(planetQuat).add(planetPos)
     return camPos.distanceTo(chunkCenter) < DETAILED_MATERIAL_DISTANCE
+  }
+
+  private getFarLodMaterial(lod: number): THREE.ShaderMaterial {
+    const index = FAR_TEXTURE_LOD_BANDS.findIndex(band => lod <= band.maxLod)
+    return this.farLodMaterials[Math.max(0, index)] ?? this.farMaterial
   }
 
   private findVisibleChunkForDirection(dir: Vec3Like): TerrainChunk | null {
@@ -1035,7 +1116,10 @@ export class PlanetRenderer {
     }
     this.workerSlots.length = 0
     this.material.dispose()
-    this.farMaterial.dispose()
+    for (const material of this.farLodMaterials) {
+      material.dispose()
+    }
+    this.farLodMaterials.length = 0
     this.fallbackMaterial.dispose()
     this.simpleTerrainMaterial.dispose()
     this.oceanMaterial?.dispose()

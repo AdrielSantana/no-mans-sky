@@ -101,7 +101,7 @@ function loadTerrainTexture(url: string): THREE.Texture {
   texture.wrapT = THREE.RepeatWrapping
   texture.minFilter = THREE.LinearMipmapLinearFilter
   texture.magFilter = THREE.LinearFilter
-  texture.anisotropy = 4
+  texture.anisotropy = 16
   return texture
 }
 
@@ -112,6 +112,12 @@ const TERRAIN_TEXTURES = {
   snow: loadTerrainTexture(snowTextureUrl),
 }
 
+const TEXTURE_RADIUS_REFERENCE = 650
+
+function getPlanetTextureScale(textureScale: number, planetRadius: number, multiplier = 1): number {
+  return textureScale * (planetRadius / TEXTURE_RADIUS_REFERENCE) * multiplier
+}
+
 const TERRAIN_TEXTURE_GLSL = /* glsl */ `
 uniform sampler2D uGrassTexture;
 uniform sampler2D uRockTexture;
@@ -119,31 +125,85 @@ uniform sampler2D uSandTexture;
 uniform sampler2D uSnowTexture;
 uniform float uTextureScale;
 uniform float uTextureBlend;
+uniform float uTextureNearDistance;
+uniform float uTextureFadeDistance;
+uniform float uTextureDetailScale;
+uniform float uTextureFarScale;
+uniform float uTextureFarStrength;
 
-vec2 terrainTextureUv(vec3 sphereDir) {
-  float u = atan(sphereDir.z, sphereDir.x) * 0.15915494309189535 + 0.5;
-  float v = asin(clamp(sphereDir.y, -1.0, 1.0)) * 0.3183098861837907 + 0.5;
-  return vec2(u, v) * uTextureScale;
+vec2 terrainTextureUv(vec3 sphereDir, float scale) {
+  vec3 n = normalize(sphereDir);
+  vec3 a = abs(n);
+  vec2 uv;
+
+  if (a.x >= a.y && a.x >= a.z) {
+    uv = n.zy / max(a.x, 0.0001);
+    if (n.x < 0.0) uv.x = -uv.x;
+  } else if (a.y >= a.z) {
+    uv = n.xz / max(a.y, 0.0001);
+    if (n.y < 0.0) uv.x = -uv.x;
+  } else {
+    uv = n.xy / max(a.z, 0.0001);
+    if (n.z < 0.0) uv.x = -uv.x;
+  }
+
+  return uv * scale * 0.5;
 }
 
-vec3 applyTerrainTexture(vec3 baseColor, vec3 sphereDir, float planetKind, float heightNorm, float coast, float rockMask, float snowMask, float moisture) {
-  if (planetKind > 0.5 && planetKind < 1.5) return baseColor;
+vec3 sampleTerrainTexture(sampler2D tex, vec3 sphereDir, float materialScale, float offset, float scaleMultiplier) {
+  vec2 uv = terrainTextureUv(sphereDir, uTextureScale * materialScale * scaleMultiplier);
+  vec2 baseOffset = vec2(offset * 0.137, offset * 0.071);
+  return texture2D(tex, uv + baseOffset).rgb;
+}
 
-  vec2 uv = terrainTextureUv(normalize(sphereDir));
-  vec3 grassTex = texture2D(uGrassTexture, uv).rgb;
-  vec3 rockTex = texture2D(uRockTexture, uv * 0.72).rgb;
-  vec3 sandTex = texture2D(uSandTexture, uv * 1.18).rgb;
-  vec3 snowTex = texture2D(uSnowTexture, uv * 0.92).rgb;
+vec3 sampleBiomeTexture(vec3 dir, float coast, float rockMask, float snowMask, float moisture, float scaleMultiplier) {
+  vec3 grassTex = sampleTerrainTexture(uGrassTexture, dir, 1.00, 11.0, scaleMultiplier);
+  vec3 rockTex = sampleTerrainTexture(uRockTexture, dir, 0.72, 23.0, scaleMultiplier);
+  vec3 sandTex = sampleTerrainTexture(uSandTexture, dir, 1.18, 37.0, scaleMultiplier);
+  vec3 snowTex = sampleTerrainTexture(uSnowTexture, dir, 0.92, 53.0, scaleMultiplier);
 
   vec3 lowTex = mix(sandTex, grassTex, smoothstep(0.34, 0.62, moisture));
   vec3 texColor = mix(lowTex, rockTex, clamp(rockMask, 0.0, 1.0));
   texColor = mix(texColor, sandTex, clamp(coast, 0.0, 1.0));
   texColor = mix(texColor, snowTex, clamp(snowMask, 0.0, 1.0));
+  return texColor;
+}
+
+vec3 blendTerrainTexture(vec3 baseColor, vec3 texColor, float amount) {
+  if (amount <= 0.001) return baseColor;
 
   float texLuma = dot(texColor, vec3(0.299, 0.587, 0.114));
-  vec3 tonalDetail = baseColor * (0.78 + texLuma * 0.46);
-  vec3 colorDetail = mix(tonalDetail, texColor, 0.22);
-  return mix(baseColor, colorDetail, uTextureBlend);
+  vec3 tonalDetail = baseColor * (0.72 + texLuma * 0.58);
+  vec3 colorDetail = mix(tonalDetail, texColor, 0.28);
+  return mix(baseColor, colorDetail, amount);
+}
+
+vec3 applyTerrainTexture(vec3 baseColor, vec3 sphereDir, float planetKind, float heightNorm, float coast, float rockMask, float snowMask, float moisture, float cameraDistance) {
+  if (planetKind > 0.5 && planetKind < 1.5 || uTextureBlend <= 0.001) return baseColor;
+
+  vec3 dir = normalize(sphereDir);
+  float detailFade = 1.0 - smoothstep(
+    uTextureNearDistance,
+    uTextureNearDistance + max(uTextureFadeDistance, 0.001),
+    cameraDistance
+  );
+  float farAmount = uTextureBlend * uTextureFarStrength;
+
+  if (detailFade >= 0.999) {
+    vec3 nearTex = sampleBiomeTexture(dir, coast, rockMask, snowMask, moisture, uTextureDetailScale);
+    return blendTerrainTexture(baseColor, nearTex, uTextureBlend);
+  }
+
+  if (detailFade <= 0.001) {
+    vec3 farTex = sampleBiomeTexture(dir, coast, rockMask, snowMask, moisture, uTextureFarScale);
+    return blendTerrainTexture(baseColor, farTex, farAmount);
+  }
+
+  vec3 nearTex = sampleBiomeTexture(dir, coast, rockMask, snowMask, moisture, uTextureDetailScale);
+  vec3 farTex = sampleBiomeTexture(dir, coast, rockMask, snowMask, moisture, uTextureFarScale);
+  vec3 texColor = mix(farTex, nearTex, detailFade);
+  float textureAmount = mix(farAmount, uTextureBlend, detailFade);
+  return blendTerrainTexture(baseColor, texColor, textureAmount);
 }
 `
 
@@ -266,6 +326,13 @@ export function createPlanetMaterial(params: {
   localDetailFar: number
   colorA: string
   colorB: string
+  textureScale: number
+  textureBlend: number
+  textureNearDistance: number
+  textureFadeDistance: number
+  textureDetailScale: number
+  textureFarScale: number
+  textureFarStrength: number
   atmosphereColor: string
   sunPosition: THREE.Vector3
   planetRadius: number
@@ -484,7 +551,7 @@ export function createPlanetMaterial(params: {
     terrainColor = applyOceanFloor(terrainColor, vHeight, slope);
     float rockMask = saturate(slope * 0.75 + smoothstep(0.60, 0.72, heightNorm));
     float snowMask = smoothstep(0.74, 0.84, heightNorm + latitude * 0.18) * smoothstep(0.54, 0.78, latitude);
-    terrainColor = applyTerrainTexture(terrainColor, vSphereDir, uPlanetKind, heightNorm, coast, rockMask, snowMask, moisture);
+    terrainColor = applyTerrainTexture(terrainColor, vSphereDir, uPlanetKind, heightNorm, coast, rockMask, snowMask, moisture, distance(cameraPosition, vWorldPos));
     terrainColor = mix(terrainColor, vec3(0.43, 0.39, 0.32), 0.06);
 
     vec3 finalNormal = detailNormal(normalize(vNormal), latitude, moisture, slope, coast);
@@ -515,8 +582,13 @@ export function createPlanetMaterial(params: {
       uRockTexture: { value: TERRAIN_TEXTURES.rock },
       uSandTexture: { value: TERRAIN_TEXTURES.sand },
       uSnowTexture: { value: TERRAIN_TEXTURES.snow },
-      uTextureScale: { value: Math.max(48, params.planetRadius / 4) },
-      uTextureBlend: { value: 0.34 },
+      uTextureScale: { value: getPlanetTextureScale(params.textureScale, params.planetRadius) },
+      uTextureBlend: { value: params.textureBlend },
+      uTextureNearDistance: { value: params.textureNearDistance },
+      uTextureFadeDistance: { value: params.textureFadeDistance },
+      uTextureDetailScale: { value: params.textureDetailScale },
+      uTextureFarScale: { value: params.textureFarScale },
+      uTextureFarStrength: { value: params.textureFarStrength },
     },
   })
 }
@@ -528,6 +600,13 @@ export function createPlanetFarMaterial(params: {
   terrainScale: number
   colorA: string
   colorB: string
+  textureScale: number
+  textureBlend: number
+  textureNearDistance: number
+  textureFadeDistance: number
+  textureDetailScale: number
+  textureFarScale: number
+  textureFarStrength: number
   sunPosition: THREE.Vector3
   planetRadius: number
   octaves: number
@@ -695,7 +774,7 @@ export function createPlanetFarMaterial(params: {
     terrain = applyOceanFloor(terrain, visualHeight, slope);
     float rockMask = saturate(slope * 0.75 + smoothstep(0.60, 0.72, heightNorm));
     float snowMask = smoothstep(0.74, 0.84, heightNorm + latitude * 0.18) * smoothstep(0.54, 0.78, latitude);
-    terrain = applyTerrainTexture(terrain, vSphereDir, uPlanetKind, heightNorm, coast, rockMask, snowMask, moisture);
+    terrain = applyTerrainTexture(terrain, vSphereDir, uPlanetKind, heightNorm, coast, rockMask, snowMask, moisture, distance(cameraPosition, vWorldPos));
     terrain = mix(terrain, vec3(0.43, 0.39, 0.32), 0.06);
 
     vec3 finalColor = applyPlanetLighting(terrain, shadingNormal, vWorldPos, heightNorm, slope);
@@ -731,8 +810,13 @@ export function createPlanetFarMaterial(params: {
       uRockTexture: { value: TERRAIN_TEXTURES.rock },
       uSandTexture: { value: TERRAIN_TEXTURES.sand },
       uSnowTexture: { value: TERRAIN_TEXTURES.snow },
-      uTextureScale: { value: Math.max(48, params.planetRadius / 4) },
-      uTextureBlend: { value: 0.30 },
+      uTextureScale: { value: getPlanetTextureScale(params.textureScale, params.planetRadius) },
+      uTextureBlend: { value: params.textureBlend * 0.82 },
+      uTextureNearDistance: { value: params.textureNearDistance },
+      uTextureFadeDistance: { value: params.textureFadeDistance },
+      uTextureDetailScale: { value: params.textureDetailScale },
+      uTextureFarScale: { value: params.textureFarScale },
+      uTextureFarStrength: { value: params.textureFarStrength },
     },
   })
 }
@@ -887,6 +971,13 @@ export function createPlanetFallbackMaterial(params: {
   waterLevel: number
   colorA: string
   colorB: string
+  textureScale: number
+  textureBlend: number
+  textureNearDistance: number
+  textureFadeDistance: number
+  textureDetailScale: number
+  textureFarScale: number
+  textureFarStrength: number
   sunPosition: THREE.Vector3
   planetRadius: number
   octaves: number
@@ -1025,7 +1116,7 @@ export function createPlanetFallbackMaterial(params: {
     terrain = applyOceanFloor(terrain, visualHeight, slope);
     float rockMask = saturate(slope * 0.75 + smoothstep(0.60, 0.72, heightNorm));
     float snowMask = smoothstep(0.74, 0.84, heightNorm + latitude * 0.18) * smoothstep(0.54, 0.78, latitude);
-    terrain = applyTerrainTexture(terrain, vSphereDir, uPlanetKind, heightNorm, coast, rockMask, snowMask, moisture);
+    terrain = applyTerrainTexture(terrain, vSphereDir, uPlanetKind, heightNorm, coast, rockMask, snowMask, moisture, distance(cameraPosition, vWorldPos));
     terrain = mix(terrain, vec3(0.43, 0.39, 0.32), 0.06);
 
     vec3 finalColor = applyPlanetLighting(terrain, shadingNormal, vWorldPos, heightNorm, slope);
@@ -1059,8 +1150,13 @@ export function createPlanetFallbackMaterial(params: {
       uRockTexture: { value: TERRAIN_TEXTURES.rock },
       uSandTexture: { value: TERRAIN_TEXTURES.sand },
       uSnowTexture: { value: TERRAIN_TEXTURES.snow },
-      uTextureScale: { value: Math.max(48, params.planetRadius / 4) },
-      uTextureBlend: { value: 0.24 },
+      uTextureScale: { value: getPlanetTextureScale(params.textureScale, params.planetRadius, 0.55) },
+      uTextureBlend: { value: params.textureBlend },
+      uTextureNearDistance: { value: 0 },
+      uTextureFadeDistance: { value: 1 },
+      uTextureDetailScale: { value: params.textureDetailScale },
+      uTextureFarScale: { value: params.textureFarScale },
+      uTextureFarStrength: { value: params.textureFarStrength },
     },
   })
 }

@@ -6,6 +6,10 @@ export interface EditorParams {
   waterLevel: number
   colorA: string
   colorB: string
+  textureScale: number
+  textureBlend: number
+  textureNearDistance: number
+  textureFadeDistance: number
   atmosphereColor: string
   atmosphereDensity: number
   sunAzimuth: number
@@ -76,6 +80,10 @@ export const DEFAULT_PARAMS: EditorParams = {
   waterLevel: 0.45,
   colorA: '#4a7c59',
   colorB: '#8b7355',
+  textureScale: 92,
+  textureBlend: 0.48,
+  textureNearDistance: 180,
+  textureFadeDistance: 420,
   atmosphereColor: '#6fa8dc',
   atmosphereDensity: 0.35,
   sunAzimuth: 315,
@@ -94,7 +102,7 @@ export const DEFAULT_PARAMS: EditorParams = {
   gridSize: 33,
   autoLod: true,
   skirts: true,
-  horizonMargin: 1.0,
+  horizonMargin: 0.12,
   terrainWorkers: 0,
   debugBloom: true,
   debugOcean: true,
@@ -109,6 +117,10 @@ export const RANGES = {
   planetRadius: { min: 100, max: 100000, step: 10 },
   terrainScale: { min: 0.01, max: 1.0, step: 0.01 },
   waterLevel: { min: 0, max: 1, step: 0.01 },
+  textureScale: { min: 8, max: 240, step: 1 },
+  textureBlend: { min: 0, max: 1, step: 0.01 },
+  textureNearDistance: { min: 10, max: 5000, step: 10 },
+  textureFadeDistance: { min: 10, max: 10000, step: 10 },
   atmosphereDensity: { min: 0, max: 1, step: 0.01 },
   sunAzimuth: { min: 0, max: 360, step: 1 },
   sunElevation: { min: -20, max: 80, step: 1 },
