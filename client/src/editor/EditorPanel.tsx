@@ -474,6 +474,48 @@ export function EditorPanel({ params, onChange }: Props) {
           />
           <span className="editor-value">{params.atmosphereHazeDistance.toFixed(2)}R</span>
         </div>
+        <div className="editor-row">
+          <span className="editor-label">Horizon Glow</span>
+          <input
+            className="editor-slider"
+            type="range"
+            min={RANGES.atmosphereHorizonGlow.min}
+            max={RANGES.atmosphereHorizonGlow.max}
+            step={RANGES.atmosphereHorizonGlow.step}
+            value={params.atmosphereHorizonGlow}
+            onInput={e => set('atmosphereHorizonGlow', Number(e.currentTarget.value))}
+            onChange={e => set('atmosphereHorizonGlow', Number(e.target.value))}
+          />
+          <span className="editor-value">{params.atmosphereHorizonGlow.toFixed(2)}</span>
+        </div>
+        <div className="editor-row">
+          <span className="editor-label">Sun Glare</span>
+          <input
+            className="editor-slider"
+            type="range"
+            min={RANGES.atmosphereSunGlare.min}
+            max={RANGES.atmosphereSunGlare.max}
+            step={RANGES.atmosphereSunGlare.step}
+            value={params.atmosphereSunGlare}
+            onInput={e => set('atmosphereSunGlare', Number(e.currentTarget.value))}
+            onChange={e => set('atmosphereSunGlare', Number(e.target.value))}
+          />
+          <span className="editor-value">{params.atmosphereSunGlare.toFixed(2)}</span>
+        </div>
+        <div className="editor-row">
+          <span className="editor-label">Glare Size</span>
+          <input
+            className="editor-slider"
+            type="range"
+            min={RANGES.atmosphereSunGlareSize.min}
+            max={RANGES.atmosphereSunGlareSize.max}
+            step={RANGES.atmosphereSunGlareSize.step}
+            value={params.atmosphereSunGlareSize}
+            onInput={e => set('atmosphereSunGlareSize', Number(e.currentTarget.value))}
+            onChange={e => set('atmosphereSunGlareSize', Number(e.target.value))}
+          />
+          <span className="editor-value">{params.atmosphereSunGlareSize.toFixed(2)}</span>
+        </div>
       </div>
 
       <div className="editor-section">

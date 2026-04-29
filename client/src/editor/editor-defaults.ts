@@ -14,6 +14,9 @@ export interface EditorParams {
   atmosphereDensity: number
   atmosphereHazeStrength: number
   atmosphereHazeDistance: number
+  atmosphereHorizonGlow: number
+  atmosphereSunGlare: number
+  atmosphereSunGlareSize: number
   sunColor: string
   sunTintStrength: number
   sunAzimuth: number
@@ -96,6 +99,9 @@ export const DEFAULT_PARAMS: EditorParams = {
   atmosphereDensity: 0.35,
   atmosphereHazeStrength: 0.42,
   atmosphereHazeDistance: 1.85,
+  atmosphereHorizonGlow: 0.72,
+  atmosphereSunGlare: 0.62,
+  atmosphereSunGlareSize: 0.72,
   sunColor: '#fff2c8',
   sunTintStrength: 0.85,
   sunAzimuth: 315,
@@ -140,6 +146,9 @@ export const RANGES = {
   atmosphereDensity: { min: 0, max: 1, step: 0.01 },
   atmosphereHazeStrength: { min: 0, max: 1.5, step: 0.01 },
   atmosphereHazeDistance: { min: 0.1, max: 8, step: 0.01 },
+  atmosphereHorizonGlow: { min: 0, max: 2, step: 0.01 },
+  atmosphereSunGlare: { min: 0, max: 2, step: 0.01 },
+  atmosphereSunGlareSize: { min: 0.1, max: 2, step: 0.01 },
   sunTintStrength: { min: 0, max: 2, step: 0.01 },
   sunAzimuth: { min: 0, max: 360, step: 1 },
   sunElevation: { min: -20, max: 80, step: 1 },

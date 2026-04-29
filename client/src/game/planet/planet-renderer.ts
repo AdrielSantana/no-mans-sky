@@ -63,6 +63,9 @@ interface PlanetRendererParams {
   atmosphereDensity: number
   atmosphereHazeStrength?: number
   atmosphereHazeDistance?: number
+  atmosphereHorizonGlow?: number
+  atmosphereSunGlare?: number
+  atmosphereSunGlareSize?: number
   sunColor?: string
   sunTintStrength?: number
   noiseProfile?: {
@@ -123,6 +126,9 @@ export class PlanetRenderer {
   private sunTintStrength = 0.85
   private atmosphereHazeStrength = 0.42
   private atmosphereHazeDistance = 1.85
+  private atmosphereHorizonGlow = 0.72
+  private atmosphereSunGlare = 0.62
+  private atmosphereSunGlareSize = 0.72
   private terrainParams: PlanetTerrainParams
   private lodDistances: number[]
   private requestedTerrainWorkers: number
@@ -163,6 +169,9 @@ export class PlanetRenderer {
     this.sunTintStrength = params.sunTintStrength ?? 0.85
     this.atmosphereHazeStrength = params.atmosphereHazeStrength ?? 0.42
     this.atmosphereHazeDistance = params.atmosphereHazeDistance ?? 1.85
+    this.atmosphereHorizonGlow = params.atmosphereHorizonGlow ?? 0.72
+    this.atmosphereSunGlare = params.atmosphereSunGlare ?? 0.62
+    this.atmosphereSunGlareSize = params.atmosphereSunGlareSize ?? 0.72
     this.updateAtmosphereLightColor()
     this.group = new THREE.Group()
     scene.add(this.group)
@@ -358,6 +367,9 @@ export class PlanetRenderer {
         sunColor: this.sunColor,
         atmosphereLightColor: this.atmosphereLightColor,
         sunTintStrength: this.sunTintStrength,
+        horizonGlow: this.atmosphereHorizonGlow,
+        sunGlare: this.atmosphereSunGlare,
+        sunGlareSize: this.atmosphereSunGlareSize,
         sunPosition: this.sunPosition,
         planetRadius,
         atmosphereRadius,
@@ -457,6 +469,9 @@ export class PlanetRenderer {
       this.setFloatUniform(material, 'uSunTintStrength', this.sunTintStrength)
       this.setFloatUniform(material, 'uAtmosphereHazeStrength', this.atmosphereHazeStrength)
       this.setFloatUniform(material, 'uAtmosphereHazeDistance', this.atmosphereHazeDistance)
+      this.setFloatUniform(material, 'uHorizonGlowStrength', this.atmosphereHorizonGlow)
+      this.setFloatUniform(material, 'uSunGlareStrength', this.atmosphereSunGlare)
+      this.setFloatUniform(material, 'uSunGlareSize', this.atmosphereSunGlareSize)
     }
   }
 
@@ -473,6 +488,13 @@ export class PlanetRenderer {
   setAtmosphereHaze(strength: number, distance: number) {
     this.atmosphereHazeStrength = strength
     this.atmosphereHazeDistance = distance
+    this.updateLightColorUniforms()
+  }
+
+  setAtmosphereOptics(settings: { horizonGlow: number; sunGlare: number; sunGlareSize: number }) {
+    this.atmosphereHorizonGlow = settings.horizonGlow
+    this.atmosphereSunGlare = settings.sunGlare
+    this.atmosphereSunGlareSize = settings.sunGlareSize
     this.updateLightColorUniforms()
   }
 
