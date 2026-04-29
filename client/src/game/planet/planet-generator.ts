@@ -319,6 +319,33 @@ vec3 applyPlanetLighting(vec3 albedo, vec3 normal, vec3 worldPos, float heightNo
 }
 `
 
+const AERIAL_PERSPECTIVE_GLSL = /* glsl */ `
+vec3 applyAerialPerspective(vec3 color, vec3 worldPos, vec3 normal) {
+  float strength = clamp(uAtmosphereHazeStrength, 0.0, 2.0);
+  if (strength <= 0.0001) return color;
+
+  vec3 n = normalize(normal);
+  vec3 viewDir = normalize(cameraPosition - worldPos);
+  vec3 lightDir = normalize(uSunPosition - worldPos);
+
+  float cameraDist = distance(cameraPosition, worldPos);
+  float distanceScale = max(uPlanetRadius * max(uAtmosphereHazeDistance, 0.05), 0.001);
+  float distanceFog = 1.0 - exp(-cameraDist / distanceScale);
+  float grazing = pow(1.0 - max(dot(n, viewDir), 0.0), 2.15);
+  float day = smoothstep(-0.25, 0.58, dot(n, lightDir));
+  float forwardScatter = pow(max(dot(viewDir, lightDir), 0.0), 4.0);
+
+  vec3 atmosphereTint = mix(uAtmosphereColor, uAtmosphereLightColor, 0.62 + forwardScatter * 0.20);
+  vec3 nightHaze = uAtmosphereColor * 0.18 + vec3(0.004, 0.007, 0.016);
+  vec3 hazeColor = mix(nightHaze, atmosphereTint, day);
+  float haze = (distanceFog * 0.54 + grazing * 0.46) * strength * (0.20 + day * 0.80);
+  haze += forwardScatter * distanceFog * strength * 0.10;
+  haze = clamp(haze, 0.0, 0.78);
+
+  return mix(color, hazeColor, haze);
+}
+`
+
 // Terrain chunks are displaced on the CPU so physics, wireframe, and rendering share one surface.
 export function createPlanetMaterial(params: {
   seed: number
@@ -337,6 +364,8 @@ export function createPlanetMaterial(params: {
   textureFarScale: number
   textureFarStrength: number
   atmosphereColor: string
+  atmosphereHazeStrength: number
+  atmosphereHazeDistance: number
   sunPosition: THREE.Vector3
   sunColor: THREE.Color | string
   atmosphereLightColor: THREE.Color | string
@@ -347,6 +376,7 @@ export function createPlanetMaterial(params: {
 }): THREE.ShaderMaterial {
   const colorA = new THREE.Color(params.colorA)
   const colorB = new THREE.Color(params.colorB)
+  const atmosphereColor = new THREE.Color(params.atmosphereColor)
   const sunColor = new THREE.Color(params.sunColor)
   const atmosphereLightColor = new THREE.Color(params.atmosphereLightColor)
   const planetKind = params.planetType === 'gas'
@@ -423,11 +453,15 @@ export function createPlanetMaterial(params: {
   uniform float uSeaHeight;
   uniform vec3 uSunPosition;
   uniform vec3 uSunColor;
+  uniform vec3 uAtmosphereColor;
   uniform vec3 uAtmosphereLightColor;
   uniform float uSunTintStrength;
+  uniform float uAtmosphereHazeStrength;
+  uniform float uAtmosphereHazeDistance;
   uniform float uSeed;
   uniform float uFrequency;
   uniform float uPlanetKind;
+  uniform float uPlanetRadius;
   uniform float uLocalDetailNear;
   uniform float uLocalDetailFar;
 
@@ -440,6 +474,7 @@ export function createPlanetMaterial(params: {
   varying float vNearDetail;
 
   ${PLANET_LIGHTING_GLSL}
+  ${AERIAL_PERSPECTIVE_GLSL}
 
   float saturate(float v) {
     return clamp(v, 0.0, 1.0);
@@ -567,6 +602,7 @@ export function createPlanetMaterial(params: {
 
     vec3 finalNormal = detailNormal(normalize(vNormal), latitude, moisture, slope, coast);
     vec3 finalColor = applyPlanetLighting(terrainColor, finalNormal, vWorldPos, heightNorm, slope);
+    finalColor = applyAerialPerspective(finalColor, vWorldPos, finalNormal);
     #include <logdepthbuf_fragment>
     gl_FragColor = vec4(finalColor, 1.0);
   }
@@ -590,8 +626,11 @@ export function createPlanetMaterial(params: {
       uColorB: { value: colorB },
       uSunPosition: { value: params.sunPosition.clone() },
       uSunColor: { value: sunColor },
+      uAtmosphereColor: { value: atmosphereColor },
       uAtmosphereLightColor: { value: atmosphereLightColor },
       uSunTintStrength: { value: params.sunTintStrength },
+      uAtmosphereHazeStrength: { value: params.atmosphereHazeStrength },
+      uAtmosphereHazeDistance: { value: params.atmosphereHazeDistance },
       uGrassTexture: { value: TERRAIN_TEXTURES.grass },
       uRockTexture: { value: TERRAIN_TEXTURES.rock },
       uSandTexture: { value: TERRAIN_TEXTURES.sand },
@@ -621,6 +660,9 @@ export function createPlanetFarMaterial(params: {
   textureDetailScale: number
   textureFarScale: number
   textureFarStrength: number
+  atmosphereColor: string
+  atmosphereHazeStrength: number
+  atmosphereHazeDistance: number
   sunPosition: THREE.Vector3
   sunColor: THREE.Color | string
   atmosphereLightColor: THREE.Color | string
@@ -639,6 +681,7 @@ export function createPlanetFarMaterial(params: {
 }): THREE.ShaderMaterial {
   const colorA = new THREE.Color(params.colorA)
   const colorB = new THREE.Color(params.colorB)
+  const atmosphereColor = new THREE.Color(params.atmosphereColor)
   const sunColor = new THREE.Color(params.sunColor)
   const atmosphereLightColor = new THREE.Color(params.atmosphereLightColor)
   const planetKind = params.planetType === 'gas'
@@ -709,9 +752,13 @@ export function createPlanetFarMaterial(params: {
   uniform vec3 uColorB;
   uniform vec3 uSunPosition;
   uniform vec3 uSunColor;
+  uniform vec3 uAtmosphereColor;
   uniform vec3 uAtmosphereLightColor;
   uniform float uSunTintStrength;
+  uniform float uAtmosphereHazeStrength;
+  uniform float uAtmosphereHazeDistance;
   uniform float uSeaHeight;
+  uniform float uPlanetRadius;
 
   varying vec3 vWorldPos;
   varying vec3 vNormal;
@@ -721,6 +768,7 @@ export function createPlanetFarMaterial(params: {
   varying float vMacro;
 
   ${PLANET_LIGHTING_GLSL}
+  ${AERIAL_PERSPECTIVE_GLSL}
 
   float saturate(float v) {
     return clamp(v, 0.0, 1.0);
@@ -800,6 +848,7 @@ export function createPlanetFarMaterial(params: {
     terrain = mix(terrain, vec3(0.43, 0.39, 0.32), 0.06);
 
     vec3 finalColor = applyPlanetLighting(terrain, shadingNormal, vWorldPos, heightNorm, slope);
+    finalColor = applyAerialPerspective(finalColor, vWorldPos, shadingNormal);
     #include <logdepthbuf_fragment>
     gl_FragColor = vec4(finalColor, 1.0);
   }
@@ -829,8 +878,11 @@ export function createPlanetFarMaterial(params: {
       uColorB: { value: colorB },
       uSunPosition: { value: params.sunPosition.clone() },
       uSunColor: { value: sunColor },
+      uAtmosphereColor: { value: atmosphereColor },
       uAtmosphereLightColor: { value: atmosphereLightColor },
       uSunTintStrength: { value: params.sunTintStrength },
+      uAtmosphereHazeStrength: { value: params.atmosphereHazeStrength },
+      uAtmosphereHazeDistance: { value: params.atmosphereHazeDistance },
       uGrassTexture: { value: TERRAIN_TEXTURES.grass },
       uRockTexture: { value: TERRAIN_TEXTURES.rock },
       uSandTexture: { value: TERRAIN_TEXTURES.sand },
@@ -863,9 +915,13 @@ export function createOceanMaterial(params: {
   detailStrength: number
   sunPosition: THREE.Vector3
   sunColor: THREE.Color | string
+  atmosphereColor: string
   atmosphereLightColor: THREE.Color | string
   sunTintStrength: number
+  atmosphereHazeStrength: number
+  atmosphereHazeDistance: number
 }): THREE.ShaderMaterial {
+  const atmosphereColor = new THREE.Color(params.atmosphereColor)
   const sunColor = new THREE.Color(params.sunColor)
   const atmosphereLightColor = new THREE.Color(params.atmosphereLightColor)
   const planetKind = params.planetType === 'gas'
@@ -906,8 +962,11 @@ export function createOceanMaterial(params: {
   uniform float uSeaHeight;
   uniform vec3 uSunPosition;
   uniform vec3 uSunColor;
+  uniform vec3 uAtmosphereColor;
   uniform vec3 uAtmosphereLightColor;
   uniform float uSunTintStrength;
+  uniform float uAtmosphereHazeStrength;
+  uniform float uAtmosphereHazeDistance;
   uniform float uTime;
   uniform float uSeed;
 
@@ -915,6 +974,8 @@ export function createOceanMaterial(params: {
   varying vec3 vNormal;
   varying vec3 vSphereDir;
   varying float vTerrainHeight;
+
+  ${AERIAL_PERSPECTIVE_GLSL}
 
   void main() {
     float terrainHeight = vTerrainHeight;
@@ -963,6 +1024,7 @@ export function createOceanMaterial(params: {
     color = mix(color, vec3(0.82, 0.94, 0.95), foam * 0.28);
     reflected *= mix(vec3(1.0), uAtmosphereLightColor, tintStrength * 0.40);
     color += reflected + specular * mix(vec3(1.0, 0.92, 0.78), waterLightColor, tintStrength * 0.90);
+    color = applyAerialPerspective(color, vWorldPos, waterNormal);
 
     float alpha = mix(0.82, 0.94, smoothstep(0.04, 0.62, depth));
     alpha = mix(alpha, 0.98, farWater);
@@ -997,8 +1059,11 @@ export function createOceanMaterial(params: {
       uOceanLift: { value: 0 },
       uSunPosition: { value: params.sunPosition.clone() },
       uSunColor: { value: sunColor },
+      uAtmosphereColor: { value: atmosphereColor },
       uAtmosphereLightColor: { value: atmosphereLightColor },
       uSunTintStrength: { value: params.sunTintStrength },
+      uAtmosphereHazeStrength: { value: params.atmosphereHazeStrength },
+      uAtmosphereHazeDistance: { value: params.atmosphereHazeDistance },
       uTime: { value: 0 },
     },
   })
@@ -1017,6 +1082,9 @@ export function createPlanetFallbackMaterial(params: {
   textureDetailScale: number
   textureFarScale: number
   textureFarStrength: number
+  atmosphereColor: string
+  atmosphereHazeStrength: number
+  atmosphereHazeDistance: number
   sunPosition: THREE.Vector3
   sunColor: THREE.Color | string
   atmosphereLightColor: THREE.Color | string
@@ -1035,6 +1103,7 @@ export function createPlanetFallbackMaterial(params: {
 }): THREE.ShaderMaterial {
   const colorA = new THREE.Color(params.colorA)
   const colorB = new THREE.Color(params.colorB)
+  const atmosphereColor = new THREE.Color(params.atmosphereColor)
   const sunColor = new THREE.Color(params.sunColor)
   const atmosphereLightColor = new THREE.Color(params.atmosphereLightColor)
   const planetKind = params.planetType === 'gas'
@@ -1076,10 +1145,14 @@ export function createPlanetFallbackMaterial(params: {
   uniform vec3 uColorB;
   uniform vec3 uSunPosition;
   uniform vec3 uSunColor;
+  uniform vec3 uAtmosphereColor;
   uniform vec3 uAtmosphereLightColor;
   uniform float uSunTintStrength;
+  uniform float uAtmosphereHazeStrength;
+  uniform float uAtmosphereHazeDistance;
   uniform float uSeaHeight;
   uniform float uPlanetKind;
+  uniform float uPlanetRadius;
 
   varying vec3 vWorldPos;
   varying vec3 vNormal;
@@ -1088,6 +1161,7 @@ export function createPlanetFallbackMaterial(params: {
   varying float vHeight;
 
   ${PLANET_LIGHTING_GLSL}
+  ${AERIAL_PERSPECTIVE_GLSL}
 
   float saturate(float v) {
     return clamp(v, 0.0, 1.0);
@@ -1167,6 +1241,7 @@ export function createPlanetFallbackMaterial(params: {
     terrain = mix(terrain, vec3(0.43, 0.39, 0.32), 0.06);
 
     vec3 finalColor = applyPlanetLighting(terrain, shadingNormal, vWorldPos, heightNorm, slope);
+    finalColor = applyAerialPerspective(finalColor, vWorldPos, shadingNormal);
     #include <logdepthbuf_fragment>
     gl_FragColor = vec4(finalColor, 1.0);
   }
@@ -1188,14 +1263,18 @@ export function createPlanetFallbackMaterial(params: {
       uErosionStrength: { value: params.erosionStrength },
       uThermalStrength: { value: params.thermalStrength },
       uDetailStrength: { value: params.detailStrength },
+      uPlanetRadius: { value: params.planetRadius },
       uSeaHeight: { value: getSeaHeight(params.waterLevel, params.planetType) },
       uPlanetKind: { value: planetKind },
       uColorA: { value: colorA },
       uColorB: { value: colorB },
       uSunPosition: { value: params.sunPosition.clone() },
       uSunColor: { value: sunColor },
+      uAtmosphereColor: { value: atmosphereColor },
       uAtmosphereLightColor: { value: atmosphereLightColor },
       uSunTintStrength: { value: params.sunTintStrength },
+      uAtmosphereHazeStrength: { value: params.atmosphereHazeStrength },
+      uAtmosphereHazeDistance: { value: params.atmosphereHazeDistance },
       uGrassTexture: { value: TERRAIN_TEXTURES.grass },
       uRockTexture: { value: TERRAIN_TEXTURES.rock },
       uSandTexture: { value: TERRAIN_TEXTURES.sand },

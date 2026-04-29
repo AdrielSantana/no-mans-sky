@@ -12,6 +12,8 @@ export interface EditorParams {
   textureFadeDistance: number
   atmosphereColor: string
   atmosphereDensity: number
+  atmosphereHazeStrength: number
+  atmosphereHazeDistance: number
   sunColor: string
   sunTintStrength: number
   sunAzimuth: number
@@ -39,6 +41,10 @@ export interface EditorParams {
   horizonMargin: number
   // Terrain worker count. 0 = auto from hardwareConcurrency.
   terrainWorkers: number
+  bloomStrength: number
+  bloomRadius: number
+  bloomThreshold: number
+  toneMappingExposure: number
   debugBloom: boolean
   debugOcean: boolean
   debugAtmosphere: boolean
@@ -88,6 +94,8 @@ export const DEFAULT_PARAMS: EditorParams = {
   textureFadeDistance: 420,
   atmosphereColor: '#6fa8dc',
   atmosphereDensity: 0.35,
+  atmosphereHazeStrength: 0.42,
+  atmosphereHazeDistance: 1.85,
   sunColor: '#fff2c8',
   sunTintStrength: 0.85,
   sunAzimuth: 315,
@@ -108,6 +116,10 @@ export const DEFAULT_PARAMS: EditorParams = {
   skirts: true,
   horizonMargin: 0.12,
   terrainWorkers: 0,
+  bloomStrength: 1.0,
+  bloomRadius: 0.5,
+  bloomThreshold: 0.7,
+  toneMappingExposure: 1.0,
   debugBloom: true,
   debugOcean: true,
   debugAtmosphere: true,
@@ -126,6 +138,8 @@ export const RANGES = {
   textureNearDistance: { min: 10, max: 5000, step: 10 },
   textureFadeDistance: { min: 10, max: 10000, step: 10 },
   atmosphereDensity: { min: 0, max: 1, step: 0.01 },
+  atmosphereHazeStrength: { min: 0, max: 1.5, step: 0.01 },
+  atmosphereHazeDistance: { min: 0.1, max: 8, step: 0.01 },
   sunTintStrength: { min: 0, max: 2, step: 0.01 },
   sunAzimuth: { min: 0, max: 360, step: 1 },
   sunElevation: { min: -20, max: 80, step: 1 },
@@ -143,6 +157,10 @@ export const RANGES = {
   gridSize: { min: 9, max: 129, step: 2 },
   horizonMargin: { min: 0, max: 3, step: 0.05 },
   terrainWorkers: { min: 0, max: 12, step: 1 },
+  bloomStrength: { min: 0, max: 3, step: 0.01 },
+  bloomRadius: { min: 0, max: 1.5, step: 0.01 },
+  bloomThreshold: { min: 0, max: 2, step: 0.01 },
+  toneMappingExposure: { min: 0.1, max: 3, step: 0.01 },
 } as const
 
 /** Per-type presets for noise profile */

@@ -35,6 +35,8 @@ function createPlanet(scene: THREE.Scene, params: EditorParams): PlanetRenderer 
     textureFadeDistance: params.textureFadeDistance,
     atmosphereColor: params.atmosphereColor,
     atmosphereDensity: params.atmosphereDensity,
+    atmosphereHazeStrength: params.atmosphereHazeStrength,
+    atmosphereHazeDistance: params.atmosphereHazeDistance,
     sunColor: params.sunColor,
     sunTintStrength: params.sunTintStrength,
     noiseProfile: {
@@ -59,6 +61,12 @@ function createPlanet(scene: THREE.Scene, params: EditorParams): PlanetRenderer 
 
 function applyDebugSettings(engine: GameEngine, planet: PlanetRenderer, params: EditorParams) {
   engine.setBloomEnabled(params.debugBloom)
+  engine.setBloomSettings({
+    strength: params.bloomStrength,
+    radius: params.bloomRadius,
+    threshold: params.bloomThreshold,
+  })
+  engine.setToneMappingExposure(params.toneMappingExposure)
   planet.setDebugRendering({
     showOcean: params.debugOcean,
     showAtmosphere: params.debugAtmosphere,
@@ -217,6 +225,7 @@ export function EditorCanvas({ params }: Props) {
         const avg = (values: number[]) => values.reduce((sum, v) => sum + v, 0) / Math.max(1, values.length)
         const pct = (values: number[], q: number) => values[Math.min(values.length - 1, Math.floor(values.length * q))] ?? 0
         const stats = planetRef.current?.getDebugStats(engine.camera)
+        const bloom = engine.getBloomSettings()
         const lods = stats
           ? Object.entries(stats.byLod)
             .sort(([a], [b]) => Number(a) - Number(b))
@@ -230,6 +239,10 @@ export function EditorCanvas({ params }: Props) {
           `draw=${engine.renderer.info.render.calls} tri=${engine.renderer.info.render.triangles}`,
           `geo=${engine.renderer.info.memory.geometries} tex=${engine.renderer.info.memory.textures}`,
           `diag bloom=${paramsRef.current.debugBloom ? 'on' : 'off'} ocean=${paramsRef.current.debugOcean ? 'on' : 'off'} atmosphere=${paramsRef.current.debugAtmosphere ? 'on' : 'off'} simpleTerrain=${paramsRef.current.debugSimpleTerrain ? 'on' : 'off'}`,
+          bloom
+            ? `bloom strength=${bloom.strength.toFixed(2)} radius=${bloom.radius.toFixed(2)} threshold=${bloom.threshold.toFixed(2)} enabled=${bloom.enabled ? 'on' : 'off'}`
+            : 'bloom unavailable',
+          `tone ${engine.getToneMappingName()} exposure=${engine.getToneMappingExposure().toFixed(2)}`,
           `terrain near=${paramsRef.current.debugNearTerrainShader ? 'shader' : 'simple'} far=${paramsRef.current.debugFarTerrainShader ? 'shader' : 'simple'} fallback=${paramsRef.current.debugFallbackTerrainShader ? 'shader' : 'simple'}`,
           stats
             ? `planet dist=${stats.surfaceDistance.toFixed(1)} chunks=${stats.visible}/${stats.chunks} pending=${stats.pending} building=${stats.building}/${stats.workers} skirts=${stats.skirtEdges} generated=${stats.generated} build=${stats.chunkGenerationMs.toFixed(2)}ms integrate=${stats.chunkIntegrationMs.toFixed(2)}ms lod[${lods}]`
@@ -296,6 +309,7 @@ export function EditorCanvas({ params }: Props) {
     engineRef.current?.setSunPosition(sunPosition)
     planetRef.current?.setSunColor(params.sunColor)
     planetRef.current?.setSunTintStrength(params.sunTintStrength)
+    planetRef.current?.setAtmosphereHaze(params.atmosphereHazeStrength, params.atmosphereHazeDistance)
     engineRef.current?.setSunColor(params.sunColor)
     if (engineRef.current && planetRef.current) {
       applyDebugSettings(engineRef.current, planetRef.current, params)
@@ -318,6 +332,7 @@ export function EditorCanvas({ params }: Props) {
       engine.setSunPosition(latestSunPosition)
       newPlanet.setSunColor(paramsRef.current.sunColor)
       newPlanet.setSunTintStrength(paramsRef.current.sunTintStrength)
+      newPlanet.setAtmosphereHaze(paramsRef.current.atmosphereHazeStrength, paramsRef.current.atmosphereHazeDistance)
       engine.setSunColor(paramsRef.current.sunColor)
       applyDebugSettings(engine, newPlanet, paramsRef.current)
       planetRef.current = newPlanet

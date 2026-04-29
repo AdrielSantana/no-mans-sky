@@ -3,6 +3,7 @@ import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js'
 import { EffectComposer } from 'three/examples/jsm/postprocessing/EffectComposer.js'
 import { RenderPass } from 'three/examples/jsm/postprocessing/RenderPass.js'
 import { UnrealBloomPass } from 'three/examples/jsm/postprocessing/UnrealBloomPass.js'
+import { OutputPass } from 'three/examples/jsm/postprocessing/OutputPass.js'
 import { createSkybox } from './skybox'
 import { WORLD_SCALE } from './world-scale'
 
@@ -20,6 +21,7 @@ export class GameEngine {
   private pixelRatioLimit = Math.min(window.devicePixelRatio, 2)
   private sunLight: THREE.PointLight | null = null
   private bloomPass: UnrealBloomPass | null = null
+  private outputPass: OutputPass | null = null
 
   constructor(container: HTMLElement) {
     this.container = container
@@ -30,6 +32,8 @@ export class GameEngine {
     this.renderer = new THREE.WebGLRenderer({ antialias: true, logarithmicDepthBuffer: true })
     this.renderer.setSize(width, height)
     this.renderer.setPixelRatio(this.pixelRatioLimit)
+    this.renderer.toneMapping = THREE.NeutralToneMapping
+    this.renderer.toneMappingExposure = 1
     container.appendChild(this.renderer.domElement)
 
     // Scene
@@ -65,6 +69,9 @@ export class GameEngine {
     bloomPass.radius = 0.5
     this.composer.addPass(bloomPass)
     this.bloomPass = bloomPass
+    const outputPass = new OutputPass()
+    this.composer.addPass(outputPass)
+    this.outputPass = outputPass
 
     this.setupLights()
 
@@ -90,6 +97,69 @@ export class GameEngine {
 
   setBloomEnabled(enabled: boolean) {
     if (this.bloomPass) this.bloomPass.enabled = enabled
+  }
+
+  setBloomSettings(settings: { strength: number; radius: number; threshold: number }) {
+    if (!this.bloomPass) return
+    this.bloomPass.strength = settings.strength
+    this.bloomPass.radius = settings.radius
+    this.bloomPass.threshold = settings.threshold
+
+    const bloomPass = this.bloomPass as UnrealBloomPass & {
+      highPassUniforms?: Record<string, { value: number }>
+      compositeMaterial?: {
+        uniforms?: Record<string, { value: number }>
+      }
+    }
+    if (bloomPass.highPassUniforms?.luminosityThreshold) {
+      bloomPass.highPassUniforms.luminosityThreshold.value = settings.threshold
+    }
+    if (bloomPass.compositeMaterial?.uniforms?.bloomStrength) {
+      bloomPass.compositeMaterial.uniforms.bloomStrength.value = settings.strength
+    }
+    if (bloomPass.compositeMaterial?.uniforms?.bloomRadius) {
+      bloomPass.compositeMaterial.uniforms.bloomRadius.value = settings.radius
+    }
+  }
+
+  setToneMappingExposure(exposure: number) {
+    this.renderer.toneMappingExposure = exposure
+  }
+
+  getToneMappingExposure(): number {
+    return this.renderer.toneMappingExposure
+  }
+
+  getToneMappingName(): string {
+    switch (this.renderer.toneMapping) {
+      case THREE.NoToneMapping:
+        return 'none'
+      case THREE.LinearToneMapping:
+        return 'linear'
+      case THREE.ReinhardToneMapping:
+        return 'reinhard'
+      case THREE.CineonToneMapping:
+        return 'cineon'
+      case THREE.ACESFilmicToneMapping:
+        return 'aces'
+      case THREE.AgXToneMapping:
+        return 'agx'
+      case THREE.NeutralToneMapping:
+        return 'neutral'
+      default:
+        return 'custom'
+    }
+  }
+
+  getBloomSettings() {
+    return this.bloomPass
+      ? {
+          enabled: this.bloomPass.enabled,
+          strength: this.bloomPass.strength,
+          radius: this.bloomPass.radius,
+          threshold: this.bloomPass.threshold,
+        }
+      : null
   }
 
   getDeltaTime(): number {
@@ -157,6 +227,7 @@ export class GameEngine {
     this.stop()
     window.removeEventListener('resize', this.boundResize)
     this.controls.dispose()
+    this.outputPass?.dispose()
     this.composer.dispose()
     this.renderer.dispose()
     this.container.removeChild(this.renderer.domElement)

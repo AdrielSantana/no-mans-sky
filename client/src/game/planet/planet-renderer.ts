@@ -61,6 +61,8 @@ interface PlanetRendererParams {
   textureFadeDistance?: number
   atmosphereColor: string
   atmosphereDensity: number
+  atmosphereHazeStrength?: number
+  atmosphereHazeDistance?: number
   sunColor?: string
   sunTintStrength?: number
   noiseProfile?: {
@@ -119,6 +121,8 @@ export class PlanetRenderer {
   private atmosphereColor = new THREE.Color(0x6fa8dc)
   private atmosphereLightColor = new THREE.Color(0xc4d5df)
   private sunTintStrength = 0.85
+  private atmosphereHazeStrength = 0.42
+  private atmosphereHazeDistance = 1.85
   private terrainParams: PlanetTerrainParams
   private lodDistances: number[]
   private requestedTerrainWorkers: number
@@ -157,6 +161,8 @@ export class PlanetRenderer {
     this.sunColor.set(params.sunColor ?? '#fff2c8')
     this.atmosphereColor.set(params.atmosphereColor)
     this.sunTintStrength = params.sunTintStrength ?? 0.85
+    this.atmosphereHazeStrength = params.atmosphereHazeStrength ?? 0.42
+    this.atmosphereHazeDistance = params.atmosphereHazeDistance ?? 1.85
     this.updateAtmosphereLightColor()
     this.group = new THREE.Group()
     scene.add(this.group)
@@ -225,6 +231,8 @@ export class PlanetRenderer {
       sunColor: this.sunColor,
       atmosphereLightColor: this.atmosphereLightColor,
       sunTintStrength: this.sunTintStrength,
+      atmosphereHazeStrength: this.atmosphereHazeStrength,
+      atmosphereHazeDistance: this.atmosphereHazeDistance,
       planetRadius: planetRadius,
       octaves: this.noiseProfile.octaves,
       frequency: this.noiseProfile.frequency,
@@ -243,10 +251,13 @@ export class PlanetRenderer {
       textureDetailScale: FAR_TEXTURE_LOD_BANDS[0].detailScale,
       textureFarScale: FAR_TEXTURE_LOD_BANDS[0].farScale,
       textureFarStrength: FAR_TEXTURE_LOD_BANDS[0].farStrength,
+      atmosphereColor: params.atmosphereColor,
       sunPosition: this.sunPosition,
       sunColor: this.sunColor,
       atmosphereLightColor: this.atmosphereLightColor,
       sunTintStrength: this.sunTintStrength,
+      atmosphereHazeStrength: this.atmosphereHazeStrength,
+      atmosphereHazeDistance: this.atmosphereHazeDistance,
       planetRadius: planetRadius,
       octaves: this.noiseProfile.octaves,
       frequency: this.noiseProfile.frequency,
@@ -279,10 +290,13 @@ export class PlanetRenderer {
       textureDetailScale: 0.09,
       textureFarScale: 0.045,
       textureFarStrength: 1.0,
+      atmosphereColor: params.atmosphereColor,
       sunPosition: this.sunPosition,
       sunColor: this.sunColor,
       atmosphereLightColor: this.atmosphereLightColor,
       sunTintStrength: this.sunTintStrength,
+      atmosphereHazeStrength: this.atmosphereHazeStrength,
+      atmosphereHazeDistance: this.atmosphereHazeDistance,
       planetRadius,
       octaves: this.noiseProfile.octaves,
       frequency: this.noiseProfile.frequency,
@@ -323,8 +337,11 @@ export class PlanetRenderer {
         detailStrength: this.noiseProfile.detailStrength,
         sunPosition: this.sunPosition,
         sunColor: this.sunColor,
+        atmosphereColor: params.atmosphereColor,
         atmosphereLightColor: this.atmosphereLightColor,
         sunTintStrength: this.sunTintStrength,
+        atmosphereHazeStrength: this.atmosphereHazeStrength,
+        atmosphereHazeDistance: this.atmosphereHazeDistance,
       })
       this.oceanMesh = new THREE.Mesh(oceanGeo, this.oceanMaterial)
       this.oceanMesh.frustumCulled = false
@@ -377,10 +394,13 @@ export class PlanetRenderer {
       textureDetailScale: band.detailScale,
       textureFarScale: band.farScale,
       textureFarStrength: band.farStrength,
+      atmosphereColor: params.atmosphereColor,
       sunPosition: this.sunPosition,
       sunColor: this.sunColor,
       atmosphereLightColor: this.atmosphereLightColor,
       sunTintStrength: this.sunTintStrength,
+      atmosphereHazeStrength: this.atmosphereHazeStrength,
+      atmosphereHazeDistance: this.atmosphereHazeDistance,
       planetRadius: this.planetRadius,
       octaves: this.noiseProfile.octaves,
       frequency: this.noiseProfile.frequency,
@@ -435,6 +455,8 @@ export class PlanetRenderer {
       this.copyColorUniform(material, 'uSunColor', this.sunColor)
       this.copyColorUniform(material, 'uAtmosphereLightColor', this.atmosphereLightColor)
       this.setFloatUniform(material, 'uSunTintStrength', this.sunTintStrength)
+      this.setFloatUniform(material, 'uAtmosphereHazeStrength', this.atmosphereHazeStrength)
+      this.setFloatUniform(material, 'uAtmosphereHazeDistance', this.atmosphereHazeDistance)
     }
   }
 
@@ -445,6 +467,12 @@ export class PlanetRenderer {
 
   setSunTintStrength(strength: number) {
     this.sunTintStrength = strength
+    this.updateLightColorUniforms()
+  }
+
+  setAtmosphereHaze(strength: number, distance: number) {
+    this.atmosphereHazeStrength = strength
+    this.atmosphereHazeDistance = distance
     this.updateLightColorUniforms()
   }
 

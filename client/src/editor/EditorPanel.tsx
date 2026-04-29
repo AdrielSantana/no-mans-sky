@@ -446,6 +446,34 @@ export function EditorPanel({ params, onChange }: Props) {
           />
           <span className="editor-value">{params.atmosphereDensity.toFixed(2)}</span>
         </div>
+        <div className="editor-row">
+          <span className="editor-label">Haze</span>
+          <input
+            className="editor-slider"
+            type="range"
+            min={RANGES.atmosphereHazeStrength.min}
+            max={RANGES.atmosphereHazeStrength.max}
+            step={RANGES.atmosphereHazeStrength.step}
+            value={params.atmosphereHazeStrength}
+            onInput={e => set('atmosphereHazeStrength', Number(e.currentTarget.value))}
+            onChange={e => set('atmosphereHazeStrength', Number(e.target.value))}
+          />
+          <span className="editor-value">{params.atmosphereHazeStrength.toFixed(2)}</span>
+        </div>
+        <div className="editor-row">
+          <span className="editor-label">Haze Dist</span>
+          <input
+            className="editor-slider"
+            type="range"
+            min={RANGES.atmosphereHazeDistance.min}
+            max={RANGES.atmosphereHazeDistance.max}
+            step={RANGES.atmosphereHazeDistance.step}
+            value={params.atmosphereHazeDistance}
+            onInput={e => set('atmosphereHazeDistance', Number(e.currentTarget.value))}
+            onChange={e => set('atmosphereHazeDistance', Number(e.target.value))}
+          />
+          <span className="editor-value">{params.atmosphereHazeDistance.toFixed(2)}R</span>
+        </div>
       </div>
 
       <div className="editor-section">
@@ -513,6 +541,62 @@ export function EditorPanel({ params, onChange }: Props) {
             />
             <span className="editor-label" style={{ width: 'auto' }}>Bloom</span>
           </label>
+        </div>
+        <div className="editor-row">
+          <span className="editor-label">Bloom Strength</span>
+          <input
+            className="editor-slider"
+            type="range"
+            min={RANGES.bloomStrength.min}
+            max={RANGES.bloomStrength.max}
+            step={RANGES.bloomStrength.step}
+            value={params.bloomStrength}
+            onInput={e => set('bloomStrength', Number(e.currentTarget.value))}
+            onChange={e => set('bloomStrength', Number(e.target.value))}
+          />
+          <span className="editor-value">{params.bloomStrength.toFixed(2)}</span>
+        </div>
+        <div className="editor-row">
+          <span className="editor-label">Bloom Radius</span>
+          <input
+            className="editor-slider"
+            type="range"
+            min={RANGES.bloomRadius.min}
+            max={RANGES.bloomRadius.max}
+            step={RANGES.bloomRadius.step}
+            value={params.bloomRadius}
+            onInput={e => set('bloomRadius', Number(e.currentTarget.value))}
+            onChange={e => set('bloomRadius', Number(e.target.value))}
+          />
+          <span className="editor-value">{params.bloomRadius.toFixed(2)}</span>
+        </div>
+        <div className="editor-row">
+          <span className="editor-label">Bloom Threshold</span>
+          <input
+            className="editor-slider"
+            type="range"
+            min={RANGES.bloomThreshold.min}
+            max={RANGES.bloomThreshold.max}
+            step={RANGES.bloomThreshold.step}
+            value={params.bloomThreshold}
+            onInput={e => set('bloomThreshold', Number(e.currentTarget.value))}
+            onChange={e => set('bloomThreshold', Number(e.target.value))}
+          />
+          <span className="editor-value">{params.bloomThreshold.toFixed(2)}</span>
+        </div>
+        <div className="editor-row">
+          <span className="editor-label">Exposure</span>
+          <input
+            className="editor-slider"
+            type="range"
+            min={RANGES.toneMappingExposure.min}
+            max={RANGES.toneMappingExposure.max}
+            step={RANGES.toneMappingExposure.step}
+            value={params.toneMappingExposure}
+            onInput={e => set('toneMappingExposure', Number(e.currentTarget.value))}
+            onChange={e => set('toneMappingExposure', Number(e.target.value))}
+          />
+          <span className="editor-value">{params.toneMappingExposure.toFixed(2)}</span>
         </div>
         <div className="editor-row">
           <label style={{ display: 'flex', alignItems: 'center', gap: 6, cursor: 'pointer' }}>
