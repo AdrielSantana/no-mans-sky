@@ -1,4 +1,4 @@
-import { clamp, type Vec3Like } from './vector'
+import { clamp, normalize, type Vec3Like } from './vector'
 
 export interface PlanetTerrainParams {
   seed: number
@@ -7,6 +7,14 @@ export interface PlanetTerrainParams {
   terrainScale: number
   frequency: number
   octaves: number
+  lacunarity?: number
+  gain?: number
+  warpStrength?: number
+  continentalScale?: number
+  mountainScale?: number
+  erosionStrength?: number
+  thermalStrength?: number
+  detailStrength?: number
 }
 
 function mod289(x: number): number {
@@ -163,23 +171,134 @@ function terrainFbm(p: Vec3Like, seed: number, octaves: number, lacunarity = 2, 
   return maxAmp > 0 ? sum / maxAmp : 0
 }
 
-export function samplePlanetHeight(dir: Vec3Like, params: PlanetTerrainParams): number {
-  const base = {
-    x: dir.x * params.frequency,
-    y: dir.y * params.frequency,
-    z: dir.z * params.frequency,
-  }
-  const continental = terrainFbm(base, params.seed, Math.min(params.octaves, 4), 2, 0.5)
-  const ridgeNoise = Math.abs(terrainFbm({
-    x: dir.x * params.frequency * 2.6 + 17,
-    y: dir.y * params.frequency * 2.6 + 17,
-    z: dir.z * params.frequency * 2.6 + 17,
-  }, params.seed + 9.7, 2, 2, 0.45))
-  const ridges = Math.pow(1 - ridgeNoise, 2.4)
-  const mountainMask = clamp((continental - 0.30) / (0.78 - 0.30), 0, 1)
+function smoothstep(edge0: number, edge1: number, value: number): number {
+  const t = clamp((value - edge0) / (edge1 - edge0), 0, 1)
+  return t * t * (3 - 2 * t)
+}
 
-  if (params.planetType === 'gas') return continental * 0.05
-  return continental * 0.55 + ridges * mountainMask * 0.14
+function mix(a: number, b: number, t: number): number {
+  return a + (b - a) * t
+}
+
+function sampleWarpedDirection(dir: Vec3Like, params: PlanetTerrainParams, lacunarity: number, gain: number): Vec3Like {
+  const warpStrength = params.warpStrength ?? 0.42
+  if (warpStrength <= 0) return normalize(dir)
+
+  const seed = params.seed
+  const p = {
+    x: dir.x * 1.35,
+    y: dir.y * 1.35,
+    z: dir.z * 1.35,
+  }
+
+  return normalize({
+    x: dir.x + terrainFbm({ x: p.x + 11.3, y: p.y - 4.8, z: p.z + 7.1 }, seed + 101.7, 3, lacunarity, gain) * warpStrength * 0.36,
+    y: dir.y + terrainFbm({ x: p.x - 8.2, y: p.y + 16.5, z: p.z + 2.4 }, seed + 211.3, 3, lacunarity, gain) * warpStrength * 0.36,
+    z: dir.z + terrainFbm({ x: p.x + 5.6, y: p.y + 9.7, z: p.z - 13.8 }, seed + 307.9, 3, lacunarity, gain) * warpStrength * 0.36,
+  })
+}
+
+export function samplePlanetHeight(dir: Vec3Like, params: PlanetTerrainParams): number {
+  const lacunarity = params.lacunarity ?? 2
+  const gain = params.gain ?? 0.5
+  const baseDir = normalize(dir)
+  const warped = sampleWarpedDirection(baseDir, params, lacunarity, gain)
+  const frequency = params.frequency
+  const octaves = Math.min(params.octaves, 8)
+
+  const macro = {
+    x: warped.x * frequency * 0.48,
+    y: warped.y * frequency * 0.48,
+    z: warped.z * frequency * 0.48,
+  }
+  const continentalRaw = terrainFbm(macro, params.seed, Math.min(octaves, 4), lacunarity, gain)
+  const basinRaw = terrainFbm({
+    x: warped.x * frequency * 0.22 + 19.1,
+    y: warped.y * frequency * 0.22 - 5.4,
+    z: warped.z * frequency * 0.22 + 12.6,
+  }, params.seed + 43.1, 3, 2.05, 0.48)
+  const continentMask = smoothstep(-0.28, 0.46, continentalRaw + basinRaw * 0.18)
+  const continentHeight = (continentMask * 2 - 1) * 0.34 * (params.continentalScale ?? 1)
+
+  const lowlandUndulation = terrainFbm({
+    x: warped.x * frequency * 1.18 + 3.7,
+    y: warped.y * frequency * 1.18 - 8.1,
+    z: warped.z * frequency * 1.18 + 4.2,
+  }, params.seed + 17.5, Math.min(octaves, 5), lacunarity, gain) * 0.105
+
+  const plateNoise = Math.abs(terrainFbm({
+    x: warped.x * frequency * 0.82 - 23.5,
+    y: warped.y * frequency * 0.82 + 6.2,
+    z: warped.z * frequency * 0.82 + 14.8,
+  }, params.seed + 83.4, 4, 2.1, 0.52))
+  const plateBoundary = Math.pow(1 - clamp(plateNoise, 0, 1), 3.15)
+
+  const ridgeNoise = Math.abs(terrainFbm({
+    x: warped.x * frequency * 2.75 + 17,
+    y: warped.y * frequency * 2.75 + 17,
+    z: warped.z * frequency * 2.75 + 17,
+  }, params.seed + 9.7, Math.min(4, Math.max(2, octaves - 2)), lacunarity, gain * 0.92))
+  const mountainSharpness = mix(2.65, 1.85, clamp(params.thermalStrength ?? 0.2, 0, 1) * 0.45)
+  const ridges = Math.pow(1 - clamp(ridgeNoise, 0, 1), mountainSharpness)
+  const mountainMask = smoothstep(0.36, 0.95, continentMask + plateBoundary * 0.62)
+  const mountains = ridges * mountainMask * (0.12 + plateBoundary * 0.21) * (params.mountainScale ?? 1)
+
+  const erosionStrength = params.erosionStrength ?? 0.34
+  let hydraulicCut = 0
+  let sedimentFill = 0
+  if (erosionStrength > 0.001) {
+    const drainageNoise = Math.abs(terrainFbm({
+      x: warped.x * frequency * 5.8 - 31.0,
+      y: warped.y * frequency * 5.8 + 27.0,
+      z: warped.z * frequency * 5.8 + 4.0,
+    }, params.seed + 131.9, 4, 2.22, 0.46))
+    const channels = Math.pow(1 - clamp(drainageNoise, 0, 1), 6.5)
+      * smoothstep(0.08, 0.82, continentMask)
+      * (1 - smoothstep(0.20, 0.44, mountains))
+    hydraulicCut = channels * erosionStrength * (0.055 + continentMask * 0.045)
+    sedimentFill = channels * erosionStrength * smoothstep(-0.18, 0.10, continentHeight) * 0.018
+  }
+
+  const thermalStrength = params.thermalStrength ?? 0.2
+  const thermalTalus = thermalStrength <= 0.001
+    ? 0
+    : Math.max(0, mountains - 0.10) * thermalStrength * 0.23
+
+  const detailStrength = params.detailStrength ?? 0.55
+  let detail = 0
+  if (detailStrength > 0.001) {
+    const fineNoise = terrainFbm({
+      x: warped.x * frequency * 10.5 + 41.0,
+      y: warped.y * frequency * 10.5 - 11.0,
+      z: warped.z * frequency * 10.5 + 29.0,
+    }, params.seed + 251.7, Math.min(octaves, 5), 2.28, 0.42)
+    const badlands = Math.pow(1 - Math.abs(fineNoise), 4.2)
+      * smoothstep(0.22, 0.76, continentMask)
+      * (1 - smoothstep(0.05, 0.22, mountains))
+    detail = (fineNoise * 0.026 + badlands * 0.032) * detailStrength * (1 - thermalStrength * 0.35)
+  }
+
+  if (params.planetType === 'gas') {
+    return terrainFbm({ x: baseDir.x * frequency, y: baseDir.y * frequency, z: baseDir.z * frequency }, params.seed, Math.min(octaves, 4), lacunarity, gain) * 0.05
+  }
+
+  if (params.planetType === 'ice') {
+    return continentHeight * 0.72
+      + lowlandUndulation * 0.55
+      + mountains * 0.58
+      - hydraulicCut * 0.38
+      - thermalTalus * 0.45
+      + detail * 0.42
+      + smoothstep(0.50, 0.95, Math.abs(baseDir.y)) * 0.045
+  }
+
+  return continentHeight
+    + lowlandUndulation
+    + mountains
+    - hydraulicCut
+    + sedimentFill
+    - thermalTalus
+    + detail
 }
 
 export function samplePlanetRadius(dir: Vec3Like, params: PlanetTerrainParams): number {

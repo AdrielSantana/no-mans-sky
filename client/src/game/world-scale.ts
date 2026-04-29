@@ -14,7 +14,7 @@ export const WORLD_SCALE = {
   largePlayablePlanetRadius: 1100,
 
   cameraNear: 0.05,
-  cameraFar: 90000,
+  cameraFar: 900000,
   orbitMinDistance: 2,
   orbitMaxDistance: 12000,
   initialCameraPosition: [0, 1800, 4200] as const,

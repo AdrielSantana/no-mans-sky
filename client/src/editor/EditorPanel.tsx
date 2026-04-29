@@ -249,6 +249,19 @@ export function EditorPanel({ params, onChange }: Props) {
           </label>
         </div>
         <div className="editor-row">
+          <span className="editor-label">Horizon</span>
+          <input
+            className="editor-slider"
+            type="range"
+            min={RANGES.horizonMargin.min}
+            max={RANGES.horizonMargin.max}
+            step={RANGES.horizonMargin.step}
+            value={params.horizonMargin}
+            onChange={e => set('horizonMargin', Number(e.target.value))}
+          />
+          <span className="editor-value">{params.horizonMargin.toFixed(2)}</span>
+        </div>
+        <div className="editor-row">
           <label style={{ display: 'flex', alignItems: 'center', gap: 6, cursor: 'pointer' }}>
             <input
               type="checkbox"

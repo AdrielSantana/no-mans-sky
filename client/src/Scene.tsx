@@ -71,7 +71,7 @@ export default function Scene() {
               .sort(([a], [b]) => Number(a) - Number(b))
               .map(([lod, count]) => `${lod}:${count}`)
               .join(' ')
-            return `planet ${planet.id} dist=${planet.surfaceDistance.toFixed(1)} chunks=${planet.visible}/${planet.chunks} detailed=${planet.detailedMaterialChunks} pending=${planet.pending} lod[${lods}]`
+            return `planet ${planet.id} dist=${planet.surfaceDistance.toFixed(1)} chunks=${planet.visible}/${planet.chunks} detailed=${planet.detailedMaterialChunks} pending=${planet.pending} building=${planet.building} build=${planet.chunkGenerationMs.toFixed(2)}ms integrate=${planet.chunkIntegrationMs.toFixed(2)}ms lod[${lods}]`
           })
           .join('\n')
 

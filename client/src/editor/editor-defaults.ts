@@ -27,16 +27,18 @@ export interface EditorParams {
   autoLod: boolean
   // Chunk skirts
   skirts: boolean
+  // Horizon culling margin multiplier (1.0 = balanced, higher = more generous)
+  horizonMargin: number
 }
 
 /**
  * Compute LOD levels needed to maintain consistent vertex spacing.
- * Calibrated so default config (R=650, G=33, 7 levels) is the baseline.
+ * Calibrated so default config (R=650, G=33) → 4 levels for performance.
  */
 export function computeAutoLod(radius: number, gridSize: number): number[] {
-  // Target vertex spacing at max LOD. Calibrated for R=650, G=33 → 5 levels.
-  // Larger value = fewer levels = bigger triangles.
-  const targetSpacing = (2 * 650 / 32) / 32 // ≈ 1.27
+  // Target vertex spacing at max LOD. Calibrated for R=650, G=33 → 4 levels.
+  // Larger value = fewer levels = fewer chunks = fewer draw calls.
+  const targetSpacing = (2 * 650 / 32) / 16 // ≈ 2.54
 
   // N = ceil(log2(2R / ((G-1) * targetSpacing)))
   const numLevels = Math.max(1, Math.min(15, Math.ceil(
@@ -52,8 +54,8 @@ export function computeAutoLod(radius: number, gridSize: number): number[] {
   return multipliers
 }
 
-/** Default LOD multipliers for manual mode (5 levels) */
-export const DEFAULT_LOD_MULTIPLIERS = [5.5, 2.8205, 1.4464, 0.7417, 0.3804]
+/** Default LOD multipliers for manual mode (4 levels) */
+export const DEFAULT_LOD_MULTIPLIERS = [5.5, 2.8205, 1.4464, 0.7417]
 
 export const DEFAULT_PARAMS: EditorParams = {
   seed: 42,
@@ -79,6 +81,7 @@ export const DEFAULT_PARAMS: EditorParams = {
   gridSize: 33,
   autoLod: true,
   skirts: true,
+  horizonMargin: 1.0,
 }
 
 export const RANGES = {
@@ -98,6 +101,7 @@ export const RANGES = {
   detailStrength: { min: 0, max: 1.5, step: 0.01 },
   lodMultiplier: { min: 0.01, max: 10.0, step: 0.01 },
   gridSize: { min: 9, max: 129, step: 2 },
+  horizonMargin: { min: 0, max: 3, step: 0.05 },
 } as const
 
 /** Per-type presets for noise profile */

@@ -123,6 +123,14 @@ export class CelestialSystem {
           terrainScale: params.terrainScale,
           frequency: profile.frequency,
           octaves: profile.octaves,
+          lacunarity: profile.lacunarity,
+          gain: profile.gain,
+          warpStrength: profile.warpStrength,
+          continentalScale: profile.continentalScale,
+          mountainScale: profile.mountainScale,
+          erosionStrength: profile.erosionStrength,
+          thermalStrength: profile.thermalStrength,
+          detailStrength: profile.detailStrength,
         })
       } else {
         // No params — simple sphere (backward compatible)

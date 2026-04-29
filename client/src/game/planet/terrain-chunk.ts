@@ -1,10 +1,17 @@
 import * as THREE from 'three'
-import { type QuadtreeNode, getNodeBounds, cubeToSphere, nodeKey } from './quadtree'
-import { samplePlanetHeight, type PlanetTerrainParams } from '../../../../server/spacetimedb/src/shared/planet-terrain'
+import { type QuadtreeNode, getNodeBounds, nodeKey } from './quadtree'
+import type { PlanetTerrainParams } from '../../../../server/spacetimedb/src/shared/planet-terrain'
 import type { Vec3Like } from '../../../../server/spacetimedb/src/shared/vector'
+import {
+  buildTerrainChunkGeometryData,
+  normalizeSkirtFlags,
+  type SkirtFlags,
+  type TerrainChunkGeometryData,
+} from './terrain-geometry'
+
+export type { SkirtFlags } from './terrain-geometry'
 
 const DEFAULT_GRID_SIZE = 33
-const SKIRT_DEPTH = 0.08
 const EPSILON = 1e-6
 
 function toThree(v: Vec3Like): THREE.Vector3 {
@@ -15,172 +22,55 @@ export class TerrainChunk {
   readonly mesh: THREE.Mesh
   readonly key: string
   readonly node: QuadtreeNode
+  readonly skirtFlags: SkirtFlags
   private geometry: THREE.BufferGeometry
-  private mainPositions = new Float32Array(0)
+  private mainPositions: Float32Array<ArrayBufferLike> = new Float32Array(0)
   private gridSize: number
+  private terrain: PlanetTerrainParams
 
   constructor(
     node: QuadtreeNode,
     terrain: PlanetTerrainParams,
     material: THREE.Material,
     gridSize = DEFAULT_GRID_SIZE,
-    skirts = true,
+    skirts: boolean | SkirtFlags = true,
+    geometryData?: TerrainChunkGeometryData,
   ) {
     this.node = { ...node, children: null }
     this.key = nodeKey(node.face, node.lod, node.x, node.y)
     this.gridSize = gridSize
-    this.geometry = this.buildGeometry(node, terrain, skirts)
+    this.terrain = terrain
+    this.skirtFlags = normalizeSkirtFlags(skirts)
+    const data = geometryData ?? buildTerrainChunkGeometryData(node, terrain, gridSize, skirts)
+    this.geometry = this.buildGeometry(data)
     this.mesh = new THREE.Mesh(this.geometry, material)
     this.mesh.frustumCulled = true
   }
 
-  private buildGeometry(
-    node: QuadtreeNode,
-    terrain: PlanetTerrainParams,
-    skirts: boolean,
-  ): THREE.BufferGeometry {
-    const gs = this.gridSize
-    const { u0, v0, u1, v1 } = getNodeBounds(node)
-    const du = (u1 - u0) / (gs - 1)
-    const dv = (v1 - v0) / (gs - 1)
+  needsSkirtUpdate(flags: SkirtFlags): boolean {
+    return this.skirtFlags.bottom !== flags.bottom
+      || this.skirtFlags.top !== flags.top
+      || this.skirtFlags.left !== flags.left
+      || this.skirtFlags.right !== flags.right
+  }
 
-    const vertCount = gs * gs
-    const positions = new Float32Array(vertCount * 3)
-    const heights = new Float32Array(vertCount)
+  rebuildSkirts(flags: SkirtFlags, material: THREE.Material) {
+    this.geometry.dispose()
+    const data = buildTerrainChunkGeometryData(this.node, this.terrain, this.gridSize, flags)
+    ;(this as { skirtFlags: SkirtFlags }).skirtFlags = flags
+    this.mainPositions = data.mainPositions
+    this.geometry = this.buildGeometry(data)
+    this.mesh.geometry = this.geometry
+    this.mesh.material = material
+  }
 
-    // CPU displacement is authoritative so physics, wireframe, and rendering use the same surface.
-    for (let iy = 0; iy < gs; iy++) {
-      for (let ix = 0; ix < gs; ix++) {
-        const i = iy * gs + ix
-        const u = u0 + ix * du
-        const v = v0 + iy * dv
-
-        const dir = cubeToSphere(node.face, u, v)
-        const height = samplePlanetHeight(dir, terrain)
-        const radius = terrain.radius + height * terrain.terrainScale * terrain.radius
-        positions[i * 3] = dir.x * radius
-        positions[i * 3 + 1] = dir.y * radius
-        positions[i * 3 + 2] = dir.z * radius
-        heights[i] = height
-      }
-    }
-    this.mainPositions = positions
-
-    // Build indices for main grid
-    const segCount = gs - 1
-    const indexCount = segCount * segCount * 6
-    const indices = new Uint32Array(indexCount)
-    let idx = 0
-
-    for (let iy = 0; iy < segCount; iy++) {
-      for (let ix = 0; ix < segCount; ix++) {
-        const a = iy * gs + ix
-        const b = a + 1
-        const c = a + gs
-        const d = c + 1
-        indices[idx++] = a
-        indices[idx++] = b
-        indices[idx++] = c
-        indices[idx++] = b
-        indices[idx++] = d
-        indices[idx++] = c
-      }
-    }
-
+  private buildGeometry(data: TerrainChunkGeometryData): THREE.BufferGeometry {
     const geo = new THREE.BufferGeometry()
-
-    if (!skirts) {
-      geo.setAttribute('position', new THREE.BufferAttribute(positions, 3))
-      geo.setAttribute('terrainHeight', new THREE.BufferAttribute(heights, 1))
-      geo.setIndex(new THREE.BufferAttribute(indices.subarray(0, idx), 1))
-      geo.computeVertexNormals()
-      geo.computeBoundingSphere()
-      return geo
-    }
-
-    // Skirt geometry
-    const skirtDepth = terrain.radius * SKIRT_DEPTH
-    const mainVertCount = vertCount
-    const skirtVertCount = 4 * gs
-    const totalVertCount = mainVertCount + skirtVertCount
-
-    const allPositions = new Float32Array(totalVertCount * 3)
-    const allHeights = new Float32Array(totalVertCount)
-    allPositions.set(positions, 0)
-    allHeights.set(heights, 0)
-
-    let skirtIdx = mainVertCount
-
-    const pushSkirtVertex = (mainI: number) => {
-      const targetI = skirtIdx
-      const mx = positions[mainI * 3]
-      const my = positions[mainI * 3 + 1]
-      const mz = positions[mainI * 3 + 2]
-      const len = Math.sqrt(mx * mx + my * my + mz * mz)
-      const nx = mx / len
-      const ny = my / len
-      const nz = mz / len
-
-      allPositions[skirtIdx * 3] = mx - nx * skirtDepth
-      allPositions[skirtIdx * 3 + 1] = my - ny * skirtDepth
-      allPositions[skirtIdx * 3 + 2] = mz - nz * skirtDepth
-      allHeights[targetI] = heights[mainI]
-
-      return skirtIdx++
-    }
-
-    // Skirt vertices for each edge
-    const bottomStart = skirtIdx
-    for (let ix = 0; ix < gs; ix++) pushSkirtVertex(ix)
-
-    const topStart = skirtIdx
-    for (let ix = 0; ix < gs; ix++) pushSkirtVertex((gs - 1) * gs + ix)
-
-    const leftStart = skirtIdx
-    for (let iy = 0; iy < gs; iy++) pushSkirtVertex(iy * gs)
-
-    const rightStart = skirtIdx
-    for (let iy = 0; iy < gs; iy++) pushSkirtVertex(iy * gs + gs - 1)
-
-    // Skirt indices
-    const skirtIndexCount = 4 * (gs - 1) * 6
-    const totalIndexCount = idx + skirtIndexCount
-    const allIndices = new Uint32Array(totalIndexCount)
-    allIndices.set(indices.subarray(0, idx), 0)
-
-    let si = idx
-
-    // Bottom edge
-    for (let i = 0; i < gs - 1; i++) {
-      const a = i, b = i + 1, c = bottomStart + i, d = bottomStart + i + 1
-      allIndices[si++] = a; allIndices[si++] = b; allIndices[si++] = c
-      allIndices[si++] = b; allIndices[si++] = d; allIndices[si++] = c
-    }
-    // Top edge
-    const topRow = (gs - 1) * gs
-    for (let i = 0; i < gs - 1; i++) {
-      const a = topRow + i, b = topRow + i + 1, c = topStart + i, d = topStart + i + 1
-      allIndices[si++] = a; allIndices[si++] = b; allIndices[si++] = c
-      allIndices[si++] = b; allIndices[si++] = d; allIndices[si++] = c
-    }
-    // Left edge
-    for (let iy = 0; iy < gs - 1; iy++) {
-      const a = iy * gs, b = (iy + 1) * gs, c = leftStart + iy, d = leftStart + iy + 1
-      allIndices[si++] = a; allIndices[si++] = b; allIndices[si++] = c
-      allIndices[si++] = b; allIndices[si++] = d; allIndices[si++] = c
-    }
-    // Right edge
-    for (let iy = 0; iy < gs - 1; iy++) {
-      const a = iy * gs + gs - 1, b = (iy + 1) * gs + gs - 1
-      const c = rightStart + iy, d = rightStart + iy + 1
-      allIndices[si++] = a; allIndices[si++] = b; allIndices[si++] = c
-      allIndices[si++] = b; allIndices[si++] = d; allIndices[si++] = c
-    }
-
-    geo.setAttribute('position', new THREE.BufferAttribute(allPositions, 3))
-    geo.setAttribute('terrainHeight', new THREE.BufferAttribute(allHeights, 1))
-    geo.setIndex(new THREE.BufferAttribute(allIndices, 1))
-    geo.computeVertexNormals()
+    this.mainPositions = data.mainPositions
+    geo.setAttribute('position', new THREE.BufferAttribute(data.positions, 3))
+    geo.setAttribute('normal', new THREE.BufferAttribute(data.normals, 3))
+    geo.setAttribute('terrainHeight', new THREE.BufferAttribute(data.heights, 1))
+    geo.setIndex(new THREE.BufferAttribute(data.indices, 1))
     geo.computeBoundingSphere()
 
     return geo
