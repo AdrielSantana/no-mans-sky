@@ -220,7 +220,7 @@ export function EditorCanvas({ params }: Props) {
           `diag bloom=${paramsRef.current.debugBloom ? 'on' : 'off'} ocean=${paramsRef.current.debugOcean ? 'on' : 'off'} atmosphere=${paramsRef.current.debugAtmosphere ? 'on' : 'off'} simpleTerrain=${paramsRef.current.debugSimpleTerrain ? 'on' : 'off'}`,
           `terrain near=${paramsRef.current.debugNearTerrainShader ? 'shader' : 'simple'} far=${paramsRef.current.debugFarTerrainShader ? 'shader' : 'simple'} fallback=${paramsRef.current.debugFallbackTerrainShader ? 'shader' : 'simple'}`,
           stats
-            ? `planet dist=${stats.surfaceDistance.toFixed(1)} chunks=${stats.visible}/${stats.chunks} pending=${stats.pending} building=${stats.building}/${stats.workers} generated=${stats.generated} build=${stats.chunkGenerationMs.toFixed(2)}ms integrate=${stats.chunkIntegrationMs.toFixed(2)}ms lod[${lods}]`
+            ? `planet dist=${stats.surfaceDistance.toFixed(1)} chunks=${stats.visible}/${stats.chunks} pending=${stats.pending} building=${stats.building}/${stats.workers} skirts=${stats.skirtEdges} generated=${stats.generated} build=${stats.chunkGenerationMs.toFixed(2)}ms integrate=${stats.chunkIntegrationMs.toFixed(2)}ms lod[${lods}]`
             : 'planet unavailable',
         ].join('\n')
 

@@ -22,8 +22,12 @@ export class TerrainChunk {
   readonly mesh: THREE.Mesh
   readonly key: string
   readonly node: QuadtreeNode
-  readonly skirtFlags: SkirtFlags
+  skirtFlags: SkirtFlags
   private geometry: THREE.BufferGeometry
+  private fullIndices: Uint32Array = new Uint32Array(0)
+  private mainIndexCount = 0
+  private skirtEdgeIndexCount = 0
+  private hasFullSkirtIndices = false
   private mainPositions: Float32Array<ArrayBufferLike> = new Float32Array(0)
   private gridSize: number
   private terrain: PlanetTerrainParams
@@ -57,23 +61,63 @@ export class TerrainChunk {
   rebuildSkirts(flags: SkirtFlags, material: THREE.Material) {
     this.geometry.dispose()
     const data = buildTerrainChunkGeometryData(this.node, this.terrain, this.gridSize, flags)
-    ;(this as { skirtFlags: SkirtFlags }).skirtFlags = flags
+    this.skirtFlags = flags
     this.mainPositions = data.mainPositions
     this.geometry = this.buildGeometry(data)
     this.mesh.geometry = this.geometry
     this.mesh.material = material
   }
 
+  setSkirtFlags(flags: SkirtFlags) {
+    if (!this.needsSkirtUpdate(flags)) return
+
+    this.skirtFlags = flags
+    this.geometry.setIndex(new THREE.BufferAttribute(this.buildIndexForSkirts(flags), 1))
+    this.geometry.computeBoundingSphere()
+  }
+
   private buildGeometry(data: TerrainChunkGeometryData): THREE.BufferGeometry {
     const geo = new THREE.BufferGeometry()
     this.mainPositions = data.mainPositions
+    this.fullIndices = data.indices
+    this.mainIndexCount = (this.gridSize - 1) * (this.gridSize - 1) * 6
+    this.skirtEdgeIndexCount = (this.gridSize - 1) * 6
+    this.hasFullSkirtIndices = data.indices.length >= this.mainIndexCount + this.skirtEdgeIndexCount * 4
     geo.setAttribute('position', new THREE.BufferAttribute(data.positions, 3))
     geo.setAttribute('normal', new THREE.BufferAttribute(data.normals, 3))
     geo.setAttribute('terrainHeight', new THREE.BufferAttribute(data.heights, 1))
-    geo.setIndex(new THREE.BufferAttribute(data.indices, 1))
+    geo.setIndex(new THREE.BufferAttribute(this.buildIndexForSkirts(this.skirtFlags), 1))
     geo.computeBoundingSphere()
 
     return geo
+  }
+
+  private buildIndexForSkirts(flags: SkirtFlags): Uint32Array {
+    if (!this.hasFullSkirtIndices) return this.fullIndices
+
+    const activeEdges = (flags.bottom ? 1 : 0)
+      + (flags.top ? 1 : 0)
+      + (flags.left ? 1 : 0)
+      + (flags.right ? 1 : 0)
+    if (activeEdges === 4) return this.fullIndices
+    if (activeEdges === 0) return this.fullIndices.subarray(0, this.mainIndexCount)
+
+    const next = new Uint32Array(this.mainIndexCount + activeEdges * this.skirtEdgeIndexCount)
+    next.set(this.fullIndices.subarray(0, this.mainIndexCount), 0)
+
+    let writeOffset = this.mainIndexCount
+    const copyEdge = (edgeIndex: number) => {
+      const start = this.mainIndexCount + edgeIndex * this.skirtEdgeIndexCount
+      next.set(this.fullIndices.subarray(start, start + this.skirtEdgeIndexCount), writeOffset)
+      writeOffset += this.skirtEdgeIndexCount
+    }
+
+    if (flags.bottom) copyEdge(0)
+    if (flags.top) copyEdge(1)
+    if (flags.left) copyEdge(2)
+    if (flags.right) copyEdge(3)
+
+    return next
   }
 
   sampleVisualRadius(dirLike: Vec3Like): number | null {

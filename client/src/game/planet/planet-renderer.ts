@@ -409,11 +409,16 @@ export class PlanetRenderer {
     const byLod: Record<string, number> = {}
     let visible = 0
     let detailedMaterialChunks = 0
+    let skirtEdges = 0
     for (const [key, chunk] of this.chunks) {
       const lod = key.split('_')[1] ?? '?'
       byLod[lod] = (byLod[lod] ?? 0) + 1
       if (chunk.mesh.visible) visible++
       if (chunk.mesh.material === this.material) detailedMaterialChunks++
+      skirtEdges += (chunk.skirtFlags.bottom ? 1 : 0)
+        + (chunk.skirtFlags.top ? 1 : 0)
+        + (chunk.skirtFlags.left ? 1 : 0)
+        + (chunk.skirtFlags.right ? 1 : 0)
     }
 
     return {
@@ -427,6 +432,7 @@ export class PlanetRenderer {
       workers: this.workerSlots.length,
       completedBuilds: this.completedWorkerJobs.length,
       pendingCollapses: this.pendingCollapseKeys.size,
+      skirtEdges,
       generated: this.generatedChunksLastFrame,
       chunkGenerationMs: this.chunkGenerationMsLastFrame,
       chunkIntegrationMs: this.chunkIntegrationMsLastFrame,
@@ -546,8 +552,9 @@ export class PlanetRenderer {
       }
     }
 
-    // Skirts are generated with stable edge coverage so chunk lighting/geometry
-    // never gets rebuilt synchronously during camera movement.
+    // Only hide skirt edges that are safely covered by a visible same-face,
+    // same-LOD neighbor. LOD boundaries and cube-face boundaries keep skirts.
+    this.updateVisibleSkirts(renderKeys)
   }
 
   private updateQuadtree(
@@ -837,9 +844,7 @@ export class PlanetRenderer {
         node,
         terrain: this.terrainParams,
         gridSize: this.gridSize,
-        skirts: this.skirts
-          ? this.computeSkirtFlags()
-          : { bottom: false, top: false, left: false, right: false },
+        skirts: this.computeSkirtFlags(),
       })
     }
   }
@@ -927,9 +932,7 @@ export class PlanetRenderer {
   }
 
   private createChunk(node: QuadtreeNode, geometryData?: TerrainChunkGeometryData): TerrainChunk {
-    const skirtFlags: SkirtFlags = this.skirts
-      ? this.computeSkirtFlags()
-      : { bottom: false, top: false, left: false, right: false }
+    const skirtFlags = this.computeSkirtFlags()
 
     return new TerrainChunk(
       node,
@@ -942,7 +945,42 @@ export class PlanetRenderer {
   }
 
   private computeSkirtFlags(): SkirtFlags {
-    return { bottom: true, top: true, left: true, right: true }
+    return this.skirts
+      ? { bottom: true, top: true, left: true, right: true }
+      : { bottom: false, top: false, left: false, right: false }
+  }
+
+  private updateVisibleSkirts(renderKeys: Set<string>) {
+    for (const key of renderKeys) {
+      const chunk = this.chunks.get(key)
+      if (!chunk) continue
+      chunk.setSkirtFlags(this.computeVisibleSkirtFlags(chunk.node, renderKeys))
+    }
+  }
+
+  private computeVisibleSkirtFlags(node: QuadtreeNode, renderKeys: Set<string>): SkirtFlags {
+    if (!this.skirts) return { bottom: false, top: false, left: false, right: false }
+
+    return {
+      bottom: !this.hasVisibleSameFaceLodNeighbor(node, 0, -1, renderKeys),
+      top: !this.hasVisibleSameFaceLodNeighbor(node, 0, 1, renderKeys),
+      left: !this.hasVisibleSameFaceLodNeighbor(node, -1, 0, renderKeys),
+      right: !this.hasVisibleSameFaceLodNeighbor(node, 1, 0, renderKeys),
+    }
+  }
+
+  private hasVisibleSameFaceLodNeighbor(
+    node: QuadtreeNode,
+    dx: number,
+    dy: number,
+    renderKeys: Set<string>,
+  ): boolean {
+    const cells = 1 << node.lod
+    const x = node.x + dx
+    const y = node.y + dy
+    if (x < 0 || y < 0 || x >= cells || y >= cells) return false
+
+    return renderKeys.has(nodeKey(node.face, node.lod, x, y))
   }
 
   private createFallbackGeometry(planetRadius: number): THREE.SphereGeometry {
