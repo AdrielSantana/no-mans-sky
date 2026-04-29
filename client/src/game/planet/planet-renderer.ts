@@ -76,6 +76,8 @@ export class PlanetRenderer {
   private terrainParams: PlanetTerrainParams
   private lodDistances: number[]
   private requestedTerrainWorkers: number
+  private nodeSurfaceRadiusCache = new Map<string, number>()
+  private chunkPriorityCache = new Map<string, number>()
   private time = 0
 
   // Chunk generation queue
@@ -400,6 +402,9 @@ export class PlanetRenderer {
 
     const planetPos = new THREE.Vector3()
     this.group.getWorldPosition(planetPos)
+    const planetQuat = new THREE.Quaternion()
+    this.group.getWorldQuaternion(planetQuat)
+    const localCamPos = camPos.clone().sub(planetPos).applyQuaternion(planetQuat.clone().invert())
 
     const byLod: Record<string, number> = {}
     let visible = 0
@@ -413,7 +418,7 @@ export class PlanetRenderer {
 
     return {
       radius: this.planetRadius,
-      surfaceDistance: camPos.distanceTo(planetPos) - this.planetRadius,
+      surfaceDistance: this.getLocalSurfaceDistance(localCamPos),
       chunks: this.chunks.size,
       visible,
       detailedMaterialChunks,
@@ -445,9 +450,9 @@ export class PlanetRenderer {
     this.group.getWorldQuaternion(planetQuat)
     const inversePlanetQuat = planetQuat.clone().invert()
     const localCamPos = camPos.clone().sub(planetPos).applyQuaternion(inversePlanetQuat)
+    this.chunkPriorityCache.clear()
 
-    const distToCenter = camPos.distanceTo(planetPos)
-    const surfaceDist = distToCenter - this.planetRadius
+    const surfaceDist = this.getLocalSurfaceDistance(localCamPos)
 
     // Update sun position uniform
     this.material.uniforms.uSunPosition.value.copy(this.sunPosition)
@@ -599,14 +604,33 @@ export class PlanetRenderer {
   }
 
   private getLocalChunkDistToCamera(node: QuadtreeNode, localCamPos: THREE.Vector3): number {
-    const center = getNodeCenter(node).multiplyScalar(this.planetRadius)
-    return Math.max(0, localCamPos.distanceTo(center) - this.getNodeBoundingRadius(node))
+    const dir = getNodeCenter(node)
+    const surfaceRadius = this.getNodeSurfaceRadius(node)
+    const center = dir.multiplyScalar(surfaceRadius)
+    return Math.max(0, localCamPos.distanceTo(center) - this.getNodeBoundingRadius(node, surfaceRadius))
   }
 
-  private getNodeBoundingRadius(node: QuadtreeNode): number {
+  private getNodeSurfaceRadius(node: QuadtreeNode): number {
+    const key = nodeKey(node.face, node.lod, node.x, node.y)
+    const cached = this.nodeSurfaceRadiusCache.get(key)
+    if (cached !== undefined) return cached
+
+    const radius = samplePlanetRadius(getNodeCenter(node), this.terrainParams)
+    this.nodeSurfaceRadiusCache.set(key, radius)
+    return radius
+  }
+
+  private getNodeBoundingRadius(node: QuadtreeNode, radius = this.planetRadius): number {
     const levelCells = 1 << node.lod
-    const approxFacePatch = (2 / levelCells) * this.planetRadius
+    const approxFacePatch = (2 / levelCells) * radius
     return approxFacePatch * 1.5
+  }
+
+  private getLocalSurfaceDistance(localCamPos: THREE.Vector3): number {
+    if (localCamPos.lengthSq() === 0) return 0
+
+    const dir = localCamPos.clone().normalize()
+    return localCamPos.length() - samplePlanetRadius(dir, this.terrainParams)
   }
 
   private isChunkRelevantForDetail(node: QuadtreeNode, localCamPos: THREE.Vector3): boolean {
@@ -858,7 +882,7 @@ export class PlanetRenderer {
     const b = this.parseChunkKey(bKey)
     if (!a || !b) return a ? -1 : b ? 1 : aKey.localeCompare(bKey)
 
-    const distDelta = this.getLocalChunkDistToCamera(a, localCamPos) - this.getLocalChunkDistToCamera(b, localCamPos)
+    const distDelta = this.getChunkBuildPriority(aKey, a, localCamPos) - this.getChunkBuildPriority(bKey, b, localCamPos)
     if (Math.abs(distDelta) > 0.0001) return distDelta
 
     // If two chunks are equally near the camera, build the coarser coverage first
@@ -867,6 +891,15 @@ export class PlanetRenderer {
     if (a.face !== b.face) return a.face - b.face
     if (a.y !== b.y) return a.y - b.y
     return a.x - b.x
+  }
+
+  private getChunkBuildPriority(key: string, node: QuadtreeNode, localCamPos: THREE.Vector3): number {
+    const cached = this.chunkPriorityCache.get(key)
+    if (cached !== undefined) return cached
+
+    const priority = this.getLocalChunkDistToCamera(node, localCamPos)
+    this.chunkPriorityCache.set(key, priority)
+    return priority
   }
 
   private removeChildrenChunks(node: QuadtreeNode) {
