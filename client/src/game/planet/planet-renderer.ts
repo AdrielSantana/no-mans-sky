@@ -61,6 +61,8 @@ interface PlanetRendererParams {
   textureFadeDistance?: number
   atmosphereColor: string
   atmosphereDensity: number
+  sunColor?: string
+  sunTintStrength?: number
   noiseProfile?: {
     octaves: number
     lacunarity: number
@@ -113,6 +115,10 @@ export class PlanetRenderer {
   private oceanMesh: THREE.Mesh | null = null
   private atmosphereMesh: THREE.Mesh | null = null
   private sunPosition = new THREE.Vector3(0, 0, 0)
+  private sunColor = new THREE.Color(0xfff2c8)
+  private atmosphereColor = new THREE.Color(0x6fa8dc)
+  private atmosphereLightColor = new THREE.Color(0xc4d5df)
+  private sunTintStrength = 0.85
   private terrainParams: PlanetTerrainParams
   private lodDistances: number[]
   private requestedTerrainWorkers: number
@@ -148,6 +154,10 @@ export class PlanetRenderer {
     this.skirts = params.skirts ?? true
     this.horizonMargin = params.horizonMargin ?? 1.0
     this.requestedTerrainWorkers = params.terrainWorkers ?? 0
+    this.sunColor.set(params.sunColor ?? '#fff2c8')
+    this.atmosphereColor.set(params.atmosphereColor)
+    this.sunTintStrength = params.sunTintStrength ?? 0.85
+    this.updateAtmosphereLightColor()
     this.group = new THREE.Group()
     scene.add(this.group)
 
@@ -212,6 +222,9 @@ export class PlanetRenderer {
       textureFarStrength: 0.42,
       atmosphereColor: params.atmosphereColor,
       sunPosition: this.sunPosition,
+      sunColor: this.sunColor,
+      atmosphereLightColor: this.atmosphereLightColor,
+      sunTintStrength: this.sunTintStrength,
       planetRadius: planetRadius,
       octaves: this.noiseProfile.octaves,
       frequency: this.noiseProfile.frequency,
@@ -231,6 +244,9 @@ export class PlanetRenderer {
       textureFarScale: FAR_TEXTURE_LOD_BANDS[0].farScale,
       textureFarStrength: FAR_TEXTURE_LOD_BANDS[0].farStrength,
       sunPosition: this.sunPosition,
+      sunColor: this.sunColor,
+      atmosphereLightColor: this.atmosphereLightColor,
+      sunTintStrength: this.sunTintStrength,
       planetRadius: planetRadius,
       octaves: this.noiseProfile.octaves,
       frequency: this.noiseProfile.frequency,
@@ -264,6 +280,9 @@ export class PlanetRenderer {
       textureFarScale: 0.045,
       textureFarStrength: 1.0,
       sunPosition: this.sunPosition,
+      sunColor: this.sunColor,
+      atmosphereLightColor: this.atmosphereLightColor,
+      sunTintStrength: this.sunTintStrength,
       planetRadius,
       octaves: this.noiseProfile.octaves,
       frequency: this.noiseProfile.frequency,
@@ -303,6 +322,9 @@ export class PlanetRenderer {
         thermalStrength: this.noiseProfile.thermalStrength,
         detailStrength: this.noiseProfile.detailStrength,
         sunPosition: this.sunPosition,
+        sunColor: this.sunColor,
+        atmosphereLightColor: this.atmosphereLightColor,
+        sunTintStrength: this.sunTintStrength,
       })
       this.oceanMesh = new THREE.Mesh(oceanGeo, this.oceanMaterial)
       this.oceanMesh.frustumCulled = false
@@ -311,11 +333,17 @@ export class PlanetRenderer {
     }
 
     if (params.atmosphereDensity > 0.01) {
-      const atmosphereGeo = new THREE.SphereGeometry(planetRadius * 1.08, 96, 96)
+      const atmosphereRadius = planetRadius * 1.08
+      const atmosphereGeo = new THREE.SphereGeometry(atmosphereRadius, 96, 96)
       this.atmosphereMaterial = createAtmosphereMaterial({
         atmosphereColor: params.atmosphereColor,
         density: params.atmosphereDensity,
+        sunColor: this.sunColor,
+        atmosphereLightColor: this.atmosphereLightColor,
+        sunTintStrength: this.sunTintStrength,
         sunPosition: this.sunPosition,
+        planetRadius,
+        atmosphereRadius,
       })
       this.atmosphereMesh = new THREE.Mesh(atmosphereGeo, this.atmosphereMaterial)
       this.atmosphereMesh.frustumCulled = false
@@ -350,6 +378,9 @@ export class PlanetRenderer {
       textureFarScale: band.farScale,
       textureFarStrength: band.farStrength,
       sunPosition: this.sunPosition,
+      sunColor: this.sunColor,
+      atmosphereLightColor: this.atmosphereLightColor,
+      sunTintStrength: this.sunTintStrength,
       planetRadius: this.planetRadius,
       octaves: this.noiseProfile.octaves,
       frequency: this.noiseProfile.frequency,
@@ -374,6 +405,47 @@ export class PlanetRenderer {
 
   setSunPosition(pos: THREE.Vector3) {
     this.sunPosition.copy(pos)
+  }
+
+  private updateAtmosphereLightColor() {
+    const sunBlend = THREE.MathUtils.clamp(0.44 + this.sunTintStrength * 0.14, 0.35, 0.72)
+    this.atmosphereLightColor.copy(this.atmosphereColor).lerp(this.sunColor, sunBlend)
+  }
+
+  private copyColorUniform(material: THREE.ShaderMaterial | null, name: string, color: THREE.Color) {
+    const uniform = material?.uniforms[name]
+    if (uniform?.value?.copy) uniform.value.copy(color)
+  }
+
+  private setFloatUniform(material: THREE.ShaderMaterial | null, name: string, value: number) {
+    const uniform = material?.uniforms[name]
+    if (uniform) uniform.value = value
+  }
+
+  private updateLightColorUniforms() {
+    this.updateAtmosphereLightColor()
+    const materials = [
+      this.material,
+      ...this.farLodMaterials,
+      this.fallbackMaterial,
+      this.oceanMaterial,
+      this.atmosphereMaterial,
+    ]
+    for (const material of materials) {
+      this.copyColorUniform(material, 'uSunColor', this.sunColor)
+      this.copyColorUniform(material, 'uAtmosphereLightColor', this.atmosphereLightColor)
+      this.setFloatUniform(material, 'uSunTintStrength', this.sunTintStrength)
+    }
+  }
+
+  setSunColor(color: string) {
+    this.sunColor.set(color)
+    this.updateLightColorUniforms()
+  }
+
+  setSunTintStrength(strength: number) {
+    this.sunTintStrength = strength
+    this.updateLightColorUniforms()
   }
 
   setDebugWireframe(enabled: boolean) {
@@ -542,6 +614,10 @@ export class PlanetRenderer {
     this.fallbackMaterial.uniforms.uSunPosition.value.copy(this.sunPosition)
     this.oceanMaterial?.uniforms.uSunPosition.value.copy(this.sunPosition)
     this.atmosphereMaterial?.uniforms.uSunPosition.value.copy(this.sunPosition)
+    this.updateLightColorUniforms()
+    if (this.atmosphereMaterial) {
+      this.group.getWorldPosition(this.atmosphereMaterial.uniforms.uPlanetCenter.value)
+    }
     if (this.oceanMaterial) {
       this.oceanMaterial.uniforms.uTime.value = this.time
       const farBlend = THREE.MathUtils.smoothstep(surfaceDist, this.planetRadius * 1.1, this.planetRadius * 4.0)
@@ -556,7 +632,7 @@ export class PlanetRenderer {
         ? this.simpleTerrainMaterial
         : this.fallbackMaterial
       if (this.oceanMesh) this.oceanMesh.visible = this.debugShowOcean
-      if (this.atmosphereMesh) this.atmosphereMesh.visible = false
+      if (this.atmosphereMesh) this.atmosphereMesh.visible = this.debugShowAtmosphere
       this.removeAllChunks()
       return
     }

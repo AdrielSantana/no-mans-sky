@@ -451,6 +451,29 @@ export function EditorPanel({ params, onChange }: Props) {
       <div className="editor-section">
         <div className="editor-section-title">Lighting</div>
         <div className="editor-row">
+          <span className="editor-label">Sun Color</span>
+          <input
+            className="editor-color"
+            type="color"
+            value={params.sunColor}
+            onChange={e => set('sunColor', e.target.value)}
+          />
+          <span className="editor-value">{params.sunColor}</span>
+        </div>
+        <div className="editor-row">
+          <span className="editor-label">Sun Tint</span>
+          <input
+            className="editor-slider"
+            type="range"
+            min={RANGES.sunTintStrength.min}
+            max={RANGES.sunTintStrength.max}
+            step={RANGES.sunTintStrength.step}
+            value={params.sunTintStrength}
+            onChange={e => set('sunTintStrength', Number(e.target.value))}
+          />
+          <span className="editor-value">{params.sunTintStrength.toFixed(2)}</span>
+        </div>
+        <div className="editor-row">
           <span className="editor-label">Sun Azimuth</span>
           <input
             className="editor-slider"

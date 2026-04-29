@@ -12,6 +12,8 @@ export interface EditorParams {
   textureFadeDistance: number
   atmosphereColor: string
   atmosphereDensity: number
+  sunColor: string
+  sunTintStrength: number
   sunAzimuth: number
   sunElevation: number
   // Noise profile overrides
@@ -86,6 +88,8 @@ export const DEFAULT_PARAMS: EditorParams = {
   textureFadeDistance: 420,
   atmosphereColor: '#6fa8dc',
   atmosphereDensity: 0.35,
+  sunColor: '#fff2c8',
+  sunTintStrength: 0.85,
   sunAzimuth: 315,
   sunElevation: 28,
   octaves: 6,
@@ -122,6 +126,7 @@ export const RANGES = {
   textureNearDistance: { min: 10, max: 5000, step: 10 },
   textureFadeDistance: { min: 10, max: 10000, step: 10 },
   atmosphereDensity: { min: 0, max: 1, step: 0.01 },
+  sunTintStrength: { min: 0, max: 2, step: 0.01 },
   sunAzimuth: { min: 0, max: 360, step: 1 },
   sunElevation: { min: -20, max: 80, step: 1 },
   octaves: { min: 1, max: 8, step: 1 },

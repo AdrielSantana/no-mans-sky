@@ -84,6 +84,10 @@ export class GameEngine {
     this.sunLight?.position.copy(position)
   }
 
+  setSunColor(color: string) {
+    this.sunLight?.color.set(color)
+  }
+
   setBloomEnabled(enabled: boolean) {
     if (this.bloomPass) this.bloomPass.enabled = enabled
   }

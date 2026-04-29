@@ -35,6 +35,8 @@ function createPlanet(scene: THREE.Scene, params: EditorParams): PlanetRenderer 
     textureFadeDistance: params.textureFadeDistance,
     atmosphereColor: params.atmosphereColor,
     atmosphereDensity: params.atmosphereDensity,
+    sunColor: params.sunColor,
+    sunTintStrength: params.sunTintStrength,
     noiseProfile: {
       octaves: params.octaves,
       lacunarity: params.lacunarity,
@@ -170,6 +172,8 @@ export function EditorCanvas({ params }: Props) {
     const sunPosition = buildSunPosition(params)
     planet.setSunPosition(sunPosition)
     engine.setSunPosition(sunPosition)
+    planet.setSunColor(params.sunColor)
+    engine.setSunColor(params.sunColor)
     applyDebugSettings(engine, planet, params)
     planetRef.current = planet
     initializedRef.current = true
@@ -290,6 +294,9 @@ export function EditorCanvas({ params }: Props) {
     const sunPosition = buildSunPosition(params)
     planetRef.current?.setSunPosition(sunPosition)
     engineRef.current?.setSunPosition(sunPosition)
+    planetRef.current?.setSunColor(params.sunColor)
+    planetRef.current?.setSunTintStrength(params.sunTintStrength)
+    engineRef.current?.setSunColor(params.sunColor)
     if (engineRef.current && planetRef.current) {
       applyDebugSettings(engineRef.current, planetRef.current, params)
     }
@@ -309,6 +316,9 @@ export function EditorCanvas({ params }: Props) {
       const latestSunPosition = buildSunPosition(paramsRef.current)
       newPlanet.setSunPosition(latestSunPosition)
       engine.setSunPosition(latestSunPosition)
+      newPlanet.setSunColor(paramsRef.current.sunColor)
+      newPlanet.setSunTintStrength(paramsRef.current.sunTintStrength)
+      engine.setSunColor(paramsRef.current.sunColor)
       applyDebugSettings(engine, newPlanet, paramsRef.current)
       planetRef.current = newPlanet
       planetKeyRef.current = buildPlanetKey(paramsRef.current)
