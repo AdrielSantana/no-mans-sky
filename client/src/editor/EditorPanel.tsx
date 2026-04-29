@@ -408,6 +408,87 @@ export function EditorPanel({ params, onChange }: Props) {
           <span className="editor-value">{params.sunElevation.toFixed(0)}°</span>
         </div>
       </div>
+
+      <div className="editor-section">
+        <div className="editor-section-title">Diagnostics</div>
+        <div className="editor-row">
+          <label style={{ display: 'flex', alignItems: 'center', gap: 6, cursor: 'pointer' }}>
+            <input
+              type="checkbox"
+              checked={params.debugBloom}
+              onChange={e => set('debugBloom', e.target.checked)}
+              style={{ accentColor: '#2dd4a7' }}
+            />
+            <span className="editor-label" style={{ width: 'auto' }}>Bloom</span>
+          </label>
+        </div>
+        <div className="editor-row">
+          <label style={{ display: 'flex', alignItems: 'center', gap: 6, cursor: 'pointer' }}>
+            <input
+              type="checkbox"
+              checked={params.debugOcean}
+              onChange={e => set('debugOcean', e.target.checked)}
+              style={{ accentColor: '#2dd4a7' }}
+            />
+            <span className="editor-label" style={{ width: 'auto' }}>Ocean</span>
+          </label>
+        </div>
+        <div className="editor-row">
+          <label style={{ display: 'flex', alignItems: 'center', gap: 6, cursor: 'pointer' }}>
+            <input
+              type="checkbox"
+              checked={params.debugAtmosphere}
+              onChange={e => set('debugAtmosphere', e.target.checked)}
+              style={{ accentColor: '#2dd4a7' }}
+            />
+            <span className="editor-label" style={{ width: 'auto' }}>Atmosphere</span>
+          </label>
+        </div>
+        <div className="editor-row">
+          <label style={{ display: 'flex', alignItems: 'center', gap: 6, cursor: 'pointer' }}>
+            <input
+              type="checkbox"
+              checked={params.debugSimpleTerrain}
+              onChange={e => set('debugSimpleTerrain', e.target.checked)}
+              style={{ accentColor: '#2dd4a7' }}
+            />
+            <span className="editor-label" style={{ width: 'auto' }}>Simple Terrain</span>
+          </label>
+        </div>
+        <div className="editor-row">
+          <label style={{ display: 'flex', alignItems: 'center', gap: 6, cursor: 'pointer' }}>
+            <input
+              type="checkbox"
+              checked={params.debugNearTerrainShader}
+              onChange={e => set('debugNearTerrainShader', e.target.checked)}
+              style={{ accentColor: '#2dd4a7' }}
+            />
+            <span className="editor-label" style={{ width: 'auto' }}>Near Terrain Shader</span>
+          </label>
+        </div>
+        <div className="editor-row">
+          <label style={{ display: 'flex', alignItems: 'center', gap: 6, cursor: 'pointer' }}>
+            <input
+              type="checkbox"
+              checked={params.debugFarTerrainShader}
+              onChange={e => set('debugFarTerrainShader', e.target.checked)}
+              style={{ accentColor: '#2dd4a7' }}
+            />
+            <span className="editor-label" style={{ width: 'auto' }}>Far Terrain Shader</span>
+          </label>
+        </div>
+        <div className="editor-row">
+          <label style={{ display: 'flex', alignItems: 'center', gap: 6, cursor: 'pointer' }}>
+            <input
+              type="checkbox"
+              checked={params.debugFallbackTerrainShader}
+              onChange={e => set('debugFallbackTerrainShader', e.target.checked)}
+              style={{ accentColor: '#2dd4a7' }}
+            />
+            <span className="editor-label" style={{ width: 'auto' }}>Fallback Terrain Shader</span>
+          </label>
+        </div>
+      </div>
     </div>
   )
 }

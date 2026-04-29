@@ -611,7 +611,6 @@ export function createPlanetFarMaterial(params: {
   uniform vec3 uColorB;
   uniform vec3 uSunPosition;
   uniform float uSeaHeight;
-  uniform float uProceduralVisualHeight;
 
   varying vec3 vWorldPos;
   varying vec3 vNormal;
@@ -676,9 +675,6 @@ export function createPlanetFarMaterial(params: {
 
   void main() {
     float visualHeight = vHeight;
-    if (uProceduralVisualHeight > 0.5) {
-      visualHeight = realisticTerrainHeight(normalize(vSphereDir));
-    }
     float heightNorm = smoothstep(-1.0, 1.0, visualHeight);
     float latitude = abs(vSphereDir.y);
     float moisture = saturate(visualHeight * 0.75 + 0.5);
@@ -728,7 +724,6 @@ export function createPlanetFarMaterial(params: {
       uThermalStrength: { value: params.thermalStrength },
       uDetailStrength: { value: params.detailStrength },
       uSeaHeight: { value: getSeaHeight(params.waterLevel, params.planetType) },
-      uProceduralVisualHeight: { value: 1 },
       uColorA: { value: colorA },
       uColorB: { value: colorB },
       uSunPosition: { value: params.sunPosition.clone() },
@@ -770,13 +765,16 @@ export function createOceanMaterial(params: {
   #include <logdepthbuf_pars_vertex>
 
   uniform float uOceanLift;
+  attribute float terrainHeight;
 
   varying vec3 vWorldPos;
   varying vec3 vNormal;
   varying vec3 vSphereDir;
+  varying float vTerrainHeight;
 
   void main() {
     vSphereDir = normalize(position);
+    vTerrainHeight = terrainHeight;
     vNormal = normalize((modelMatrix * vec4(normal, 0.0)).xyz);
     vec3 liftedPosition = position + vSphereDir * uOceanLift;
     vec4 worldPos = modelMatrix * vec4(liftedPosition, 1.0);
@@ -789,19 +787,20 @@ export function createOceanMaterial(params: {
   const fragmentShader = /* glsl */ `
   ${TERRAIN_NOISE}
   #include <logdepthbuf_pars_fragment>
-  ${TERRAIN_HEIGHT_GLSL}
 
   uniform float uPlanetRadius;
   uniform float uSeaHeight;
   uniform vec3 uSunPosition;
   uniform float uTime;
+  uniform float uSeed;
 
   varying vec3 vWorldPos;
   varying vec3 vNormal;
   varying vec3 vSphereDir;
+  varying float vTerrainHeight;
 
   void main() {
-    float terrainHeight = realisticTerrainHeight(normalize(vSphereDir));
+    float terrainHeight = vTerrainHeight;
     float belowSea = max(uSeaHeight - terrainHeight, 0.0);
     float waterMask = smoothstep(uSeaHeight + 0.010, uSeaHeight - 0.018, terrainHeight);
     if (waterMask <= 0.025) discard;
@@ -935,15 +934,14 @@ export function createPlanetFallbackMaterial(params: {
   `
 
   const fragmentShader = /* glsl */ `
-  ${TERRAIN_NOISE}
   #include <logdepthbuf_pars_fragment>
-  ${TERRAIN_HEIGHT_GLSL}
   ${TERRAIN_TEXTURE_GLSL}
 
   uniform vec3 uColorA;
   uniform vec3 uColorB;
   uniform vec3 uSunPosition;
   uniform float uSeaHeight;
+  uniform float uPlanetKind;
 
   varying vec3 vWorldPos;
   varying vec3 vNormal;
@@ -1006,7 +1004,7 @@ export function createPlanetFallbackMaterial(params: {
   }
 
   void main() {
-    float visualHeight = realisticTerrainHeight(normalize(vSphereDir));
+    float visualHeight = vHeight;
     float heightNorm = smoothstep(-1.0, 1.0, visualHeight);
     float latitude = abs(vSphereDir.y);
     float moisture = saturate(visualHeight * 0.75 + 0.5);

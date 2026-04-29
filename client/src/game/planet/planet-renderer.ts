@@ -64,6 +64,7 @@ export class PlanetRenderer {
   private material: THREE.ShaderMaterial
   private farMaterial: THREE.ShaderMaterial
   private fallbackMaterial: THREE.ShaderMaterial
+  private simpleTerrainMaterial = new THREE.MeshBasicMaterial({ color: 0x8f927f })
   private oceanMaterial: THREE.ShaderMaterial | null = null
   private atmosphereMaterial: THREE.ShaderMaterial | null = null
   private quadtrees: QuadtreeNode[] = []
@@ -87,6 +88,12 @@ export class PlanetRenderer {
   private generatedChunksLastFrame = 0
   private chunkGenerationMsLastFrame = 0
   private chunkIntegrationMsLastFrame = 0
+  private debugShowOcean = true
+  private debugShowAtmosphere = true
+  private debugSimpleTerrain = false
+  private debugNearTerrainShader = true
+  private debugFarTerrainShader = true
+  private debugFallbackTerrainShader = true
 
   constructor(
     scene: THREE.Scene,
@@ -235,6 +242,7 @@ export class PlanetRenderer {
       const coastClearance = Math.max(0.025, planetRadius * 0.00004)
       const waterRadius = planetRadius * (1 + seaHeight * params.terrainScale) + coastClearance
       const oceanGeo = new THREE.SphereGeometry(waterRadius, 160, 96)
+      this.addTerrainHeightAttribute(oceanGeo)
       this.oceanMaterial = createOceanMaterial({
         seed: this.noiseProfile.seed,
         planetType: params.planetType,
@@ -296,6 +304,22 @@ export class PlanetRenderer {
     this.farMaterial.wireframe = enabled
     this.fallbackMaterial.wireframe = enabled
     if (this.oceanMaterial) this.oceanMaterial.wireframe = enabled
+  }
+
+  setDebugRendering(options: {
+    showOcean?: boolean
+    showAtmosphere?: boolean
+    simpleTerrain?: boolean
+    nearTerrainShader?: boolean
+    farTerrainShader?: boolean
+    fallbackTerrainShader?: boolean
+  }) {
+    if (options.showOcean !== undefined) this.debugShowOcean = options.showOcean
+    if (options.showAtmosphere !== undefined) this.debugShowAtmosphere = options.showAtmosphere
+    if (options.simpleTerrain !== undefined) this.debugSimpleTerrain = options.simpleTerrain
+    if (options.nearTerrainShader !== undefined) this.debugNearTerrainShader = options.nearTerrainShader
+    if (options.farTerrainShader !== undefined) this.debugFarTerrainShader = options.farTerrainShader
+    if (options.fallbackTerrainShader !== undefined) this.debugFallbackTerrainShader = options.fallbackTerrainShader
   }
 
   private initTerrainWorkers() {
@@ -413,7 +437,6 @@ export class PlanetRenderer {
     this.fallbackMaterial.uniforms.uSunPosition.value.copy(this.sunPosition)
     this.oceanMaterial?.uniforms.uSunPosition.value.copy(this.sunPosition)
     this.atmosphereMaterial?.uniforms.uSunPosition.value.copy(this.sunPosition)
-    this.farMaterial.uniforms.uProceduralVisualHeight.value = surfaceDist > (this.lodDistances[2] ?? this.planetRadius * 2) ? 1 : 0
     if (this.oceanMaterial) {
       this.oceanMaterial.uniforms.uTime.value = this.time
       const farBlend = THREE.MathUtils.smoothstep(surfaceDist, this.planetRadius * 1.1, this.planetRadius * 4.0)
@@ -424,15 +447,21 @@ export class PlanetRenderer {
 
     if (!useTerrain) {
       this.fallbackSphere.visible = true
-      if (this.oceanMesh) this.oceanMesh.visible = true
+      this.fallbackSphere.material = this.debugSimpleTerrain || !this.debugFallbackTerrainShader
+        ? this.simpleTerrainMaterial
+        : this.fallbackMaterial
+      if (this.oceanMesh) this.oceanMesh.visible = this.debugShowOcean
       if (this.atmosphereMesh) this.atmosphereMesh.visible = false
       this.removeAllChunks()
       return
     }
 
     this.fallbackSphere.visible = false
-    if (this.oceanMesh) this.oceanMesh.visible = true
-    if (this.atmosphereMesh) this.atmosphereMesh.visible = true
+    this.fallbackSphere.material = this.debugSimpleTerrain || !this.debugFallbackTerrainShader
+      ? this.simpleTerrainMaterial
+      : this.fallbackMaterial
+    if (this.oceanMesh) this.oceanMesh.visible = this.debugShowOcean
+    if (this.atmosphereMesh) this.atmosphereMesh.visible = this.debugShowAtmosphere
 
     // 1. Update quadtree structure (create/destroy children based on distance)
     for (const root of this.quadtrees) {
@@ -483,9 +512,13 @@ export class PlanetRenderer {
       } else {
         chunk.mesh.visible = renderKeys.has(key)
         if (chunk.mesh.visible) {
-          chunk.mesh.material = this.shouldUseDetailedMaterial(chunk, camPos, planetPos)
-            ? this.material
-            : this.farMaterial
+          if (this.debugSimpleTerrain) {
+            chunk.mesh.material = this.simpleTerrainMaterial
+          } else if (this.shouldUseDetailedMaterial(chunk, camPos, planetPos)) {
+            chunk.mesh.material = this.debugNearTerrainShader ? this.material : this.simpleTerrainMaterial
+          } else {
+            chunk.mesh.material = this.debugFarTerrainShader ? this.farMaterial : this.simpleTerrainMaterial
+          }
         }
       }
     }
@@ -830,6 +863,11 @@ export class PlanetRenderer {
 
   private createFallbackGeometry(planetRadius: number): THREE.SphereGeometry {
     const geometry = new THREE.SphereGeometry(planetRadius, 32, 32)
+    this.addTerrainHeightAttribute(geometry)
+    return geometry
+  }
+
+  private addTerrainHeightAttribute(geometry: THREE.BufferGeometry) {
     const positions = geometry.getAttribute('position')
     const heights = new Float32Array(positions.count)
     const dir = new THREE.Vector3()
@@ -840,7 +878,6 @@ export class PlanetRenderer {
     }
 
     geometry.setAttribute('terrainHeight', new THREE.BufferAttribute(heights, 1))
-    return geometry
   }
 
   private removeAllChunks() {
@@ -878,6 +915,7 @@ export class PlanetRenderer {
     this.material.dispose()
     this.farMaterial.dispose()
     this.fallbackMaterial.dispose()
+    this.simpleTerrainMaterial.dispose()
     this.oceanMaterial?.dispose()
     this.atmosphereMaterial?.dispose()
     this.oceanMesh?.geometry.dispose()

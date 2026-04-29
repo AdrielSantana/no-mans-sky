@@ -31,6 +31,13 @@ export interface EditorParams {
   skirts: boolean
   // Horizon culling margin multiplier (1.0 = balanced, higher = more generous)
   horizonMargin: number
+  debugBloom: boolean
+  debugOcean: boolean
+  debugAtmosphere: boolean
+  debugSimpleTerrain: boolean
+  debugNearTerrainShader: boolean
+  debugFarTerrainShader: boolean
+  debugFallbackTerrainShader: boolean
 }
 
 /**
@@ -86,6 +93,13 @@ export const DEFAULT_PARAMS: EditorParams = {
   autoLod: true,
   skirts: true,
   horizonMargin: 1.0,
+  debugBloom: true,
+  debugOcean: true,
+  debugAtmosphere: true,
+  debugSimpleTerrain: false,
+  debugNearTerrainShader: true,
+  debugFarTerrainShader: true,
+  debugFallbackTerrainShader: true,
 }
 
 export const RANGES = {

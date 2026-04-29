@@ -50,6 +50,18 @@ function createPlanet(scene: THREE.Scene, params: EditorParams): PlanetRenderer 
   })
 }
 
+function applyDebugSettings(engine: GameEngine, planet: PlanetRenderer, params: EditorParams) {
+  engine.setBloomEnabled(params.debugBloom)
+  planet.setDebugRendering({
+    showOcean: params.debugOcean,
+    showAtmosphere: params.debugAtmosphere,
+    simpleTerrain: params.debugSimpleTerrain,
+    nearTerrainShader: params.debugNearTerrainShader,
+    farTerrainShader: params.debugFarTerrainShader,
+    fallbackTerrainShader: params.debugFallbackTerrainShader,
+  })
+}
+
 function buildSunPosition(params: EditorParams): THREE.Vector3 {
   const azimuth = THREE.MathUtils.degToRad(params.sunAzimuth)
   const elevation = THREE.MathUtils.degToRad(params.sunElevation)
@@ -148,6 +160,7 @@ export function EditorCanvas({ params }: Props) {
     const sunPosition = buildSunPosition(params)
     planet.setSunPosition(sunPosition)
     engine.setSunPosition(sunPosition)
+    applyDebugSettings(engine, planet, params)
     planetRef.current = planet
     initializedRef.current = true
 
@@ -202,6 +215,8 @@ export function EditorCanvas({ params }: Props) {
           `update=${avg(updateSamples).toFixed(2)}ms p95=${pct(sortedUpdates, 0.95).toFixed(2)}ms`,
           `draw=${engine.renderer.info.render.calls} tri=${engine.renderer.info.render.triangles}`,
           `geo=${engine.renderer.info.memory.geometries} tex=${engine.renderer.info.memory.textures}`,
+          `diag bloom=${paramsRef.current.debugBloom ? 'on' : 'off'} ocean=${paramsRef.current.debugOcean ? 'on' : 'off'} atmosphere=${paramsRef.current.debugAtmosphere ? 'on' : 'off'} simpleTerrain=${paramsRef.current.debugSimpleTerrain ? 'on' : 'off'}`,
+          `terrain near=${paramsRef.current.debugNearTerrainShader ? 'shader' : 'simple'} far=${paramsRef.current.debugFarTerrainShader ? 'shader' : 'simple'} fallback=${paramsRef.current.debugFallbackTerrainShader ? 'shader' : 'simple'}`,
           stats
             ? `planet dist=${stats.surfaceDistance.toFixed(1)} chunks=${stats.visible}/${stats.chunks} pending=${stats.pending} building=${stats.building} generated=${stats.generated} build=${stats.chunkGenerationMs.toFixed(2)}ms integrate=${stats.chunkIntegrationMs.toFixed(2)}ms lod[${lods}]`
             : 'planet unavailable',
@@ -265,6 +280,9 @@ export function EditorCanvas({ params }: Props) {
     const sunPosition = buildSunPosition(params)
     planetRef.current?.setSunPosition(sunPosition)
     engineRef.current?.setSunPosition(sunPosition)
+    if (engineRef.current && planetRef.current) {
+      applyDebugSettings(engineRef.current, planetRef.current, params)
+    }
 
     const planetKey = buildPlanetKey(params)
     if (planetKey === planetKeyRef.current) return
@@ -281,6 +299,7 @@ export function EditorCanvas({ params }: Props) {
       const latestSunPosition = buildSunPosition(paramsRef.current)
       newPlanet.setSunPosition(latestSunPosition)
       engine.setSunPosition(latestSunPosition)
+      applyDebugSettings(engine, newPlanet, paramsRef.current)
       planetRef.current = newPlanet
       planetKeyRef.current = buildPlanetKey(paramsRef.current)
       if (import.meta.env.DEV && window.__nmsEditorDebug?.engine === engine && walker) {

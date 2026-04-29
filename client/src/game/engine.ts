@@ -19,6 +19,7 @@ export class GameEngine {
   private clock = new THREE.Clock()
   private pixelRatioLimit = Math.min(window.devicePixelRatio, 2)
   private sunLight: THREE.PointLight | null = null
+  private bloomPass: UnrealBloomPass | null = null
 
   constructor(container: HTMLElement) {
     this.container = container
@@ -63,6 +64,7 @@ export class GameEngine {
     bloomPass.strength = 1
     bloomPass.radius = 0.5
     this.composer.addPass(bloomPass)
+    this.bloomPass = bloomPass
 
     this.setupLights()
 
@@ -80,6 +82,10 @@ export class GameEngine {
 
   setSunPosition(position: THREE.Vector3) {
     this.sunLight?.position.copy(position)
+  }
+
+  setBloomEnabled(enabled: boolean) {
+    if (this.bloomPass) this.bloomPass.enabled = enabled
   }
 
   getDeltaTime(): number {
