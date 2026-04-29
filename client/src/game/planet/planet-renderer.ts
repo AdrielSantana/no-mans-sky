@@ -490,20 +490,8 @@ export class PlanetRenderer {
       }
     }
 
-    // 5.5 Refresh stale skirts — chunks whose neighbors changed LOD since creation
-    if (this.skirts) {
-      let refreshed = 0
-      for (const [, chunk] of this.chunks) {
-        if (!chunk.mesh.visible || refreshed >= 3) continue
-        const newFlags = this.computeSkirtFlags(chunk.node)
-        if (!chunk.needsSkirtUpdate(newFlags)) continue
-
-        chunk.rebuildSkirts(newFlags, this.shouldUseDetailedMaterial(chunk, camPos, planetPos)
-          ? this.material
-          : this.farMaterial)
-        refreshed++
-      }
-    }
+    // Skirts are generated with stable edge coverage so chunk lighting/geometry
+    // never gets rebuilt synchronously during camera movement.
   }
 
   private updateQuadtree(
@@ -773,7 +761,7 @@ export class PlanetRenderer {
         terrain: this.terrainParams,
         gridSize: this.gridSize,
         skirts: this.skirts
-          ? this.computeSkirtFlags(node)
+          ? this.computeSkirtFlags()
           : { bottom: false, top: false, left: false, right: false },
       })
     }
@@ -823,7 +811,7 @@ export class PlanetRenderer {
 
   private createChunk(node: QuadtreeNode, geometryData?: TerrainChunkGeometryData): TerrainChunk {
     const skirtFlags: SkirtFlags = this.skirts
-      ? this.computeSkirtFlags(node)
+      ? this.computeSkirtFlags()
       : { bottom: false, top: false, left: false, right: false }
 
     return new TerrainChunk(
@@ -836,44 +824,8 @@ export class PlanetRenderer {
     )
   }
 
-  private findQuadtreeNode(face: CubeFace, lod: number, x: number, y: number): QuadtreeNode | null {
-    const root = this.quadtrees[face]
-    if (lod === 0) return root
-
-    let current = root
-    for (let level = 0; level < lod; level++) {
-      if (!current.children) return null
-      const levelsRemaining = lod - level - 1
-      const cx = (x >> levelsRemaining) & 1
-      const cy = (y >> levelsRemaining) & 1
-      current = current.children[cy * 2 + cx]
-    }
-
-    return current
-  }
-
-  private computeSkirtFlags(node: QuadtreeNode): SkirtFlags {
-    const { face, lod, x, y } = node
-    const maxCoord = (1 << lod) - 1
-    const allSkirts: SkirtFlags = { bottom: true, top: true, left: true, right: true }
-
-    // At LOD 0 the single node covers the entire face; always use skirts
-    if (lod === 0) return allSkirts
-
-    const checkNeighbor = (nX: number, nY: number): boolean => {
-      const neighbor = this.findQuadtreeNode(face, lod, nX, nY)
-      // Neighbor doesn't exist at this LOD (coarser parent) → need skirt
-      if (!neighbor) return true
-      // Neighbor has children (finer LOD) → need skirt
-      return !!neighbor.children
-    }
-
-    return {
-      bottom: y === 0 || checkNeighbor(x, y - 1),
-      top: y === maxCoord || checkNeighbor(x, y + 1),
-      left: x === 0 || checkNeighbor(x - 1, y),
-      right: x === maxCoord || checkNeighbor(x + 1, y),
-    }
+  private computeSkirtFlags(): SkirtFlags {
+    return { bottom: true, top: true, left: true, right: true }
   }
 
   private createFallbackGeometry(planetRadius: number): THREE.SphereGeometry {
