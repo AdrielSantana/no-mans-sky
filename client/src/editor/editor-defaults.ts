@@ -8,6 +8,8 @@ export interface EditorParams {
   colorB: string
   atmosphereColor: string
   atmosphereDensity: number
+  sunAzimuth: number
+  sunElevation: number
   // Noise profile overrides
   octaves: number
   lacunarity: number
@@ -67,6 +69,8 @@ export const DEFAULT_PARAMS: EditorParams = {
   colorB: '#8b7355',
   atmosphereColor: '#6fa8dc',
   atmosphereDensity: 0.35,
+  sunAzimuth: 315,
+  sunElevation: 28,
   octaves: 6,
   lacunarity: 2.0,
   gain: 0.5,
@@ -89,6 +93,8 @@ export const RANGES = {
   terrainScale: { min: 0.01, max: 1.0, step: 0.01 },
   waterLevel: { min: 0, max: 1, step: 0.01 },
   atmosphereDensity: { min: 0, max: 1, step: 0.01 },
+  sunAzimuth: { min: 0, max: 360, step: 1 },
+  sunElevation: { min: -20, max: 80, step: 1 },
   octaves: { min: 1, max: 8, step: 1 },
   lacunarity: { min: 1.0, max: 4.0, step: 0.1 },
   gain: { min: 0.1, max: 0.9, step: 0.01 },

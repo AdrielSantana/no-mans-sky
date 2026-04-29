@@ -18,6 +18,7 @@ export class GameEngine {
   private skybox: THREE.Mesh
   private clock = new THREE.Clock()
   private pixelRatioLimit = Math.min(window.devicePixelRatio, 2)
+  private sunLight: THREE.PointLight | null = null
 
   constructor(container: HTMLElement) {
     this.container = container
@@ -74,6 +75,11 @@ export class GameEngine {
     const sunLight = new THREE.PointLight(0xffcc66, 200, 0, 1.3)
     sunLight.position.set(0, 0, 0)
     this.scene.add(sunLight)
+    this.sunLight = sunLight
+  }
+
+  setSunPosition(position: THREE.Vector3) {
+    this.sunLight?.position.copy(position)
   }
 
   getDeltaTime(): number {

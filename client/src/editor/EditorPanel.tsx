@@ -378,6 +378,36 @@ export function EditorPanel({ params, onChange }: Props) {
           <span className="editor-value">{params.atmosphereDensity.toFixed(2)}</span>
         </div>
       </div>
+
+      <div className="editor-section">
+        <div className="editor-section-title">Lighting</div>
+        <div className="editor-row">
+          <span className="editor-label">Sun Azimuth</span>
+          <input
+            className="editor-slider"
+            type="range"
+            min={RANGES.sunAzimuth.min}
+            max={RANGES.sunAzimuth.max}
+            step={RANGES.sunAzimuth.step}
+            value={params.sunAzimuth}
+            onChange={e => set('sunAzimuth', Number(e.target.value))}
+          />
+          <span className="editor-value">{params.sunAzimuth.toFixed(0)}°</span>
+        </div>
+        <div className="editor-row">
+          <span className="editor-label">Sun Elevation</span>
+          <input
+            className="editor-slider"
+            type="range"
+            min={RANGES.sunElevation.min}
+            max={RANGES.sunElevation.max}
+            step={RANGES.sunElevation.step}
+            value={params.sunElevation}
+            onChange={e => set('sunElevation', Number(e.target.value))}
+          />
+          <span className="editor-value">{params.sunElevation.toFixed(0)}°</span>
+        </div>
+      </div>
     </div>
   )
 }

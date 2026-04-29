@@ -50,6 +50,48 @@ function createPlanet(scene: THREE.Scene, params: EditorParams): PlanetRenderer 
   })
 }
 
+function buildSunPosition(params: EditorParams): THREE.Vector3 {
+  const azimuth = THREE.MathUtils.degToRad(params.sunAzimuth)
+  const elevation = THREE.MathUtils.degToRad(params.sunElevation)
+  const cosElevation = Math.cos(elevation)
+  const distance = params.planetRadius * 24
+
+  return new THREE.Vector3(
+    Math.sin(azimuth) * cosElevation,
+    Math.sin(elevation),
+    Math.cos(azimuth) * cosElevation,
+  ).multiplyScalar(distance)
+}
+
+function buildPlanetKey(params: EditorParams): string {
+  return JSON.stringify({
+    seed: params.seed,
+    planetType: params.planetType,
+    planetRadius: params.planetRadius,
+    terrainScale: params.terrainScale,
+    waterLevel: params.waterLevel,
+    colorA: params.colorA,
+    colorB: params.colorB,
+    atmosphereColor: params.atmosphereColor,
+    atmosphereDensity: params.atmosphereDensity,
+    octaves: params.octaves,
+    lacunarity: params.lacunarity,
+    gain: params.gain,
+    frequency: params.frequency,
+    warpStrength: params.warpStrength,
+    continentalScale: params.continentalScale,
+    mountainScale: params.mountainScale,
+    erosionStrength: params.erosionStrength,
+    thermalStrength: params.thermalStrength,
+    detailStrength: params.detailStrength,
+    lodMultipliers: params.lodMultipliers,
+    gridSize: params.gridSize,
+    autoLod: params.autoLod,
+    skirts: params.skirts,
+    horizonMargin: params.horizonMargin,
+  })
+}
+
 function buildWalkerTarget(params: EditorParams, renderer: PlanetRenderer): PlanetWalkerTarget {
   return {
     id: 'editor-planet',
@@ -82,6 +124,7 @@ export function EditorCanvas({ params }: Props) {
   const walkerRef = useRef<PlanetWalkerController | null>(null)
   const paramsRef = useRef(params)
   const prevRadiusRef = useRef(params.planetRadius)
+  const planetKeyRef = useRef(buildPlanetKey(params))
   const initializedRef = useRef(false)
   const wireframeRef = useRef(false)
 
@@ -102,7 +145,9 @@ export function EditorCanvas({ params }: Props) {
     engine.setOrbitBounds(r * 0.5, r * 15)
 
     const planet = createPlanet(engine.scene, params)
-    planet.setSunPosition(new THREE.Vector3(0, 0, 0))
+    const sunPosition = buildSunPosition(params)
+    planet.setSunPosition(sunPosition)
+    engine.setSunPosition(sunPosition)
     planetRef.current = planet
     initializedRef.current = true
 
@@ -217,6 +262,13 @@ export function EditorCanvas({ params }: Props) {
     paramsRef.current = params
     if (!initializedRef.current) return
 
+    const sunPosition = buildSunPosition(params)
+    planetRef.current?.setSunPosition(sunPosition)
+    engineRef.current?.setSunPosition(sunPosition)
+
+    const planetKey = buildPlanetKey(params)
+    if (planetKey === planetKeyRef.current) return
+
     const timer = setTimeout(() => {
       const engine = engineRef.current
       const walker = walkerRef.current
@@ -226,8 +278,11 @@ export function EditorCanvas({ params }: Props) {
       if (oldPlanet) oldPlanet.dispose()
 
       const newPlanet = createPlanet(engine.scene, paramsRef.current)
-      newPlanet.setSunPosition(new THREE.Vector3(0, 0, 0))
+      const latestSunPosition = buildSunPosition(paramsRef.current)
+      newPlanet.setSunPosition(latestSunPosition)
+      engine.setSunPosition(latestSunPosition)
       planetRef.current = newPlanet
+      planetKeyRef.current = buildPlanetKey(paramsRef.current)
       if (import.meta.env.DEV && window.__nmsEditorDebug?.engine === engine && walker) {
         window.__nmsEditorDebug = { engine, planet: newPlanet, walker }
       }

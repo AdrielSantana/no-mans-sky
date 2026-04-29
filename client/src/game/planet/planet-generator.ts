@@ -224,6 +224,38 @@ float realisticTerrainHeight(vec3 sphereDir) {
 }
 `
 
+const PLANET_LIGHTING_GLSL = /* glsl */ `
+float terrainReliefOcclusion(float heightNorm, float slope) {
+  if (uPlanetKind > 0.5 && uPlanetKind < 1.5) return 1.0;
+
+  float rugged = smoothstep(0.06, 0.48, slope);
+  float lowPocket = 1.0 - smoothstep(0.34, 0.58, heightNorm);
+  float highCrisp = smoothstep(0.58, 0.86, heightNorm) * rugged;
+  return clamp(1.0 - rugged * 0.13 - lowPocket * 0.04 + highCrisp * 0.025, 0.78, 1.03);
+}
+
+vec3 applyPlanetLighting(vec3 albedo, vec3 normal, vec3 worldPos, float heightNorm, float slope) {
+  vec3 n = normalize(normal);
+  vec3 lightDir = normalize(uSunPosition - worldPos);
+  vec3 viewDir = normalize(cameraPosition - worldPos);
+  float nDotL = dot(n, lightDir);
+  float day = smoothstep(-0.18, 0.62, nDotL);
+  float direct = max(nDotL, 0.0);
+  float reliefOcclusion = terrainReliefOcclusion(heightNorm, slope);
+  float softDirect = direct * 0.78 + direct * direct * 0.24;
+  softDirect *= mix(0.82, 1.0, reliefOcclusion);
+  float ambient = mix(0.055, 0.22, day) * reliefOcclusion;
+  float rim = pow(1.0 - max(dot(n, viewDir), 0.0), 2.3) * smoothstep(-0.05, 0.50, nDotL);
+  float highland = smoothstep(0.60, 0.90, heightNorm) * 0.055;
+  float cavity = 1.0 - slope * mix(0.12, 0.05, day);
+  vec3 nightTint = vec3(0.025, 0.035, 0.060);
+  vec3 lit = albedo * (ambient + softDirect * 0.86 + highland) * cavity;
+  lit = mix(albedo * nightTint, lit, day);
+  lit += vec3(0.32, 0.48, 0.68) * rim * 0.16;
+  return lit;
+}
+`
+
 // Terrain chunks are displaced on the CPU so physics, wireframe, and rendering share one surface.
 export function createPlanetMaterial(params: {
   seed: number
@@ -264,6 +296,7 @@ export function createPlanetMaterial(params: {
   attribute float terrainHeight;
 
   varying vec3 vNormal;
+  varying vec3 vRadialNormal;
   varying vec3 vWorldPos;
   varying float vHeight;
   varying vec3 vSphereDir;
@@ -295,7 +328,9 @@ export function createPlanetMaterial(params: {
     float cameraDist = distance(cameraPosition, worldPos.xyz);
     vNearDetail = 1.0 - smoothstep(uLocalDetailNear, uLocalDetailFar, cameraDist);
 
-    vNormal = normalize((modelMatrix * vec4(sphereDir, 0.0)).xyz);
+    vRadialNormal = normalize((modelMatrix * vec4(sphereDir, 0.0)).xyz);
+    vNormal = normalize((modelMatrix * vec4(normal, 0.0)).xyz);
+    if (dot(vNormal, vRadialNormal) < 0.0) vNormal = -vNormal;
 
     vWorldPos = worldPos.xyz;
     gl_Position = projectionMatrix * viewMatrix * worldPos;
@@ -319,11 +354,14 @@ export function createPlanetMaterial(params: {
   uniform float uLocalDetailFar;
 
   varying vec3 vNormal;
+  varying vec3 vRadialNormal;
   varying vec3 vWorldPos;
   varying float vHeight;
   varying vec3 vSphereDir;
   varying float vDetail;
   varying float vNearDetail;
+
+  ${PLANET_LIGHTING_GLSL}
 
   float saturate(float v) {
     return clamp(v, 0.0, 1.0);
@@ -429,7 +467,7 @@ export function createPlanetMaterial(params: {
     float heightNorm = smoothstep(-1.0, 1.0, vHeight);
     float latitude = abs(vSphereDir.y);
     float moisture = saturate(vHeight * 0.75 + 0.5);
-    float slope = saturate(1.0 - dot(vNormal, normalize(vSphereDir)));
+    float slope = saturate(1.0 - dot(normalize(vNormal), normalize(vRadialNormal)));
     float coast = smoothstep(uSeaHeight - 0.014, uSeaHeight + 0.014, vHeight) * (1.0 - smoothstep(uSeaHeight + 0.026, uSeaHeight + 0.060, vHeight));
 
     vec3 terrainColor;
@@ -449,13 +487,8 @@ export function createPlanetMaterial(params: {
     terrainColor = applyTerrainTexture(terrainColor, vSphereDir, uPlanetKind, heightNorm, coast, rockMask, snowMask, moisture);
     terrainColor = mix(terrainColor, vec3(0.43, 0.39, 0.32), 0.06);
 
-    vec3 finalNormal = normalize(vNormal);
-    vec3 lightDir = normalize(uSunPosition - vWorldPos);
-    float diffuse = max(dot(finalNormal, lightDir), 0.0);
-    diffuse = floor(diffuse * 5.0) / 4.0;
-    float ambient = 0.26;
-
-    vec3 finalColor = terrainColor * (ambient + diffuse * 0.74);
+    vec3 finalNormal = detailNormal(normalize(vNormal), latitude, moisture, slope, coast);
+    vec3 finalColor = applyPlanetLighting(terrainColor, finalNormal, vWorldPos, heightNorm, slope);
     #include <logdepthbuf_fragment>
     gl_FragColor = vec4(finalColor, 1.0);
   }
@@ -531,6 +564,7 @@ export function createPlanetFarMaterial(params: {
 
   varying vec3 vWorldPos;
   varying vec3 vNormal;
+  varying vec3 vRadialNormal;
   varying vec3 vSphereDir;
   varying float vHeight;
   varying float vMacro;
@@ -559,7 +593,9 @@ export function createPlanetFarMaterial(params: {
     vec4 worldPos = modelMatrix * vec4(position, 1.0);
 
     vWorldPos = worldPos.xyz;
-    vNormal = normalize((modelMatrix * vec4(sphereDir, 0.0)).xyz);
+    vRadialNormal = normalize((modelMatrix * vec4(sphereDir, 0.0)).xyz);
+    vNormal = normalize((modelMatrix * vec4(normal, 0.0)).xyz);
+    if (dot(vNormal, vRadialNormal) < 0.0) vNormal = -vNormal;
     gl_Position = projectionMatrix * viewMatrix * worldPos;
     #include <logdepthbuf_vertex>
   }
@@ -579,9 +615,12 @@ export function createPlanetFarMaterial(params: {
 
   varying vec3 vWorldPos;
   varying vec3 vNormal;
+  varying vec3 vRadialNormal;
   varying vec3 vSphereDir;
   varying float vHeight;
   varying float vMacro;
+
+  ${PLANET_LIGHTING_GLSL}
 
   float saturate(float v) {
     return clamp(v, 0.0, 1.0);
@@ -643,7 +682,8 @@ export function createPlanetFarMaterial(params: {
     float heightNorm = smoothstep(-1.0, 1.0, visualHeight);
     float latitude = abs(vSphereDir.y);
     float moisture = saturate(visualHeight * 0.75 + 0.5);
-    float slope = saturate(1.0 - dot(vNormal, normalize(vSphereDir)));
+    vec3 shadingNormal = normalize(vNormal);
+    float slope = saturate(1.0 - dot(shadingNormal, normalize(vRadialNormal)));
     float coast = smoothstep(uSeaHeight - 0.014, uSeaHeight + 0.014, visualHeight) * (1.0 - smoothstep(uSeaHeight + 0.026, uSeaHeight + 0.060, visualHeight));
 
     vec3 terrain;
@@ -662,10 +702,7 @@ export function createPlanetFarMaterial(params: {
     terrain = applyTerrainTexture(terrain, vSphereDir, uPlanetKind, heightNorm, coast, rockMask, snowMask, moisture);
     terrain = mix(terrain, vec3(0.43, 0.39, 0.32), 0.06);
 
-    vec3 lightDir = normalize(uSunPosition - vWorldPos);
-    float diffuse = max(dot(normalize(vNormal), lightDir), 0.0);
-    diffuse = floor(diffuse * 5.0) / 4.0;
-    vec3 finalColor = terrain * (0.26 + diffuse * 0.74);
+    vec3 finalColor = applyPlanetLighting(terrain, shadingNormal, vWorldPos, heightNorm, slope);
     #include <logdepthbuf_fragment>
     gl_FragColor = vec4(finalColor, 1.0);
   }
@@ -777,7 +814,9 @@ export function createOceanMaterial(params: {
     vec3 lightDir = normalize(uSunPosition - vWorldPos);
     vec3 halfDir = normalize(lightDir + viewDir);
     float fresnel = pow(1.0 - max(dot(viewDir, waterNormal), 0.0), 4.0);
-    float diffuse = max(dot(waterNormal, lightDir), 0.0);
+    float nDotL = dot(waterNormal, lightDir);
+    float day = smoothstep(-0.12, 0.62, nDotL);
+    float diffuse = max(nDotL, 0.0);
 
     float cameraDist = distance(cameraPosition, vWorldPos);
     float farWater = smoothstep(0.65, 2.4, cameraDist / uPlanetRadius);
@@ -790,7 +829,7 @@ export function createOceanMaterial(params: {
     float coastFoam = (1.0 - smoothstep(0.16, 0.72, waterMask)) * smoothstep(0.10, 0.48, waterMask);
     float foam = (smoothstep(0.60, 0.88, swell + chop * 0.35) * 0.42 + coastFoam * 0.34) * detailFade;
     float surface = clamp(swell * 0.5 + chop * 0.18 + 0.5, 0.0, 1.0);
-    float specular = pow(max(dot(waterNormal, halfDir), 0.0), 96.0) * (0.35 + surface * 0.65);
+    float specular = pow(max(dot(waterNormal, halfDir), 0.0), 96.0) * (0.20 + surface * 0.55) * day;
 
     float terrainDepthHint = clamp(belowSea / 0.34, 0.0, 1.0);
     float depth = mix(0.34, terrainDepthHint, 0.42);
@@ -799,9 +838,10 @@ export function createOceanMaterial(params: {
     vec3 deep = vec3(0.02, 0.10, 0.20);
     vec3 color = mix(shallow, mid, smoothstep(0.04, 0.38, depth));
     color = mix(color, deep, smoothstep(0.42, 1.0, depth));
+    color *= mix(0.18, 1.0, day);
     color += diffuse * vec3(0.025, 0.07, 0.075);
     color += surface * vec3(0.015, 0.05, 0.055);
-    vec3 reflected = vec3(0.58, 0.76, 0.96) * fresnel * 0.68;
+    vec3 reflected = vec3(0.58, 0.76, 0.96) * fresnel * mix(0.18, 0.68, day);
     color = mix(color, vec3(0.82, 0.94, 0.95), foam * 0.28);
     color += reflected + specular * vec3(1.0, 0.92, 0.78);
 
@@ -877,13 +917,16 @@ export function createPlanetFallbackMaterial(params: {
 
   varying vec3 vWorldPos;
   varying vec3 vNormal;
+  varying vec3 vRadialNormal;
   varying vec3 vSphereDir;
   varying float vHeight;
 
   void main() {
     vSphereDir = normalize(position);
     vHeight = terrainHeight;
+    vRadialNormal = normalize((modelMatrix * vec4(vSphereDir, 0.0)).xyz);
     vNormal = normalize((modelMatrix * vec4(normal, 0.0)).xyz);
+    if (dot(vNormal, vRadialNormal) < 0.0) vNormal = -vNormal;
     vec4 worldPos = modelMatrix * vec4(position, 1.0);
     vWorldPos = worldPos.xyz;
     gl_Position = projectionMatrix * viewMatrix * worldPos;
@@ -904,8 +947,11 @@ export function createPlanetFallbackMaterial(params: {
 
   varying vec3 vWorldPos;
   varying vec3 vNormal;
+  varying vec3 vRadialNormal;
   varying vec3 vSphereDir;
   varying float vHeight;
+
+  ${PLANET_LIGHTING_GLSL}
 
   float saturate(float v) {
     return clamp(v, 0.0, 1.0);
@@ -964,7 +1010,8 @@ export function createPlanetFallbackMaterial(params: {
     float heightNorm = smoothstep(-1.0, 1.0, visualHeight);
     float latitude = abs(vSphereDir.y);
     float moisture = saturate(visualHeight * 0.75 + 0.5);
-    float slope = saturate(1.0 - dot(vNormal, normalize(vSphereDir)));
+    vec3 shadingNormal = normalize(vNormal);
+    float slope = saturate(1.0 - dot(shadingNormal, normalize(vRadialNormal)));
     float coast = smoothstep(uSeaHeight - 0.014, uSeaHeight + 0.014, visualHeight) * (1.0 - smoothstep(uSeaHeight + 0.026, uSeaHeight + 0.060, visualHeight));
 
     vec3 terrain;
@@ -983,10 +1030,7 @@ export function createPlanetFallbackMaterial(params: {
     terrain = applyTerrainTexture(terrain, vSphereDir, uPlanetKind, heightNorm, coast, rockMask, snowMask, moisture);
     terrain = mix(terrain, vec3(0.43, 0.39, 0.32), 0.06);
 
-    vec3 lightDir = normalize(uSunPosition - vWorldPos);
-    float diffuse = max(dot(normalize(vNormal), lightDir), 0.0);
-    diffuse = floor(diffuse * 5.0) / 4.0;
-    vec3 finalColor = terrain * (0.26 + diffuse * 0.74);
+    vec3 finalColor = applyPlanetLighting(terrain, shadingNormal, vWorldPos, heightNorm, slope);
     #include <logdepthbuf_fragment>
     gl_FragColor = vec4(finalColor, 1.0);
   }
@@ -1062,10 +1106,13 @@ export function createAtmosphereMaterial(params: {
     float nDotV = max(dot(viewDir, vNormal), 0.0);
     float rim = pow(1.0 - nDotV, 3.0);
     float outerFade = smoothstep(0.05, 0.85, rim) * (1.0 - smoothstep(0.86, 1.0, rim) * 0.35);
-    float day = max(dot(vNormal, lightDir), 0.0) * 0.7 + 0.3;
-    float alpha = outerFade * uDensity * day * 0.28;
+    float nDotL = dot(vNormal, lightDir);
+    float day = smoothstep(-0.25, 0.55, nDotL);
+    float sunRim = pow(max(dot(viewDir, lightDir), 0.0), 6.0);
+    float alpha = outerFade * uDensity * (0.10 + day * 0.24 + sunRim * 0.10);
+    vec3 color = uAtmosphereColor * (0.18 + day * 0.82) + vec3(0.35, 0.55, 0.85) * sunRim * 0.18;
     #include <logdepthbuf_fragment>
-    gl_FragColor = vec4(uAtmosphereColor * day, alpha);
+    gl_FragColor = vec4(color, alpha);
   }
   `
 
