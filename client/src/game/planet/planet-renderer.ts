@@ -28,7 +28,7 @@ import type { TerrainChunkGeometryData } from './terrain-geometry'
 const SYNC_CHUNK_BUILD_BUDGET_MS = 4
 const WORKER_DISPATCH_BUDGET_MS = 0.8
 const CHUNK_INTEGRATION_BUDGET_MS = 2.5
-const MAX_TERRAIN_WORKERS = 2
+const MAX_TERRAIN_WORKERS = 8
 const DETAILED_MATERIAL_MIN_LOD = 6
 const DETAILED_MATERIAL_DISTANCE = WORLD_SCALE.localDetailNear * 2.2
 const LOD_COLLAPSE_HYSTERESIS = 1.35
@@ -75,6 +75,7 @@ export class PlanetRenderer {
   private sunPosition = new THREE.Vector3(0, 0, 0)
   private terrainParams: PlanetTerrainParams
   private lodDistances: number[]
+  private requestedTerrainWorkers: number
   private time = 0
 
   // Chunk generation queue
@@ -123,12 +124,14 @@ export class PlanetRenderer {
       gridSize?: number
       skirts?: boolean
       horizonMargin?: number
+      terrainWorkers?: number
     },
   ) {
     this.planetRadius = planetRadius
     this.gridSize = params.gridSize ?? 33
     this.skirts = params.skirts ?? true
     this.horizonMargin = params.horizonMargin ?? 1.0
+    this.requestedTerrainWorkers = params.terrainWorkers ?? 0
     this.group = new THREE.Group()
     scene.add(this.group)
 
@@ -325,7 +328,7 @@ export class PlanetRenderer {
   private initTerrainWorkers() {
     if (typeof Worker === 'undefined') return
 
-    const workerCount = Math.max(1, Math.min(MAX_TERRAIN_WORKERS, (navigator.hardwareConcurrency ?? 4) - 1))
+    const workerCount = this.resolveTerrainWorkerCount()
     for (let i = 0; i < workerCount; i++) {
       const worker = new Worker(new URL('./terrain-worker.ts', import.meta.url), { type: 'module' })
       const slot: TerrainWorkerSlot = {
@@ -372,6 +375,20 @@ export class PlanetRenderer {
     }
   }
 
+  private resolveTerrainWorkerCount(): number {
+    const hardwareThreads = typeof navigator === 'undefined'
+      ? 4
+      : Math.max(2, navigator.hardwareConcurrency ?? 4)
+    const hardwareCap = Math.max(1, Math.min(MAX_TERRAIN_WORKERS, hardwareThreads - 1))
+    const requested = Math.floor(this.requestedTerrainWorkers)
+
+    if (requested > 0) {
+      return Math.max(1, Math.min(requested, hardwareCap))
+    }
+
+    return hardwareCap
+  }
+
   sampleSurfaceRadius(dir: Vec3Like): number {
     const chunk = this.findVisibleChunkForDirection(dir)
     return chunk?.sampleVisualRadius(dir) ?? samplePlanetRadius(dir, this.terrainParams)
@@ -402,6 +419,7 @@ export class PlanetRenderer {
       detailedMaterialChunks,
       pending: this.pendingKeys.size + this.pendingWorkerKeys.size + this.completedWorkerJobs.length,
       building: this.pendingWorkerKeys.size,
+      workers: this.workerSlots.length,
       completedBuilds: this.completedWorkerJobs.length,
       pendingCollapses: this.pendingCollapseKeys.size,
       generated: this.generatedChunksLastFrame,
@@ -482,11 +500,11 @@ export class PlanetRenderer {
     }
 
     // 4. Process pending chunks
-    this.integrateCompletedChunkBuilds()
+    this.integrateCompletedChunkBuilds(localCamPos)
     if (this.workerSlots.length > 0) {
-      this.dispatchPendingChunkBuilds()
+      this.dispatchPendingChunkBuilds(localCamPos)
     } else {
-      this.processPendingChunksSync()
+      this.processPendingChunksSync(localCamPos)
     }
 
     // Complete deferred LOD collapses after their parent chunks exist.
@@ -740,8 +758,11 @@ export class PlanetRenderer {
     return { face, lod, x, y, children: null }
   }
 
-  private integrateCompletedChunkBuilds() {
+  private integrateCompletedChunkBuilds(localCamPos: THREE.Vector3) {
     const integrationStart = performance.now()
+    if (this.completedWorkerJobs.length > 1) {
+      this.completedWorkerJobs.sort((a, b) => this.compareChunkBuildPriority(a.key, b.key, localCamPos))
+    }
 
     while (this.completedWorkerJobs.length > 0) {
       if (this.generatedChunksLastFrame > 0 && performance.now() - integrationStart >= CHUNK_INTEGRATION_BUDGET_MS) break
@@ -763,7 +784,7 @@ export class PlanetRenderer {
     }
   }
 
-  private dispatchPendingChunkBuilds() {
+  private dispatchPendingChunkBuilds(localCamPos: THREE.Vector3) {
     if (this.pendingKeys.size === 0) return
 
     const dispatchStart = performance.now()
@@ -771,10 +792,9 @@ export class PlanetRenderer {
       if (slot.busy) continue
       if (performance.now() - dispatchStart >= WORKER_DISPATCH_BUDGET_MS) break
 
-      const next = this.pendingKeys.values().next()
-      if (next.done) break
+      const key = this.findBestPendingChunkKey(localCamPos)
+      if (!key) break
 
-      const key = next.value
       const node = this.parseChunkKey(key)
       this.pendingKeys.delete(key)
       if (!node || this.chunks.has(key) || this.pendingWorkerKeys.has(key)) continue
@@ -800,11 +820,14 @@ export class PlanetRenderer {
     }
   }
 
-  private processPendingChunksSync() {
+  private processPendingChunksSync(localCamPos: THREE.Vector3) {
     const buildStart = performance.now()
 
-    for (const key of this.pendingKeys) {
+    while (this.pendingKeys.size > 0) {
       if (this.generatedChunksLastFrame > 0 && performance.now() - buildStart >= SYNC_CHUNK_BUILD_BUDGET_MS) break
+
+      const key = this.findBestPendingChunkKey(localCamPos)
+      if (!key) break
 
       const generationStart = performance.now()
       const chunk = this.generateChunk(key)
@@ -816,6 +839,34 @@ export class PlanetRenderer {
       }
       this.pendingKeys.delete(key)
     }
+  }
+
+  private findBestPendingChunkKey(localCamPos: THREE.Vector3): string | null {
+    let bestKey: string | null = null
+
+    for (const key of this.pendingKeys) {
+      if (!bestKey || this.compareChunkBuildPriority(key, bestKey, localCamPos) < 0) {
+        bestKey = key
+      }
+    }
+
+    return bestKey
+  }
+
+  private compareChunkBuildPriority(aKey: string, bKey: string, localCamPos: THREE.Vector3): number {
+    const a = this.parseChunkKey(aKey)
+    const b = this.parseChunkKey(bKey)
+    if (!a || !b) return a ? -1 : b ? 1 : aKey.localeCompare(bKey)
+
+    const distDelta = this.getLocalChunkDistToCamera(a, localCamPos) - this.getLocalChunkDistToCamera(b, localCamPos)
+    if (Math.abs(distDelta) > 0.0001) return distDelta
+
+    // If two chunks are equally near the camera, build the coarser coverage first
+    // so transitions keep their parent patch while children fill in around it.
+    if (a.lod !== b.lod) return a.lod - b.lod
+    if (a.face !== b.face) return a.face - b.face
+    if (a.y !== b.y) return a.y - b.y
+    return a.x - b.x
   }
 
   private removeChildrenChunks(node: QuadtreeNode) {

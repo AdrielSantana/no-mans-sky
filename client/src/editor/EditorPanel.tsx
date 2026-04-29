@@ -262,6 +262,19 @@ export function EditorPanel({ params, onChange }: Props) {
           <span className="editor-value">{params.horizonMargin.toFixed(2)}</span>
         </div>
         <div className="editor-row">
+          <span className="editor-label">Workers</span>
+          <input
+            className="editor-slider"
+            type="range"
+            min={RANGES.terrainWorkers.min}
+            max={RANGES.terrainWorkers.max}
+            step={RANGES.terrainWorkers.step}
+            value={params.terrainWorkers}
+            onChange={e => set('terrainWorkers', Number(e.target.value))}
+          />
+          <span className="editor-value">{params.terrainWorkers === 0 ? 'Auto' : params.terrainWorkers}</span>
+        </div>
+        <div className="editor-row">
           <label style={{ display: 'flex', alignItems: 'center', gap: 6, cursor: 'pointer' }}>
             <input
               type="checkbox"

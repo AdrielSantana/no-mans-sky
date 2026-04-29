@@ -31,6 +31,8 @@ export interface EditorParams {
   skirts: boolean
   // Horizon culling margin multiplier (1.0 = balanced, higher = more generous)
   horizonMargin: number
+  // Terrain worker count. 0 = auto from hardwareConcurrency.
+  terrainWorkers: number
   debugBloom: boolean
   debugOcean: boolean
   debugAtmosphere: boolean
@@ -93,6 +95,7 @@ export const DEFAULT_PARAMS: EditorParams = {
   autoLod: true,
   skirts: true,
   horizonMargin: 1.0,
+  terrainWorkers: 0,
   debugBloom: true,
   debugOcean: true,
   debugAtmosphere: true,
@@ -122,6 +125,7 @@ export const RANGES = {
   lodMultiplier: { min: 0.01, max: 10.0, step: 0.01 },
   gridSize: { min: 9, max: 129, step: 2 },
   horizonMargin: { min: 0, max: 3, step: 0.05 },
+  terrainWorkers: { min: 0, max: 12, step: 1 },
 } as const
 
 /** Per-type presets for noise profile */
