@@ -31,9 +31,22 @@ const LOD_COLLAPSE_HYSTERESIS = 1.35
 export class PlanetRenderer {
   private group: THREE.Group
   private planetRadius: number
-  private noiseProfile: { octaves: number; lacunarity: number; gain: number; frequency: number; seed: number }
+  private noiseProfile: {
+    octaves: number
+    lacunarity: number
+    gain: number
+    frequency: number
+    warpStrength: number
+    continentalScale: number
+    mountainScale: number
+    erosionStrength: number
+    thermalStrength: number
+    detailStrength: number
+    seed: number
+  }
   private maxLod: number
   private gridSize: number
+  private skirts: boolean
   private material: THREE.ShaderMaterial
   private farMaterial: THREE.ShaderMaterial
   private fallbackMaterial: THREE.ShaderMaterial
@@ -65,13 +78,26 @@ export class PlanetRenderer {
       colorB: string
       atmosphereColor: string
       atmosphereDensity: number
-      noiseProfile?: { octaves: number; lacunarity: number; gain: number; frequency: number }
+      noiseProfile?: {
+        octaves: number
+        lacunarity: number
+        gain: number
+        frequency: number
+        warpStrength?: number
+        continentalScale?: number
+        mountainScale?: number
+        erosionStrength?: number
+        thermalStrength?: number
+        detailStrength?: number
+      }
       lodMultipliers?: number[]
       gridSize?: number
+      skirts?: boolean
     },
   ) {
     this.planetRadius = planetRadius
     this.gridSize = params.gridSize ?? 33
+    this.skirts = params.skirts ?? true
     this.group = new THREE.Group()
     scene.add(this.group)
 
@@ -82,9 +108,11 @@ export class PlanetRenderer {
     this.lodDistances = multipliers.map(m => m === Infinity ? Infinity : m * planetRadius)
     this.maxLod = multipliers.length - 1
 
-    this.noiseProfile = params.noiseProfile
-      ? { seed: Number(params.seed), ...params.noiseProfile }
-      : { ...PlanetGenerator.fromParams(params) }
+    this.noiseProfile = {
+      ...PlanetGenerator.fromParams(params),
+      ...params.noiseProfile,
+      seed: Number(params.seed),
+    }
     this.terrainParams = {
       seed: this.noiseProfile.seed,
       planetType: params.planetType,
@@ -92,6 +120,14 @@ export class PlanetRenderer {
       terrainScale: params.terrainScale,
       frequency: this.noiseProfile.frequency,
       octaves: this.noiseProfile.octaves,
+      lacunarity: this.noiseProfile.lacunarity,
+      gain: this.noiseProfile.gain,
+      warpStrength: this.noiseProfile.warpStrength,
+      continentalScale: this.noiseProfile.continentalScale,
+      mountainScale: this.noiseProfile.mountainScale,
+      erosionStrength: this.noiseProfile.erosionStrength,
+      thermalStrength: this.noiseProfile.thermalStrength,
+      detailStrength: this.noiseProfile.detailStrength,
     }
 
     this.material = createPlanetMaterial({
@@ -152,6 +188,14 @@ export class PlanetRenderer {
         planetRadius,
         octaves: this.noiseProfile.octaves,
         frequency: this.noiseProfile.frequency,
+        lacunarity: this.noiseProfile.lacunarity,
+        gain: this.noiseProfile.gain,
+        warpStrength: this.noiseProfile.warpStrength,
+        continentalScale: this.noiseProfile.continentalScale,
+        mountainScale: this.noiseProfile.mountainScale,
+        erosionStrength: this.noiseProfile.erosionStrength,
+        thermalStrength: this.noiseProfile.thermalStrength,
+        detailStrength: this.noiseProfile.detailStrength,
         sunPosition: this.sunPosition,
       })
       this.oceanMesh = new THREE.Mesh(oceanGeo, this.oceanMaterial)
@@ -546,6 +590,7 @@ export class PlanetRenderer {
       this.terrainParams,
       this.farMaterial,
       this.gridSize,
+      this.skirts,
     )
   }
 

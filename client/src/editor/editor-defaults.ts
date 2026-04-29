@@ -13,12 +13,20 @@ export interface EditorParams {
   lacunarity: number
   gain: number
   frequency: number
+  warpStrength: number
+  continentalScale: number
+  mountainScale: number
+  erosionStrength: number
+  thermalStrength: number
+  detailStrength: number
   // LOD multipliers (LOD 1-N, index 0 = LOD 1)
   lodMultipliers: number[]
   // Chunk resolution
   gridSize: number
   // Auto-calculate LOD levels from radius + gridSize
   autoLod: boolean
+  // Chunk skirts
+  skirts: boolean
 }
 
 /**
@@ -61,9 +69,16 @@ export const DEFAULT_PARAMS: EditorParams = {
   lacunarity: 2.0,
   gain: 0.5,
   frequency: 2.0,
+  warpStrength: 0.42,
+  continentalScale: 1.0,
+  mountainScale: 1.0,
+  erosionStrength: 0.34,
+  thermalStrength: 0.2,
+  detailStrength: 0.55,
   lodMultipliers: [...DEFAULT_LOD_MULTIPLIERS],
   gridSize: 33,
   autoLod: true,
+  skirts: true,
 }
 
 export const RANGES = {
@@ -75,13 +90,63 @@ export const RANGES = {
   lacunarity: { min: 1.0, max: 4.0, step: 0.1 },
   gain: { min: 0.1, max: 0.9, step: 0.01 },
   frequency: { min: 0.5, max: 10.0, step: 0.1 },
+  warpStrength: { min: 0, max: 1.2, step: 0.01 },
+  continentalScale: { min: 0, max: 2.0, step: 0.01 },
+  mountainScale: { min: 0, max: 2.5, step: 0.01 },
+  erosionStrength: { min: 0, max: 1.0, step: 0.01 },
+  thermalStrength: { min: 0, max: 1.0, step: 0.01 },
+  detailStrength: { min: 0, max: 1.5, step: 0.01 },
   lodMultiplier: { min: 0.01, max: 10.0, step: 0.01 },
   gridSize: { min: 9, max: 129, step: 2 },
 } as const
 
 /** Per-type presets for noise profile */
-export const TYPE_PRESETS: Record<string, Pick<EditorParams, 'octaves' | 'lacunarity' | 'gain' | 'frequency'>> = {
-  rocky: { octaves: 6, lacunarity: 2.0, gain: 0.5, frequency: 2.0 },
-  gas: { octaves: 4, lacunarity: 2.2, gain: 0.4, frequency: 4.0 },
-  ice: { octaves: 5, lacunarity: 1.8, gain: 0.45, frequency: 2.5 },
+export const TYPE_PRESETS: Record<string, Pick<EditorParams,
+  'octaves'
+  | 'lacunarity'
+  | 'gain'
+  | 'frequency'
+  | 'warpStrength'
+  | 'continentalScale'
+  | 'mountainScale'
+  | 'erosionStrength'
+  | 'thermalStrength'
+  | 'detailStrength'
+>> = {
+  rocky: {
+    octaves: 6,
+    lacunarity: 2.0,
+    gain: 0.5,
+    frequency: 2.0,
+    warpStrength: 0.42,
+    continentalScale: 1.0,
+    mountainScale: 1.0,
+    erosionStrength: 0.34,
+    thermalStrength: 0.2,
+    detailStrength: 0.55,
+  },
+  gas: {
+    octaves: 4,
+    lacunarity: 2.2,
+    gain: 0.4,
+    frequency: 4.0,
+    warpStrength: 0.18,
+    continentalScale: 0.15,
+    mountainScale: 0,
+    erosionStrength: 0,
+    thermalStrength: 0,
+    detailStrength: 0.25,
+  },
+  ice: {
+    octaves: 5,
+    lacunarity: 1.8,
+    gain: 0.45,
+    frequency: 2.5,
+    warpStrength: 0.26,
+    continentalScale: 0.8,
+    mountainScale: 0.72,
+    erosionStrength: 0.16,
+    thermalStrength: 0.48,
+    detailStrength: 0.36,
+  },
 }

@@ -24,11 +24,12 @@ export class TerrainChunk {
     terrain: PlanetTerrainParams,
     material: THREE.Material,
     gridSize = DEFAULT_GRID_SIZE,
+    skirts = true,
   ) {
     this.node = { ...node, children: null }
     this.key = nodeKey(node.face, node.lod, node.x, node.y)
     this.gridSize = gridSize
-    this.geometry = this.buildGeometry(node, terrain)
+    this.geometry = this.buildGeometry(node, terrain, skirts)
     this.mesh = new THREE.Mesh(this.geometry, material)
     this.mesh.frustumCulled = true
   }
@@ -36,6 +37,7 @@ export class TerrainChunk {
   private buildGeometry(
     node: QuadtreeNode,
     terrain: PlanetTerrainParams,
+    skirts: boolean,
   ): THREE.BufferGeometry {
     const gs = this.gridSize
     const { u0, v0, u1, v1 } = getNodeBounds(node)
@@ -83,6 +85,17 @@ export class TerrainChunk {
         indices[idx++] = d
         indices[idx++] = c
       }
+    }
+
+    const geo = new THREE.BufferGeometry()
+
+    if (!skirts) {
+      geo.setAttribute('position', new THREE.BufferAttribute(positions, 3))
+      geo.setAttribute('terrainHeight', new THREE.BufferAttribute(heights, 1))
+      geo.setIndex(new THREE.BufferAttribute(indices.subarray(0, idx), 1))
+      geo.computeVertexNormals()
+      geo.computeBoundingSphere()
+      return geo
     }
 
     // Skirt geometry
@@ -164,7 +177,6 @@ export class TerrainChunk {
       allIndices[si++] = b; allIndices[si++] = d; allIndices[si++] = c
     }
 
-    const geo = new THREE.BufferGeometry()
     geo.setAttribute('position', new THREE.BufferAttribute(allPositions, 3))
     geo.setAttribute('terrainHeight', new THREE.BufferAttribute(allHeights, 1))
     geo.setIndex(new THREE.BufferAttribute(allIndices, 1))

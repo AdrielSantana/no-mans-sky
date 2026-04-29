@@ -138,6 +138,88 @@ export function EditorPanel({ params, onChange }: Props) {
           />
           <span className="editor-value">{params.frequency.toFixed(1)}</span>
         </div>
+        <div className="editor-row">
+          <span className="editor-label">Warp</span>
+          <input
+            className="editor-slider"
+            type="range"
+            min={RANGES.warpStrength.min}
+            max={RANGES.warpStrength.max}
+            step={RANGES.warpStrength.step}
+            value={params.warpStrength}
+            onChange={e => set('warpStrength', Number(e.target.value))}
+          />
+          <span className="editor-value">{params.warpStrength.toFixed(2)}</span>
+        </div>
+      </div>
+
+      <div className="editor-section">
+        <div className="editor-section-title">Terrain Layers</div>
+        <div className="editor-row">
+          <span className="editor-label">Continents</span>
+          <input
+            className="editor-slider"
+            type="range"
+            min={RANGES.continentalScale.min}
+            max={RANGES.continentalScale.max}
+            step={RANGES.continentalScale.step}
+            value={params.continentalScale}
+            onChange={e => set('continentalScale', Number(e.target.value))}
+          />
+          <span className="editor-value">{params.continentalScale.toFixed(2)}</span>
+        </div>
+        <div className="editor-row">
+          <span className="editor-label">Mountains</span>
+          <input
+            className="editor-slider"
+            type="range"
+            min={RANGES.mountainScale.min}
+            max={RANGES.mountainScale.max}
+            step={RANGES.mountainScale.step}
+            value={params.mountainScale}
+            onChange={e => set('mountainScale', Number(e.target.value))}
+          />
+          <span className="editor-value">{params.mountainScale.toFixed(2)}</span>
+        </div>
+        <div className="editor-row">
+          <span className="editor-label">Hydraulic</span>
+          <input
+            className="editor-slider"
+            type="range"
+            min={RANGES.erosionStrength.min}
+            max={RANGES.erosionStrength.max}
+            step={RANGES.erosionStrength.step}
+            value={params.erosionStrength}
+            onChange={e => set('erosionStrength', Number(e.target.value))}
+          />
+          <span className="editor-value">{params.erosionStrength.toFixed(2)}</span>
+        </div>
+        <div className="editor-row">
+          <span className="editor-label">Thermal</span>
+          <input
+            className="editor-slider"
+            type="range"
+            min={RANGES.thermalStrength.min}
+            max={RANGES.thermalStrength.max}
+            step={RANGES.thermalStrength.step}
+            value={params.thermalStrength}
+            onChange={e => set('thermalStrength', Number(e.target.value))}
+          />
+          <span className="editor-value">{params.thermalStrength.toFixed(2)}</span>
+        </div>
+        <div className="editor-row">
+          <span className="editor-label">Fine Detail</span>
+          <input
+            className="editor-slider"
+            type="range"
+            min={RANGES.detailStrength.min}
+            max={RANGES.detailStrength.max}
+            step={RANGES.detailStrength.step}
+            value={params.detailStrength}
+            onChange={e => set('detailStrength', Number(e.target.value))}
+          />
+          <span className="editor-value">{params.detailStrength.toFixed(2)}</span>
+        </div>
       </div>
 
       <div className="editor-section">
@@ -154,6 +236,17 @@ export function EditorPanel({ params, onChange }: Props) {
             onChange={e => set('gridSize', Number(e.target.value))}
           />
           <span className="editor-value">{params.gridSize}</span>
+        </div>
+        <div className="editor-row">
+          <label style={{ display: 'flex', alignItems: 'center', gap: 6, cursor: 'pointer' }}>
+            <input
+              type="checkbox"
+              checked={params.skirts}
+              onChange={e => set('skirts', e.target.checked)}
+              style={{ accentColor: '#2dd4a7' }}
+            />
+            <span className="editor-label" style={{ width: 'auto' }}>Skirts</span>
+          </label>
         </div>
         <div className="editor-row">
           <label style={{ display: 'flex', alignItems: 'center', gap: 6, cursor: 'pointer' }}>

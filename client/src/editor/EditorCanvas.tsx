@@ -24,9 +24,16 @@ function createPlanet(scene: THREE.Scene, params: EditorParams): PlanetRenderer 
       lacunarity: params.lacunarity,
       gain: params.gain,
       frequency: params.frequency,
+      warpStrength: params.warpStrength,
+      continentalScale: params.continentalScale,
+      mountainScale: params.mountainScale,
+      erosionStrength: params.erosionStrength,
+      thermalStrength: params.thermalStrength,
+      detailStrength: params.detailStrength,
     },
     lodMultipliers: params.lodMultipliers,
     gridSize: params.gridSize,
+    skirts: params.skirts,
   })
 }
 
@@ -42,6 +49,14 @@ function buildWalkerTarget(params: EditorParams, renderer: PlanetRenderer): Plan
       terrainScale: params.terrainScale,
       frequency: params.frequency,
       octaves: params.octaves,
+      lacunarity: params.lacunarity,
+      gain: params.gain,
+      warpStrength: params.warpStrength,
+      continentalScale: params.continentalScale,
+      mountainScale: params.mountainScale,
+      erosionStrength: params.erosionStrength,
+      thermalStrength: params.thermalStrength,
+      detailStrength: params.detailStrength,
     },
     sampleSurfaceRadius: dir => renderer.sampleSurfaceRadius(dir),
   }
