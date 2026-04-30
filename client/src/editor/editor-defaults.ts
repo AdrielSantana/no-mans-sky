@@ -60,7 +60,7 @@ export interface EditorParams {
   gridSize: number
   // Auto-calculate LOD levels from radius + gridSize
   autoLod: boolean
-  // Chunk skirts
+  // LOD edge stitching
   skirts: boolean
   // Horizon culling margin multiplier (1.0 = balanced, higher = more generous)
   horizonMargin: number

@@ -9,7 +9,7 @@ import {
   nodeKey,
   getNodeCenter,
 } from './quadtree'
-import { TerrainChunk, type SkirtFlags } from './terrain-chunk'
+import { TerrainChunk, type StitchSteps } from './terrain-chunk'
 import {
   createAtmosphereMaterial,
   createCloudBillboardMaterial,
@@ -1093,6 +1093,7 @@ export class PlanetRenderer {
     let visible = 0
     let detailedMaterialChunks = 0
     let skirtEdges = 0
+    let stitchEdges = 0
     for (const [key, chunk] of this.chunks) {
       const lod = key.split('_')[1] ?? '?'
       byLod[lod] = (byLod[lod] ?? 0) + 1
@@ -1102,6 +1103,10 @@ export class PlanetRenderer {
         + (chunk.skirtFlags.top ? 1 : 0)
         + (chunk.skirtFlags.left ? 1 : 0)
         + (chunk.skirtFlags.right ? 1 : 0)
+      stitchEdges += (chunk.stitchSteps.bottom > 1 ? 1 : 0)
+        + (chunk.stitchSteps.top > 1 ? 1 : 0)
+        + (chunk.stitchSteps.left > 1 ? 1 : 0)
+        + (chunk.stitchSteps.right > 1 ? 1 : 0)
     }
 
     return {
@@ -1116,6 +1121,7 @@ export class PlanetRenderer {
       completedBuilds: this.completedWorkerJobs.length,
       pendingCollapses: this.pendingCollapseKeys.size,
       skirtEdges,
+      stitchEdges,
       cloudQuality: this.cloudQuality,
       cloudBillboards: this.cloudBillboardVisibleCount,
       generated: this.generatedChunksLastFrame,
@@ -1267,9 +1273,7 @@ export class PlanetRenderer {
       }
     }
 
-    // Only hide skirt edges that are safely covered by a visible same-face,
-    // same-LOD neighbor. LOD boundaries and cube-face boundaries keep skirts.
-    this.updateVisibleSkirts(renderKeys)
+    this.updateVisibleStitching(renderKeys)
   }
 
   private updateQuadtree(
@@ -1564,7 +1568,7 @@ export class PlanetRenderer {
         node,
         terrain: this.terrainParams,
         gridSize: this.gridSize,
-        skirts: this.computeSkirtFlags(),
+        skirts: { bottom: false, top: false, left: false, right: false },
       })
     }
   }
@@ -1652,55 +1656,59 @@ export class PlanetRenderer {
   }
 
   private createChunk(node: QuadtreeNode, geometryData?: TerrainChunkGeometryData): TerrainChunk {
-    const skirtFlags = this.computeSkirtFlags()
-
     return new TerrainChunk(
       node,
       this.terrainParams,
       this.farMaterial,
       this.gridSize,
-      skirtFlags,
+      { bottom: false, top: false, left: false, right: false },
       geometryData,
     )
   }
 
-  private computeSkirtFlags(): SkirtFlags {
-    return this.skirts
-      ? { bottom: true, top: true, left: true, right: true }
-      : { bottom: false, top: false, left: false, right: false }
-  }
-
-  private updateVisibleSkirts(renderKeys: Set<string>) {
+  private updateVisibleStitching(renderKeys: Set<string>) {
     for (const key of renderKeys) {
       const chunk = this.chunks.get(key)
       if (!chunk) continue
-      chunk.setSkirtFlags(this.computeVisibleSkirtFlags(chunk.node, renderKeys))
+      chunk.setStitchSteps(this.computeVisibleStitchSteps(chunk.node, renderKeys))
     }
   }
 
-  private computeVisibleSkirtFlags(node: QuadtreeNode, renderKeys: Set<string>): SkirtFlags {
-    if (!this.skirts) return { bottom: false, top: false, left: false, right: false }
+  private computeVisibleStitchSteps(
+    node: QuadtreeNode,
+    renderKeys: Set<string>,
+  ): StitchSteps {
+    if (!this.skirts) return { bottom: 0, top: 0, left: 0, right: 0 }
 
     return {
-      bottom: !this.hasVisibleSameFaceLodNeighbor(node, 0, -1, renderKeys),
-      top: !this.hasVisibleSameFaceLodNeighbor(node, 0, 1, renderKeys),
-      left: !this.hasVisibleSameFaceLodNeighbor(node, -1, 0, renderKeys),
-      right: !this.hasVisibleSameFaceLodNeighbor(node, 1, 0, renderKeys),
+      bottom: this.getVisibleCoarserSameFaceNeighborStep(node, 0, -1, renderKeys),
+      top: this.getVisibleCoarserSameFaceNeighborStep(node, 0, 1, renderKeys),
+      left: this.getVisibleCoarserSameFaceNeighborStep(node, -1, 0, renderKeys),
+      right: this.getVisibleCoarserSameFaceNeighborStep(node, 1, 0, renderKeys),
     }
   }
 
-  private hasVisibleSameFaceLodNeighbor(
+  private getVisibleCoarserSameFaceNeighborStep(
     node: QuadtreeNode,
     dx: number,
     dy: number,
     renderKeys: Set<string>,
-  ): boolean {
+  ): number {
     const cells = 1 << node.lod
     const x = node.x + dx
     const y = node.y + dy
-    if (x < 0 || y < 0 || x >= cells || y >= cells) return false
+    if (x < 0 || y < 0 || x >= cells || y >= cells) return 0
 
-    return renderKeys.has(nodeKey(node.face, node.lod, x, y))
+    for (let lod = node.lod - 1; lod >= 0; lod--) {
+      const scale = 1 << (node.lod - lod)
+      const coarseX = Math.floor(x / scale)
+      const coarseY = Math.floor(y / scale)
+      if (renderKeys.has(nodeKey(node.face, lod, coarseX, coarseY))) {
+        return scale
+      }
+    }
+
+    return 0
   }
 
   private createFallbackGeometry(planetRadius: number): THREE.SphereGeometry {

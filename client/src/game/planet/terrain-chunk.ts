@@ -11,8 +11,16 @@ import {
 
 export type { SkirtFlags } from './terrain-geometry'
 
+export interface StitchSteps {
+  bottom: number
+  top: number
+  left: number
+  right: number
+}
+
 const DEFAULT_GRID_SIZE = 33
 const EPSILON = 1e-6
+const NO_STITCH_STEPS: StitchSteps = { bottom: 0, top: 0, left: 0, right: 0 }
 
 function toThree(v: Vec3Like): THREE.Vector3 {
   return new THREE.Vector3(v.x, v.y, v.z)
@@ -23,27 +31,23 @@ export class TerrainChunk {
   readonly key: string
   readonly node: QuadtreeNode
   skirtFlags: SkirtFlags
+  stitchSteps: StitchSteps = { ...NO_STITCH_STEPS }
   private geometry: THREE.BufferGeometry
   private fullIndices: Uint32Array = new Uint32Array(0)
-  private mainIndexCount = 0
-  private skirtEdgeIndexCount = 0
-  private hasFullSkirtIndices = false
   private mainPositions: Float32Array<ArrayBufferLike> = new Float32Array(0)
   private gridSize: number
-  private terrain: PlanetTerrainParams
 
   constructor(
     node: QuadtreeNode,
     terrain: PlanetTerrainParams,
     material: THREE.Material,
     gridSize = DEFAULT_GRID_SIZE,
-    skirts: boolean | SkirtFlags = true,
+    skirts: boolean | SkirtFlags = false,
     geometryData?: TerrainChunkGeometryData,
   ) {
     this.node = { ...node, children: null }
     this.key = nodeKey(node.face, node.lod, node.x, node.y)
     this.gridSize = gridSize
-    this.terrain = terrain
     this.skirtFlags = normalizeSkirtFlags(skirts)
     const data = geometryData ?? buildTerrainChunkGeometryData(node, terrain, gridSize, skirts)
     this.geometry = this.buildGeometry(data)
@@ -51,28 +55,18 @@ export class TerrainChunk {
     this.mesh.frustumCulled = true
   }
 
-  needsSkirtUpdate(flags: SkirtFlags): boolean {
-    return this.skirtFlags.bottom !== flags.bottom
-      || this.skirtFlags.top !== flags.top
-      || this.skirtFlags.left !== flags.left
-      || this.skirtFlags.right !== flags.right
+  needsStitchUpdate(steps: StitchSteps): boolean {
+    return this.stitchSteps.bottom !== steps.bottom
+      || this.stitchSteps.top !== steps.top
+      || this.stitchSteps.left !== steps.left
+      || this.stitchSteps.right !== steps.right
   }
 
-  rebuildSkirts(flags: SkirtFlags, material: THREE.Material) {
-    this.geometry.dispose()
-    const data = buildTerrainChunkGeometryData(this.node, this.terrain, this.gridSize, flags)
-    this.skirtFlags = flags
-    this.mainPositions = data.mainPositions
-    this.geometry = this.buildGeometry(data)
-    this.mesh.geometry = this.geometry
-    this.mesh.material = material
-  }
+  setStitchSteps(steps: StitchSteps) {
+    if (!this.needsStitchUpdate(steps)) return
 
-  setSkirtFlags(flags: SkirtFlags) {
-    if (!this.needsSkirtUpdate(flags)) return
-
-    this.skirtFlags = flags
-    this.geometry.setIndex(new THREE.BufferAttribute(this.buildIndexForSkirts(flags), 1))
+    this.stitchSteps = steps
+    this.geometry.setIndex(new THREE.BufferAttribute(this.buildIndexForStitching(steps), 1))
     this.geometry.computeBoundingSphere()
   }
 
@@ -80,44 +74,107 @@ export class TerrainChunk {
     const geo = new THREE.BufferGeometry()
     this.mainPositions = data.mainPositions
     this.fullIndices = data.indices
-    this.mainIndexCount = (this.gridSize - 1) * (this.gridSize - 1) * 6
-    this.skirtEdgeIndexCount = (this.gridSize - 1) * 6
-    this.hasFullSkirtIndices = data.indices.length >= this.mainIndexCount + this.skirtEdgeIndexCount * 4
     geo.setAttribute('position', new THREE.BufferAttribute(data.positions, 3))
     geo.setAttribute('normal', new THREE.BufferAttribute(data.normals, 3))
     geo.setAttribute('terrainHeight', new THREE.BufferAttribute(data.heights, 1))
-    geo.setIndex(new THREE.BufferAttribute(this.buildIndexForSkirts(this.skirtFlags), 1))
+    geo.setIndex(new THREE.BufferAttribute(this.buildIndexForStitching(this.stitchSteps), 1))
     geo.computeBoundingSphere()
 
     return geo
   }
 
-  private buildIndexForSkirts(flags: SkirtFlags): Uint32Array {
-    if (!this.hasFullSkirtIndices) return this.fullIndices
+  private buildIndexForStitching(steps: StitchSteps): Uint32Array {
+    const activeEdges = (steps.bottom > 1 ? 1 : 0)
+      + (steps.top > 1 ? 1 : 0)
+      + (steps.left > 1 ? 1 : 0)
+      + (steps.right > 1 ? 1 : 0)
+    if (activeEdges === 0) return this.fullIndices
 
-    const activeEdges = (flags.bottom ? 1 : 0)
-      + (flags.top ? 1 : 0)
-      + (flags.left ? 1 : 0)
-      + (flags.right ? 1 : 0)
-    if (activeEdges === 4) return this.fullIndices
-    if (activeEdges === 0) return this.fullIndices.subarray(0, this.mainIndexCount)
-
-    const next = new Uint32Array(this.mainIndexCount + activeEdges * this.skirtEdgeIndexCount)
-    next.set(this.fullIndices.subarray(0, this.mainIndexCount), 0)
-
-    let writeOffset = this.mainIndexCount
-    const copyEdge = (edgeIndex: number) => {
-      const start = this.mainIndexCount + edgeIndex * this.skirtEdgeIndexCount
-      next.set(this.fullIndices.subarray(start, start + this.skirtEdgeIndexCount), writeOffset)
-      writeOffset += this.skirtEdgeIndexCount
+    const gs = this.gridSize
+    const seg = gs - 1
+    const indices: number[] = []
+    const v = (x: number, y: number) => y * gs + x
+    const pushTri = (a: number, b: number, c: number) => {
+      indices.push(a, b, c)
     }
 
-    if (flags.bottom) copyEdge(0)
-    if (flags.top) copyEdge(1)
-    if (flags.left) copyEdge(2)
-    if (flags.right) copyEdge(3)
+    for (let y = 0; y < seg; y++) {
+      for (let x = 0; x < seg; x++) {
+        if ((steps.bottom > 1 && y === 0)
+          || (steps.top > 1 && y === seg - 1)
+          || (steps.left > 1 && x === 0)
+          || (steps.right > 1 && x === seg - 1)) {
+          continue
+        }
 
-    return next
+        const a = v(x, y)
+        const b = v(x + 1, y)
+        const c = v(x, y + 1)
+        const d = v(x + 1, y + 1)
+        pushTri(a, b, c)
+        pushTri(b, d, c)
+      }
+    }
+
+    const clampStep = (step: number) => Math.max(2, Math.min(seg, Math.floor(step)))
+
+    if (steps.bottom > 1) {
+      const step = clampStep(steps.bottom)
+      for (let x = 0; x < seg; x += step) {
+        const end = Math.min(x + step, seg)
+        const b0 = v(x, 0)
+        const b1 = v(end, 0)
+        for (let ix = x; ix < end - 1; ix++) {
+          pushTri(b0, v(ix, 1), v(ix + 1, 1))
+        }
+        pushTri(b0, v(end - 1, 1), b1)
+        pushTri(b1, v(end - 1, 1), v(end, 1))
+      }
+    }
+
+    if (steps.top > 1) {
+      const step = clampStep(steps.top)
+      for (let x = 0; x < seg; x += step) {
+        const end = Math.min(x + step, seg)
+        const b0 = v(x, seg)
+        const b1 = v(end, seg)
+        pushTri(b0, b1, v(end - 1, seg - 1))
+        for (let ix = end - 1; ix > x; ix--) {
+          pushTri(b0, v(ix, seg - 1), v(ix - 1, seg - 1))
+        }
+        pushTri(b1, v(end, seg - 1), v(end - 1, seg - 1))
+      }
+    }
+
+    if (steps.left > 1) {
+      const step = clampStep(steps.left)
+      for (let y = 0; y < seg; y += step) {
+        const end = Math.min(y + step, seg)
+        const b0 = v(0, y)
+        const b1 = v(0, end)
+        pushTri(b0, b1, v(1, end - 1))
+        for (let iy = end - 1; iy > y; iy--) {
+          pushTri(b0, v(1, iy), v(1, iy - 1))
+        }
+        pushTri(b1, v(1, end), v(1, end - 1))
+      }
+    }
+
+    if (steps.right > 1) {
+      const step = clampStep(steps.right)
+      for (let y = 0; y < seg; y += step) {
+        const end = Math.min(y + step, seg)
+        const b0 = v(seg, y)
+        const b1 = v(seg, end)
+        for (let iy = y; iy < end - 1; iy++) {
+          pushTri(b0, v(seg - 1, iy), v(seg - 1, iy + 1))
+        }
+        pushTri(b0, v(seg - 1, end - 1), b1)
+        pushTri(b1, v(seg - 1, end - 1), v(seg - 1, end))
+      }
+    }
+
+    return Uint32Array.from(indices)
   }
 
   sampleVisualRadius(dirLike: Vec3Like): number | null {

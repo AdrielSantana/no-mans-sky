@@ -297,7 +297,7 @@ export function EditorPanel({ params, onChange }: Props) {
               onChange={e => set('skirts', e.target.checked)}
               style={{ accentColor: '#2dd4a7' }}
             />
-            <span className="editor-label" style={{ width: 'auto' }}>Skirts</span>
+            <span className="editor-label" style={{ width: 'auto' }}>LOD Stitching</span>
           </label>
         </div>
         <div className="editor-row">
