@@ -377,6 +377,177 @@ vec3 applyAerialPerspective(vec3 color, vec3 worldPos, vec3 normal) {
 }
 `
 
+const CLOUD_PATTERN_GLSL = /* glsl */ `
+uniform float uCloudCoverage;
+uniform float uCloudScale;
+uniform float uCloudSoftness;
+uniform float uCloudHeight;
+uniform float uCloudSpeed;
+uniform float uCloudShadowStrength;
+uniform float uCloudVolumeStrength;
+uniform float uCloudStormStrength;
+uniform float uCloudBandStrength;
+uniform float uCloudDetailStrength;
+uniform float uCloudQuality;
+uniform float uCloudSeed;
+uniform float uTime;
+
+vec3 cloudCurvedDirection(vec3 dir) {
+  vec3 n = normalize(dir);
+  vec3 axis = normalize(vec3(0.18, 0.96, 0.09));
+  vec3 tangent = cross(axis, n);
+  if (dot(tangent, tangent) < 0.0001) tangent = cross(vec3(1.0, 0.0, 0.0), n);
+  tangent = normalize(tangent);
+  vec3 bitangent = normalize(cross(n, tangent));
+  float speed = max(uCloudSpeed, 0.0);
+  float curlA = terrainFbm(n * (uCloudScale * 1.05) + vec3(uTime * speed * 0.07, 9.4, -3.1), uCloudSeed + 2201.0, 3, 2.0, 0.52);
+  float curlB = terrainFbm(n * (uCloudScale * 1.72) + vec3(-6.3, uTime * speed * 0.05, 14.7), uCloudSeed + 2603.0, 2, 2.1, 0.50);
+  float bandStrength = clamp(uCloudBandStrength, 0.0, 1.5);
+  return normalize(n + tangent * curlA * 0.20 * bandStrength + bitangent * curlB * 0.11 * bandStrength);
+}
+
+float cloudField(vec3 dir) {
+  float speed = max(uCloudSpeed, 0.0);
+  vec3 wind = vec3(uTime * speed * 0.18, uTime * speed * 0.055, -uTime * speed * 0.12);
+  vec3 curved = cloudCurvedDirection(dir);
+  vec3 p = curved * max(uCloudScale, 0.001);
+  float stormStrength = clamp(uCloudStormStrength, 0.0, 1.5);
+  float bandStrength = clamp(uCloudBandStrength, 0.0, 1.5);
+  float detailStrength = clamp(uCloudDetailStrength, 0.0, 1.5);
+
+  float macroRaw = terrainFbm(p * 0.42 + wind * 0.55 + vec3(31.0, -18.0, 7.0), uCloudSeed + 301.7, 4, 2.0, 0.54) * 0.5 + 0.5;
+  float broad = terrainFbm(p * 0.82 + wind + vec3(13.1, -7.2, 4.8), uCloudSeed + 503.7, 4, 2.05, 0.52) * 0.5 + 0.5;
+  float medium = terrainFbm(p * 1.86 + wind * 1.55 + vec3(-5.4, 17.6, 9.2), uCloudSeed + 907.2, 4, 2.18, 0.48) * 0.5 + 0.5;
+  float fine = terrainFbm(p * 6.20 - wind * 2.30 + vec3(28.0, 3.7, -11.5), uCloudSeed + 1301.4, 3, 2.24, 0.44) * 0.5 + 0.5;
+
+  float frontNoise = terrainFbm(vec3(p.x * 0.36 + p.z * 0.18, p.y * 2.20 + macroRaw * 1.20, p.z * 0.42) + wind * 0.72, uCloudSeed + 1709.1, 3, 2.0, 0.55);
+  float fronts = pow(1.0 - clamp(abs(frontNoise), 0.0, 1.0), 2.85);
+  float stormCells = pow(smoothstep(0.50, 0.92, macroRaw + medium * 0.18), 1.85);
+  float brokenWisps = smoothstep(0.44, 0.84, fine + fronts * 0.24) * (1.0 - stormCells * 0.36);
+
+  float systems = broad * 0.34 + medium * 0.18;
+  systems += stormCells * (0.26 * stormStrength);
+  systems += fronts * (0.22 * bandStrength);
+  systems += brokenWisps * (0.14 * detailStrength);
+  return clamp(systems, 0.0, 1.25);
+}
+
+float cloudFieldMedium(vec3 dir) {
+  float speed = max(uCloudSpeed, 0.0);
+  vec3 wind = vec3(uTime * speed * 0.18, uTime * speed * 0.055, -uTime * speed * 0.12);
+  vec3 curved = cloudCurvedDirection(dir);
+  vec3 p = curved * max(uCloudScale, 0.001);
+  float stormStrength = clamp(uCloudStormStrength, 0.0, 1.5);
+  float bandStrength = clamp(uCloudBandStrength, 0.0, 1.5);
+  float macroRaw = terrainFbm(p * 0.42 + wind * 0.55 + vec3(31.0, -18.0, 7.0), uCloudSeed + 301.7, 3, 2.0, 0.54) * 0.5 + 0.5;
+  float broad = terrainFbm(p * 0.82 + wind + vec3(13.1, -7.2, 4.8), uCloudSeed + 503.7, 3, 2.05, 0.52) * 0.5 + 0.5;
+  float medium = terrainFbm(p * 1.86 + wind * 1.55 + vec3(-5.4, 17.6, 9.2), uCloudSeed + 907.2, 2, 2.18, 0.48) * 0.5 + 0.5;
+  float frontNoise = terrainFbm(vec3(p.x * 0.36 + p.z * 0.18, p.y * 2.20 + macroRaw * 1.20, p.z * 0.42) + wind * 0.72, uCloudSeed + 1709.1, 2, 2.0, 0.55);
+  float fronts = pow(1.0 - clamp(abs(frontNoise), 0.0, 1.0), 2.65);
+  float stormCells = pow(smoothstep(0.50, 0.92, macroRaw + medium * 0.18), 1.70);
+  float systems = broad * 0.38 + medium * 0.18;
+  systems += stormCells * (0.25 * stormStrength);
+  systems += fronts * (0.20 * bandStrength);
+  return clamp(systems, 0.0, 1.18);
+}
+
+float cloudFieldLow(vec3 dir) {
+  float speed = max(uCloudSpeed, 0.0);
+  vec3 wind = vec3(uTime * speed * 0.16, uTime * speed * 0.05, -uTime * speed * 0.10);
+  vec3 p = normalize(dir) * max(uCloudScale, 0.001);
+  float stormStrength = clamp(uCloudStormStrength, 0.0, 1.5);
+  float bandStrength = clamp(uCloudBandStrength, 0.0, 1.5);
+  float broad = terrainFbm(p * 0.72 + wind + vec3(13.1, -7.2, 4.8), uCloudSeed + 503.7, 2, 2.0, 0.52) * 0.5 + 0.5;
+  float medium = terrainFbm(p * 1.42 + wind * 1.25 + vec3(-5.4, 17.6, 9.2), uCloudSeed + 907.2, 1, 2.0, 0.50) * 0.5 + 0.5;
+  float frontNoise = terrainFbm(vec3(p.x * 0.32 + p.z * 0.18, p.y * 1.65, p.z * 0.38) + wind * 0.50, uCloudSeed + 1709.1, 1, 2.0, 0.55);
+  float fronts = pow(1.0 - clamp(abs(frontNoise), 0.0, 1.0), 2.20) * bandStrength;
+  float systems = smoothstep(0.52, 0.90, broad + medium * 0.16) * stormStrength;
+  return clamp(broad * 0.56 + medium * 0.24 + fronts * 0.13 + systems * 0.14, 0.0, 1.12);
+}
+
+float cloudFieldLod(vec3 dir) {
+  if (uCloudQuality < 0.5) return cloudFieldLow(dir);
+  if (uCloudQuality < 1.5) return cloudFieldMedium(dir);
+  return cloudField(dir);
+}
+
+float cloudMaskFromDensity(float density) {
+  float coverage = clamp(uCloudCoverage, 0.0, 1.0);
+  float threshold = mix(0.78, 0.24, coverage);
+  float softness = max(uCloudSoftness, 0.015);
+  float cloud = smoothstep(threshold, threshold + softness, density);
+  float body = smoothstep(threshold + softness * 0.32, threshold + softness * 1.85, density);
+  return clamp(cloud * mix(0.82, 1.10, body), 0.0, 1.0);
+}
+
+float cloudBodyFromDensity(float density) {
+  float coverage = clamp(uCloudCoverage, 0.0, 1.0);
+  float threshold = mix(0.78, 0.24, coverage);
+  float softness = max(uCloudSoftness, 0.015);
+  return smoothstep(threshold + softness * 0.34, threshold + softness * 1.95, density);
+}
+
+float cloudEdgeFromMaskBody(float mask, float body) {
+  return clamp(mask - body * 0.72, 0.0, 1.0);
+}
+
+float cloudMask(vec3 dir) {
+  return cloudMaskFromDensity(cloudField(dir));
+}
+
+float cloudBody(vec3 dir) {
+  return cloudBodyFromDensity(cloudField(dir));
+}
+
+float cloudEdge(vec3 dir) {
+  float mask = cloudMask(dir);
+  float body = cloudBody(dir);
+  return cloudEdgeFromMaskBody(mask, body);
+}
+
+float cloudShadowField(vec3 dir) {
+  if (uCloudQuality < 0.5) return cloudFieldLow(dir);
+  float speed = max(uCloudSpeed, 0.0);
+  vec3 wind = vec3(uTime * speed * 0.18, uTime * speed * 0.055, -uTime * speed * 0.12);
+  vec3 curved = cloudCurvedDirection(dir);
+  vec3 p = curved * max(uCloudScale, 0.001);
+  float stormStrength = clamp(uCloudStormStrength, 0.0, 1.5);
+  float bandStrength = clamp(uCloudBandStrength, 0.0, 1.5);
+  float macroRaw = terrainFbm(p * 0.42 + wind * 0.55 + vec3(31.0, -18.0, 7.0), uCloudSeed + 301.7, 3, 2.0, 0.54) * 0.5 + 0.5;
+  float broad = terrainFbm(p * 0.82 + wind + vec3(13.1, -7.2, 4.8), uCloudSeed + 503.7, 3, 2.05, 0.52) * 0.5 + 0.5;
+  float medium = terrainFbm(p * 1.86 + wind * 1.55 + vec3(-5.4, 17.6, 9.2), uCloudSeed + 907.2, 2, 2.18, 0.48) * 0.5 + 0.5;
+  float frontNoise = terrainFbm(vec3(p.x * 0.36 + p.z * 0.18, p.y * 2.20 + macroRaw * 1.20, p.z * 0.42) + wind * 0.72, uCloudSeed + 1709.1, 2, 2.0, 0.55);
+  float fronts = pow(1.0 - clamp(abs(frontNoise), 0.0, 1.0), 2.65);
+  float stormCells = pow(smoothstep(0.50, 0.92, macroRaw + medium * 0.18), 1.70);
+  float systems = broad * 0.38 + medium * 0.18;
+  systems += stormCells * (0.25 * stormStrength);
+  systems += fronts * (0.20 * bandStrength);
+  return clamp(systems, 0.0, 1.18);
+}
+
+float cloudShadowPattern(vec3 dir) {
+  float coverage = clamp(uCloudCoverage, 0.0, 1.0);
+  float threshold = mix(0.79, 0.25, coverage);
+  float softness = max(uCloudSoftness * 1.12, 0.026);
+  return smoothstep(threshold, threshold + softness, cloudShadowField(dir));
+}
+
+float cloudShadowMask(vec3 surfaceDir, vec3 sunDir) {
+  if (uCloudShadowStrength <= 0.001) return 0.0;
+  float daylight = smoothstep(-0.08, 0.62, dot(surfaceDir, sunDir));
+  float offset = clamp(uCloudHeight, 0.0, 0.20) * 2.8 + 0.018;
+  vec3 projectedDir = normalize(surfaceDir + sunDir * offset);
+  float shadow = pow(cloudShadowPattern(projectedDir), 0.72);
+  return shadow * daylight * clamp(uCloudShadowStrength, 0.0, 4.0);
+}
+
+vec3 applyCloudShadow(vec3 color, vec3 surfaceDir, vec3 sunDir, float strengthMultiplier) {
+  float shadow = cloudShadowMask(surfaceDir, sunDir) * strengthMultiplier;
+  vec3 coolShadow = color * vec3(0.30, 0.36, 0.44);
+  return mix(color, coolShadow, clamp(shadow, 0.0, 0.92));
+}
+`
+
 // Terrain chunks are displaced on the CPU so physics, wireframe, and rendering share one surface.
 export function createPlanetMaterial(params: {
   seed: number
@@ -404,6 +575,16 @@ export function createPlanetMaterial(params: {
   atmosphereExtinctionStrength: number
   nightColor: THREE.Color | string
   nightAmbient: number
+  cloudCoverage: number
+  cloudScale: number
+  cloudSoftness: number
+  cloudHeight: number
+  cloudSpeed: number
+  cloudShadow: number
+  cloudVolume: number
+  cloudStorms: number
+  cloudBands: number
+  cloudDetail: number
   planetRadius: number
   octaves: number
   frequency: number
@@ -670,6 +851,19 @@ export function createPlanetMaterial(params: {
       uSunTintStrength: { value: params.sunTintStrength },
       uAtmosphereExtinctionStrength: { value: params.atmosphereExtinctionStrength },
       uNightAmbientStrength: { value: params.nightAmbient },
+      uCloudCoverage: { value: params.cloudCoverage },
+      uCloudScale: { value: params.cloudScale },
+      uCloudSoftness: { value: params.cloudSoftness },
+      uCloudHeight: { value: params.cloudHeight },
+      uCloudSpeed: { value: params.cloudSpeed },
+      uCloudShadowStrength: { value: params.cloudShadow },
+      uCloudVolumeStrength: { value: params.cloudVolume },
+      uCloudStormStrength: { value: params.cloudStorms },
+      uCloudBandStrength: { value: params.cloudBands },
+      uCloudDetailStrength: { value: params.cloudDetail },
+      uCloudQuality: { value: 2 },
+      uCloudSeed: { value: params.seed },
+      uTime: { value: 0 },
       uAtmosphereHazeStrength: { value: params.atmosphereHazeStrength },
       uAtmosphereHazeDistance: { value: params.atmosphereHazeDistance },
       uGrassTexture: { value: TERRAIN_TEXTURES.grass },
@@ -711,6 +905,16 @@ export function createPlanetFarMaterial(params: {
   atmosphereExtinctionStrength: number
   nightColor: THREE.Color | string
   nightAmbient: number
+  cloudCoverage: number
+  cloudScale: number
+  cloudSoftness: number
+  cloudHeight: number
+  cloudSpeed: number
+  cloudShadow: number
+  cloudVolume: number
+  cloudStorms: number
+  cloudBands: number
+  cloudDetail: number
   planetRadius: number
   octaves: number
   frequency: number
@@ -932,6 +1136,19 @@ export function createPlanetFarMaterial(params: {
       uSunTintStrength: { value: params.sunTintStrength },
       uAtmosphereExtinctionStrength: { value: params.atmosphereExtinctionStrength },
       uNightAmbientStrength: { value: params.nightAmbient },
+      uCloudCoverage: { value: params.cloudCoverage },
+      uCloudScale: { value: params.cloudScale },
+      uCloudSoftness: { value: params.cloudSoftness },
+      uCloudHeight: { value: params.cloudHeight },
+      uCloudSpeed: { value: params.cloudSpeed },
+      uCloudShadowStrength: { value: params.cloudShadow },
+      uCloudVolumeStrength: { value: params.cloudVolume },
+      uCloudStormStrength: { value: params.cloudStorms },
+      uCloudBandStrength: { value: params.cloudBands },
+      uCloudDetailStrength: { value: params.cloudDetail },
+      uCloudQuality: { value: 2 },
+      uCloudSeed: { value: params.seed },
+      uTime: { value: 0 },
       uAtmosphereHazeStrength: { value: params.atmosphereHazeStrength },
       uAtmosphereHazeDistance: { value: params.atmosphereHazeDistance },
       uGrassTexture: { value: TERRAIN_TEXTURES.grass },
@@ -972,6 +1189,16 @@ export function createOceanMaterial(params: {
   atmosphereExtinctionStrength: number
   nightColor: THREE.Color | string
   nightAmbient: number
+  cloudCoverage: number
+  cloudScale: number
+  cloudSoftness: number
+  cloudHeight: number
+  cloudSpeed: number
+  cloudShadow: number
+  cloudVolume: number
+  cloudStorms: number
+  cloudBands: number
+  cloudDetail: number
   atmosphereHazeStrength: number
   atmosphereHazeDistance: number
 }): THREE.ShaderMaterial {
@@ -1025,8 +1252,8 @@ export function createOceanMaterial(params: {
   uniform float uNightAmbientStrength;
   uniform float uAtmosphereHazeStrength;
   uniform float uAtmosphereHazeDistance;
-  uniform float uTime;
   uniform float uSeed;
+  uniform float uTime;
 
   varying vec3 vWorldPos;
   varying vec3 vNormal;
@@ -1132,6 +1359,18 @@ export function createOceanMaterial(params: {
       uSunTintStrength: { value: params.sunTintStrength },
       uAtmosphereExtinctionStrength: { value: params.atmosphereExtinctionStrength },
       uNightAmbientStrength: { value: params.nightAmbient },
+      uCloudCoverage: { value: params.cloudCoverage },
+      uCloudScale: { value: params.cloudScale },
+      uCloudSoftness: { value: params.cloudSoftness },
+      uCloudHeight: { value: params.cloudHeight },
+      uCloudSpeed: { value: params.cloudSpeed },
+      uCloudShadowStrength: { value: params.cloudShadow },
+      uCloudVolumeStrength: { value: params.cloudVolume },
+      uCloudStormStrength: { value: params.cloudStorms },
+      uCloudBandStrength: { value: params.cloudBands },
+      uCloudDetailStrength: { value: params.cloudDetail },
+      uCloudQuality: { value: 2 },
+      uCloudSeed: { value: params.seed },
       uAtmosphereHazeStrength: { value: params.atmosphereHazeStrength },
       uAtmosphereHazeDistance: { value: params.atmosphereHazeDistance },
       uTime: { value: 0 },
@@ -1162,6 +1401,16 @@ export function createPlanetFallbackMaterial(params: {
   atmosphereExtinctionStrength: number
   nightColor: THREE.Color | string
   nightAmbient: number
+  cloudCoverage: number
+  cloudScale: number
+  cloudSoftness: number
+  cloudHeight: number
+  cloudSpeed: number
+  cloudShadow: number
+  cloudVolume: number
+  cloudStorms: number
+  cloudBands: number
+  cloudDetail: number
   planetRadius: number
   octaves: number
   frequency: number
@@ -1212,6 +1461,7 @@ export function createPlanetFallbackMaterial(params: {
   `
 
   const fragmentShader = /* glsl */ `
+  ${TERRAIN_NOISE}
   #include <logdepthbuf_pars_fragment>
   ${TERRAIN_TEXTURE_GLSL}
 
@@ -1353,6 +1603,19 @@ export function createPlanetFallbackMaterial(params: {
       uSunTintStrength: { value: params.sunTintStrength },
       uAtmosphereExtinctionStrength: { value: params.atmosphereExtinctionStrength },
       uNightAmbientStrength: { value: params.nightAmbient },
+      uCloudCoverage: { value: params.cloudCoverage },
+      uCloudScale: { value: params.cloudScale },
+      uCloudSoftness: { value: params.cloudSoftness },
+      uCloudHeight: { value: params.cloudHeight },
+      uCloudSpeed: { value: params.cloudSpeed },
+      uCloudShadowStrength: { value: params.cloudShadow },
+      uCloudVolumeStrength: { value: params.cloudVolume },
+      uCloudStormStrength: { value: params.cloudStorms },
+      uCloudBandStrength: { value: params.cloudBands },
+      uCloudDetailStrength: { value: params.cloudDetail },
+      uCloudQuality: { value: 2 },
+      uCloudSeed: { value: params.seed },
+      uTime: { value: 0 },
       uAtmosphereHazeStrength: { value: params.atmosphereHazeStrength },
       uAtmosphereHazeDistance: { value: params.atmosphereHazeDistance },
       uGrassTexture: { value: TERRAIN_TEXTURES.grass },
@@ -1544,6 +1807,281 @@ export function createAtmosphereMaterial(params: {
       uTwilightStrength: { value: params.twilightStrength },
       uPlanetRadius: { value: params.planetRadius },
       uAtmosphereRadius: { value: params.atmosphereRadius },
+    },
+  })
+}
+
+export function createCloudMaterial(params: {
+  seed: number
+  coverage: number
+  opacity: number
+  scale: number
+  softness: number
+  height: number
+  speed: number
+  shadow: number
+  volume: number
+  storms: number
+  bands: number
+  detail: number
+  atmosphereColor: string
+  sunColor: THREE.Color | string
+  atmosphereLightColor: THREE.Color | string
+  nightColor: THREE.Color | string
+  nightAmbient: number
+  sunPosition: THREE.Vector3
+}): THREE.ShaderMaterial {
+  const atmosphereColor = new THREE.Color(params.atmosphereColor)
+  const sunColor = new THREE.Color(params.sunColor)
+  const atmosphereLightColor = new THREE.Color(params.atmosphereLightColor)
+  const nightColor = new THREE.Color(params.nightColor)
+
+  const vertexShader = /* glsl */ `
+  #include <common>
+  #include <logdepthbuf_pars_vertex>
+
+  varying vec3 vWorldPos;
+  varying vec3 vNormal;
+
+  void main() {
+    vNormal = normalize((modelMatrix * vec4(normal, 0.0)).xyz);
+    vec4 worldPos = modelMatrix * vec4(position, 1.0);
+    vWorldPos = worldPos.xyz;
+    gl_Position = projectionMatrix * viewMatrix * worldPos;
+    #include <logdepthbuf_vertex>
+  }
+  `
+
+  const fragmentShader = /* glsl */ `
+  #include <logdepthbuf_pars_fragment>
+  ${TERRAIN_NOISE}
+  ${CLOUD_PATTERN_GLSL}
+
+  uniform vec3 uAtmosphereColor;
+  uniform vec3 uSunColor;
+  uniform vec3 uAtmosphereLightColor;
+  uniform vec3 uNightColor;
+  uniform vec3 uSunPosition;
+  uniform vec3 uPlanetCenter;
+  uniform float uSeed;
+  uniform float uOpacity;
+  uniform float uNightAmbientStrength;
+
+  varying vec3 vWorldPos;
+  varying vec3 vNormal;
+
+  void main() {
+    vec3 dir = normalize(vWorldPos - uPlanetCenter);
+    vec3 shellNormal = normalize(vNormal);
+    vec3 sunDir = normalize(uSunPosition - uPlanetCenter);
+    vec3 toCamera = normalize(cameraPosition - vWorldPos);
+    float nDotL = dot(dir, sunDir);
+    float day = smoothstep(-0.18, 0.60, nDotL);
+    float direct = clamp(nDotL, 0.0, 1.0);
+    float rim = pow(1.0 - max(dot(toCamera, shellNormal), 0.0), 2.1);
+
+    float density = cloudFieldLod(dir);
+    float cloud = cloudMaskFromDensity(density);
+    float body = cloudBodyFromDensity(density);
+    float edge = cloudEdgeFromMaskBody(cloud, body);
+
+    float terminator = smoothstep(-0.34, 0.16, nDotL) * (1.0 - smoothstep(0.08, 0.56, nDotL));
+    float lowSun = pow(1.0 - clamp(nDotL * 0.90 + 0.10, 0.0, 1.0), 2.0) * smoothstep(-0.26, 0.46, nDotL);
+    float nightAmbient = clamp(uNightAmbientStrength, 0.0, 1.5);
+
+    vec3 coolWhite = mix(vec3(0.74, 0.82, 0.86), uAtmosphereColor, 0.16);
+    vec3 sunWhite = mix(vec3(1.0), uSunColor, 0.28);
+    vec3 sunset = mix(vec3(1.0, 0.40, 0.14), uSunColor, 0.42);
+    vec3 litCloud = mix(coolWhite * (0.38 + direct * 0.58), sunWhite, direct * 0.55);
+    litCloud = mix(litCloud, sunset, lowSun * 0.50 + terminator * 0.24);
+    vec3 nightCloud = mix(uNightColor * (0.50 + nightAmbient * 0.42), uAtmosphereLightColor * 0.10, 0.28);
+    vec3 color = mix(nightCloud, litCloud, day);
+    float qualityVolume = mix(0.64, 1.0, smoothstep(0.0, 2.0, uCloudQuality));
+    float volume = clamp(uCloudVolumeStrength, 0.0, 1.5) * qualityVolume;
+    float silverPower = pow(max(dot(toCamera, sunDir), 0.0), 5.0);
+    float silver = edge * (0.35 + silverPower * 1.65) * smoothstep(-0.22, 0.62, nDotL) * volume;
+    float selfShadow = body * (1.0 - direct) * (0.20 + volume * 0.22);
+    float baseShade = (1.0 - max(dot(shellNormal, toCamera), 0.0)) * body * volume * 0.16;
+    color = mix(color, color * vec3(0.56, 0.60, 0.66), clamp(selfShadow + baseShade, 0.0, 0.62));
+    color += mix(uAtmosphereLightColor, uSunColor, 0.42) * silver * (0.28 + day * 0.55);
+    color += uAtmosphereLightColor * rim * (0.08 + day * 0.12) * (1.0 + volume * 0.45);
+    color *= mix(0.72, 1.16 + volume * 0.08, body);
+
+    float alpha = cloud * clamp(uOpacity, 0.0, 1.0);
+    alpha *= mix(0.28 + nightAmbient * 0.18, 1.0, day);
+    alpha *= 1.0 - rim * mix(0.16, 0.06, clamp(volume, 0.0, 1.0));
+    alpha = min(alpha + silver * 0.08, 0.92);
+    if (alpha < 0.006) discard;
+
+    #include <logdepthbuf_fragment>
+    gl_FragColor = vec4(color, clamp(alpha, 0.0, 0.88));
+  }
+  `
+
+  return new THREE.ShaderMaterial({
+    vertexShader,
+    fragmentShader,
+    transparent: true,
+    depthWrite: false,
+    depthTest: true,
+    blending: THREE.NormalBlending,
+    side: THREE.DoubleSide,
+    uniforms: {
+      uAtmosphereColor: { value: atmosphereColor },
+      uSunColor: { value: sunColor },
+      uAtmosphereLightColor: { value: atmosphereLightColor },
+      uNightColor: { value: nightColor },
+      uSunPosition: { value: params.sunPosition.clone() },
+      uPlanetCenter: { value: new THREE.Vector3() },
+      uSeed: { value: params.seed },
+      uTime: { value: 0 },
+      uOpacity: { value: params.opacity },
+      uCloudCoverage: { value: params.coverage },
+      uCloudScale: { value: params.scale },
+      uCloudSoftness: { value: params.softness },
+      uCloudHeight: { value: params.height },
+      uCloudSpeed: { value: params.speed },
+      uCloudShadowStrength: { value: params.shadow },
+      uCloudVolumeStrength: { value: params.volume },
+      uCloudStormStrength: { value: params.storms },
+      uCloudBandStrength: { value: params.bands },
+      uCloudDetailStrength: { value: params.detail },
+      uCloudQuality: { value: 2 },
+      uCloudSeed: { value: params.seed },
+      uNightAmbientStrength: { value: params.nightAmbient },
+    },
+  })
+}
+
+export function createCloudBillboardMaterial(params: {
+  opacity: number
+  atmosphereColor: string
+  sunColor: THREE.Color | string
+  atmosphereLightColor: THREE.Color | string
+  nightColor: THREE.Color | string
+  nightAmbient: number
+  sunPosition: THREE.Vector3
+}): THREE.ShaderMaterial {
+  const atmosphereColor = new THREE.Color(params.atmosphereColor)
+  const sunColor = new THREE.Color(params.sunColor)
+  const atmosphereLightColor = new THREE.Color(params.atmosphereLightColor)
+  const nightColor = new THREE.Color(params.nightColor)
+
+  const vertexShader = /* glsl */ `
+  #include <common>
+  #include <logdepthbuf_pars_vertex>
+
+  attribute float instanceAlpha;
+  attribute float instanceSeed;
+
+  varying vec2 vUv;
+  varying float vAlpha;
+  varying float vSeed;
+  varying vec3 vWorldPos;
+
+  void main() {
+    vUv = uv;
+    vAlpha = instanceAlpha;
+    vSeed = instanceSeed;
+
+    vec4 worldPos = modelMatrix * instanceMatrix * vec4(position, 1.0);
+    vWorldPos = worldPos.xyz;
+    gl_Position = projectionMatrix * viewMatrix * worldPos;
+    #include <logdepthbuf_vertex>
+  }
+  `
+
+  const fragmentShader = /* glsl */ `
+  #include <logdepthbuf_pars_fragment>
+
+  uniform vec3 uAtmosphereColor;
+  uniform vec3 uSunColor;
+  uniform vec3 uAtmosphereLightColor;
+  uniform vec3 uNightColor;
+  uniform vec3 uSunPosition;
+  uniform vec3 uPlanetCenter;
+  uniform float uOpacity;
+  uniform float uNightAmbientStrength;
+  uniform float uTime;
+
+  varying vec2 vUv;
+  varying float vAlpha;
+  varying float vSeed;
+  varying vec3 vWorldPos;
+
+  float hash21(vec2 p) {
+    return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453);
+  }
+
+  float valueNoise(vec2 p) {
+    vec2 i = floor(p);
+    vec2 f = fract(p);
+    vec2 u = f * f * (3.0 - 2.0 * f);
+    float a = hash21(i);
+    float b = hash21(i + vec2(1.0, 0.0));
+    float c = hash21(i + vec2(0.0, 1.0));
+    float d = hash21(i + vec2(1.0, 1.0));
+    return mix(mix(a, b, u.x), mix(c, d, u.x), u.y);
+  }
+
+  void main() {
+    vec2 p = vUv * 2.0 - 1.0;
+    p.x *= 1.08;
+    float radial = length(p);
+    float core = smoothstep(1.02, 0.16, radial);
+    float feather = smoothstep(1.08, 0.66, radial);
+    vec2 flow = vec2(uTime * 0.018, -uTime * 0.011);
+    float softNoise = valueNoise(p * 2.15 + vSeed * 19.0 + flow);
+    float broadNoise = valueNoise(p * 1.05 + vSeed * 7.0 - flow * 0.6);
+    float streak = sin((p.x * 3.2 + p.y * 1.4 + vSeed * 9.7) + uTime * 0.08) * 0.5 + 0.5;
+    float edgeBreakup = smoothstep(0.22, 0.92, softNoise * 0.62 + broadNoise * 0.38);
+    float mask = core * mix(0.86, 1.10, broadNoise);
+    mask += feather * streak * edgeBreakup * 0.16;
+    mask *= smoothstep(1.08, 0.84, radial);
+    mask *= 0.84 + softNoise * 0.22;
+
+    vec3 dir = normalize(vWorldPos - uPlanetCenter);
+    vec3 sunDir = normalize(uSunPosition - uPlanetCenter);
+    float nDotL = dot(dir, sunDir);
+    float day = smoothstep(-0.22, 0.58, nDotL);
+    float direct = clamp(nDotL, 0.0, 1.0);
+    float nightAmbient = clamp(uNightAmbientStrength, 0.0, 1.5);
+
+    vec3 cloudDay = mix(vec3(0.74, 0.82, 0.86), uAtmosphereColor, 0.13);
+    cloudDay = mix(cloudDay * (0.56 + direct * 0.42), mix(vec3(1.0), uSunColor, 0.25), direct * 0.52);
+    vec3 sunset = mix(vec3(1.0, 0.42, 0.16), uSunColor, 0.42);
+    cloudDay = mix(cloudDay, sunset, smoothstep(-0.24, 0.22, nDotL) * (1.0 - smoothstep(0.12, 0.54, nDotL)) * 0.32);
+    vec3 cloudNight = mix(uNightColor * (0.45 + nightAmbient * 0.34), uAtmosphereLightColor * 0.08, 0.28);
+    vec3 color = mix(cloudNight, cloudDay, day);
+    color += uAtmosphereLightColor * feather * day * 0.08;
+
+    float alpha = mask * vAlpha * clamp(uOpacity, 0.0, 1.0);
+    alpha *= mix(0.35 + nightAmbient * 0.16, 1.0, day);
+    if (alpha < 0.006) discard;
+
+    #include <logdepthbuf_fragment>
+    gl_FragColor = vec4(color, clamp(alpha, 0.0, 0.74));
+  }
+  `
+
+  return new THREE.ShaderMaterial({
+    vertexShader,
+    fragmentShader,
+    transparent: true,
+    depthWrite: false,
+    depthTest: true,
+    blending: THREE.NormalBlending,
+    side: THREE.DoubleSide,
+    uniforms: {
+      uAtmosphereColor: { value: atmosphereColor },
+      uSunColor: { value: sunColor },
+      uAtmosphereLightColor: { value: atmosphereLightColor },
+      uNightColor: { value: nightColor },
+      uSunPosition: { value: params.sunPosition.clone() },
+      uPlanetCenter: { value: new THREE.Vector3() },
+      uOpacity: { value: params.opacity },
+      uNightAmbientStrength: { value: params.nightAmbient },
+      uTime: { value: 0 },
     },
   })
 }

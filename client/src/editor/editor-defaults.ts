@@ -22,6 +22,19 @@ export interface EditorParams {
   atmosphereExtinctionStrength: number
   atmosphereNightColor: string
   atmosphereNightAmbient: number
+  cloudCoverage: number
+  cloudOpacity: number
+  cloudScale: number
+  cloudSoftness: number
+  cloudHeight: number
+  cloudSpeed: number
+  cloudShadow: number
+  cloudVolume: number
+  cloudStorms: number
+  cloudBands: number
+  cloudDetail: number
+  cloudBillboards: boolean
+  cloudBillboardCount: number
   sunColor: string
   sunTintStrength: number
   sunAzimuth: number
@@ -60,6 +73,7 @@ export interface EditorParams {
   debugBloom: boolean
   debugOcean: boolean
   debugAtmosphere: boolean
+  debugClouds: boolean
   debugSimpleTerrain: boolean
   debugNearTerrainShader: boolean
   debugFarTerrainShader: boolean
@@ -116,6 +130,19 @@ export const DEFAULT_PARAMS: EditorParams = {
   atmosphereExtinctionStrength: 0.68,
   atmosphereNightColor: '#071226',
   atmosphereNightAmbient: 0.28,
+  cloudCoverage: 0.68,
+  cloudOpacity: 0.78,
+  cloudScale: 2.7,
+  cloudSoftness: 0.15,
+  cloudHeight: 0.045,
+  cloudSpeed: 0.100,
+  cloudShadow: 2,
+  cloudVolume: 1.08,
+  cloudStorms: 0.62,
+  cloudBands: 0.72,
+  cloudDetail: 0.82,
+  cloudBillboards: true,
+  cloudBillboardCount: 1600,
   sunColor: '#fff2c8',
   sunTintStrength: 0.85,
   sunAzimuth: 315,
@@ -142,11 +169,12 @@ export const DEFAULT_PARAMS: EditorParams = {
   terrainWorkers: 0,
   bloomStrength: 1.0,
   bloomRadius: 0.5,
-  bloomThreshold: 0.75,
+  bloomThreshold: 1.50,
   toneMappingExposure: 1.0,
   debugBloom: true,
   debugOcean: true,
   debugAtmosphere: true,
+  debugClouds: true,
   debugSimpleTerrain: false,
   debugNearTerrainShader: true,
   debugFarTerrainShader: true,
@@ -171,6 +199,18 @@ export const RANGES = {
   atmosphereTwilightStrength: { min: 0, max: 2, step: 0.01 },
   atmosphereExtinctionStrength: { min: 0, max: 2, step: 0.01 },
   atmosphereNightAmbient: { min: 0, max: 1.2, step: 0.01 },
+  cloudCoverage: { min: 0, max: 1, step: 0.01 },
+  cloudOpacity: { min: 0, max: 1, step: 0.01 },
+  cloudScale: { min: 0.5, max: 12, step: 0.1 },
+  cloudSoftness: { min: 0.02, max: 0.8, step: 0.01 },
+  cloudHeight: { min: 0.005, max: 0.12, step: 0.001 },
+  cloudSpeed: { min: 0, max: 0.5, step: 0.005 },
+  cloudShadow: { min: 0, max: 10, step: 0.01 },
+  cloudVolume: { min: 0, max: 1.5, step: 0.01 },
+  cloudStorms: { min: 0, max: 1.5, step: 0.01 },
+  cloudBands: { min: 0, max: 1.5, step: 0.01 },
+  cloudDetail: { min: 0, max: 1.5, step: 0.01 },
+  cloudBillboardCount: { min: 0, max: 1600, step: 16 },
   sunTintStrength: { min: 0, max: 2, step: 0.01 },
   sunAzimuth: { min: 0, max: 360, step: 1 },
   sunElevation: { min: -20, max: 80, step: 1 },

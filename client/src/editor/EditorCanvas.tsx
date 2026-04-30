@@ -45,6 +45,19 @@ function createPlanet(scene: THREE.Scene, params: EditorParams): PlanetRenderer 
     atmosphereExtinctionStrength: params.atmosphereExtinctionStrength,
     atmosphereNightColor: params.atmosphereNightColor,
     atmosphereNightAmbient: params.atmosphereNightAmbient,
+    cloudCoverage: params.cloudCoverage,
+    cloudOpacity: params.cloudOpacity,
+    cloudScale: params.cloudScale,
+    cloudSoftness: params.cloudSoftness,
+    cloudHeight: params.cloudHeight,
+    cloudSpeed: params.cloudSpeed,
+    cloudShadow: params.cloudShadow,
+    cloudVolume: params.cloudVolume,
+    cloudStorms: params.cloudStorms,
+    cloudBands: params.cloudBands,
+    cloudDetail: params.cloudDetail,
+    cloudBillboards: params.cloudBillboards,
+    cloudBillboardCount: params.cloudBillboardCount,
     sunColor: params.sunColor,
     sunTintStrength: params.sunTintStrength,
     noiseProfile: {
@@ -82,6 +95,7 @@ function applyDebugSettings(engine: GameEngine, planet: PlanetRenderer, params: 
   planet.setDebugRendering({
     showOcean: params.debugOcean,
     showAtmosphere: params.debugAtmosphere,
+    showClouds: params.debugClouds,
     simpleTerrain: params.debugSimpleTerrain,
     nearTerrainShader: params.debugNearTerrainShader,
     farTerrainShader: params.debugFarTerrainShader,
@@ -258,14 +272,14 @@ export function EditorCanvas({ params }: Props) {
           `update=${avg(updateSamples).toFixed(2)}ms p95=${pct(sortedUpdates, 0.95).toFixed(2)}ms`,
           `draw=${engine.renderer.info.render.calls} tri=${engine.renderer.info.render.triangles}`,
           `geo=${engine.renderer.info.memory.geometries} tex=${engine.renderer.info.memory.textures}`,
-          `diag bloom=${paramsRef.current.debugBloom ? 'on' : 'off'} ocean=${paramsRef.current.debugOcean ? 'on' : 'off'} atmosphere=${paramsRef.current.debugAtmosphere ? 'on' : 'off'} simpleTerrain=${paramsRef.current.debugSimpleTerrain ? 'on' : 'off'}`,
+          `diag bloom=${paramsRef.current.debugBloom ? 'on' : 'off'} ocean=${paramsRef.current.debugOcean ? 'on' : 'off'} atmosphere=${paramsRef.current.debugAtmosphere ? 'on' : 'off'} clouds=${paramsRef.current.debugClouds ? 'on' : 'off'} simpleTerrain=${paramsRef.current.debugSimpleTerrain ? 'on' : 'off'}`,
           bloom
             ? `bloom strength=${bloom.strength.toFixed(2)} radius=${bloom.radius.toFixed(2)} threshold=${bloom.threshold.toFixed(2)} enabled=${bloom.enabled ? 'on' : 'off'}`
             : 'bloom unavailable',
           `tone ${engine.getToneMappingName()} exposure=${engine.getToneMappingExposure().toFixed(2)}`,
           `terrain near=${paramsRef.current.debugNearTerrainShader ? 'shader' : 'simple'} far=${paramsRef.current.debugFarTerrainShader ? 'shader' : 'simple'} fallback=${paramsRef.current.debugFallbackTerrainShader ? 'shader' : 'simple'}`,
           stats
-            ? `planet dist=${stats.surfaceDistance.toFixed(1)} chunks=${stats.visible}/${stats.chunks} pending=${stats.pending} building=${stats.building}/${stats.workers} skirts=${stats.skirtEdges} generated=${stats.generated} build=${stats.chunkGenerationMs.toFixed(2)}ms integrate=${stats.chunkIntegrationMs.toFixed(2)}ms lod[${lods}]`
+            ? `planet dist=${stats.surfaceDistance.toFixed(1)} chunks=${stats.visible}/${stats.chunks} pending=${stats.pending} building=${stats.building}/${stats.workers} skirts=${stats.skirtEdges} cloudQ=${stats.cloudQuality} cloudBB=${stats.cloudBillboards} generated=${stats.generated} build=${stats.chunkGenerationMs.toFixed(2)}ms integrate=${stats.chunkIntegrationMs.toFixed(2)}ms lod[${lods}]`
             : 'planet unavailable',
         ].join('\n')
 
@@ -331,6 +345,21 @@ export function EditorCanvas({ params }: Props) {
     planetRef.current?.setSunTintStrength(params.sunTintStrength)
     planetRef.current?.setAtmosphereHaze(params.atmosphereHazeStrength, params.atmosphereHazeDistance)
     planetRef.current?.setAtmosphereNight(params.atmosphereNightColor, params.atmosphereNightAmbient)
+    planetRef.current?.setClouds({
+      coverage: params.cloudCoverage,
+      opacity: params.cloudOpacity,
+      scale: params.cloudScale,
+      softness: params.cloudSoftness,
+      height: params.cloudHeight,
+      speed: params.cloudSpeed,
+      shadow: params.cloudShadow,
+      volume: params.cloudVolume,
+      storms: params.cloudStorms,
+      bands: params.cloudBands,
+      detail: params.cloudDetail,
+      billboards: params.cloudBillboards,
+      billboardCount: params.cloudBillboardCount,
+    })
     planetRef.current?.setAtmosphereOptics({
       horizonGlow: params.atmosphereHorizonGlow,
       sunGlare: params.atmosphereSunGlare,
@@ -363,6 +392,21 @@ export function EditorCanvas({ params }: Props) {
       newPlanet.setSunTintStrength(paramsRef.current.sunTintStrength)
       newPlanet.setAtmosphereHaze(paramsRef.current.atmosphereHazeStrength, paramsRef.current.atmosphereHazeDistance)
       newPlanet.setAtmosphereNight(paramsRef.current.atmosphereNightColor, paramsRef.current.atmosphereNightAmbient)
+      newPlanet.setClouds({
+        coverage: paramsRef.current.cloudCoverage,
+        opacity: paramsRef.current.cloudOpacity,
+        scale: paramsRef.current.cloudScale,
+        softness: paramsRef.current.cloudSoftness,
+        height: paramsRef.current.cloudHeight,
+        speed: paramsRef.current.cloudSpeed,
+        shadow: paramsRef.current.cloudShadow,
+        volume: paramsRef.current.cloudVolume,
+        storms: paramsRef.current.cloudStorms,
+        bands: paramsRef.current.cloudBands,
+        detail: paramsRef.current.cloudDetail,
+        billboards: paramsRef.current.cloudBillboards,
+        billboardCount: paramsRef.current.cloudBillboardCount,
+      })
       newPlanet.setAtmosphereOptics({
         horizonGlow: paramsRef.current.atmosphereHorizonGlow,
         sunGlare: paramsRef.current.atmosphereSunGlare,

@@ -637,6 +637,189 @@ export function EditorPanel({ params, onChange }: Props) {
       </div>
 
       <div className="editor-section">
+        <div className="editor-section-title">Clouds</div>
+        <div className="editor-row">
+          <span className="editor-label">Coverage</span>
+          <input
+            className="editor-slider"
+            type="range"
+            min={RANGES.cloudCoverage.min}
+            max={RANGES.cloudCoverage.max}
+            step={RANGES.cloudCoverage.step}
+            value={params.cloudCoverage}
+            onInput={e => set('cloudCoverage', Number(e.currentTarget.value))}
+            onChange={e => set('cloudCoverage', Number(e.target.value))}
+          />
+          <span className="editor-value">{params.cloudCoverage.toFixed(2)}</span>
+        </div>
+        <div className="editor-row">
+          <span className="editor-label">Opacity</span>
+          <input
+            className="editor-slider"
+            type="range"
+            min={RANGES.cloudOpacity.min}
+            max={RANGES.cloudOpacity.max}
+            step={RANGES.cloudOpacity.step}
+            value={params.cloudOpacity}
+            onInput={e => set('cloudOpacity', Number(e.currentTarget.value))}
+            onChange={e => set('cloudOpacity', Number(e.target.value))}
+          />
+          <span className="editor-value">{params.cloudOpacity.toFixed(2)}</span>
+        </div>
+        <div className="editor-row">
+          <span className="editor-label">Scale</span>
+          <input
+            className="editor-slider"
+            type="range"
+            min={RANGES.cloudScale.min}
+            max={RANGES.cloudScale.max}
+            step={RANGES.cloudScale.step}
+            value={params.cloudScale}
+            onInput={e => set('cloudScale', Number(e.currentTarget.value))}
+            onChange={e => set('cloudScale', Number(e.target.value))}
+          />
+          <span className="editor-value">{params.cloudScale.toFixed(1)}</span>
+        </div>
+        <div className="editor-row">
+          <span className="editor-label">Softness</span>
+          <input
+            className="editor-slider"
+            type="range"
+            min={RANGES.cloudSoftness.min}
+            max={RANGES.cloudSoftness.max}
+            step={RANGES.cloudSoftness.step}
+            value={params.cloudSoftness}
+            onInput={e => set('cloudSoftness', Number(e.currentTarget.value))}
+            onChange={e => set('cloudSoftness', Number(e.target.value))}
+          />
+          <span className="editor-value">{params.cloudSoftness.toFixed(2)}</span>
+        </div>
+        <div className="editor-row">
+          <span className="editor-label">Height</span>
+          <input
+            className="editor-slider"
+            type="range"
+            min={RANGES.cloudHeight.min}
+            max={RANGES.cloudHeight.max}
+            step={RANGES.cloudHeight.step}
+            value={params.cloudHeight}
+            onInput={e => set('cloudHeight', Number(e.currentTarget.value))}
+            onChange={e => set('cloudHeight', Number(e.target.value))}
+          />
+          <span className="editor-value">{params.cloudHeight.toFixed(3)}</span>
+        </div>
+        <div className="editor-row">
+          <span className="editor-label">Speed</span>
+          <input
+            className="editor-slider"
+            type="range"
+            min={RANGES.cloudSpeed.min}
+            max={RANGES.cloudSpeed.max}
+            step={RANGES.cloudSpeed.step}
+            value={params.cloudSpeed}
+            onInput={e => set('cloudSpeed', Number(e.currentTarget.value))}
+            onChange={e => set('cloudSpeed', Number(e.target.value))}
+          />
+          <span className="editor-value">{params.cloudSpeed.toFixed(3)}</span>
+        </div>
+        <div className="editor-row">
+          <span className="editor-label">Shadow</span>
+          <input
+            className="editor-slider"
+            type="range"
+            min={RANGES.cloudShadow.min}
+            max={RANGES.cloudShadow.max}
+            step={RANGES.cloudShadow.step}
+            value={params.cloudShadow}
+            onInput={e => set('cloudShadow', Number(e.currentTarget.value))}
+            onChange={e => set('cloudShadow', Number(e.target.value))}
+          />
+          <span className="editor-value">{params.cloudShadow.toFixed(2)}</span>
+        </div>
+        <div className="editor-row">
+          <span className="editor-label">Volume</span>
+          <input
+            className="editor-slider"
+            type="range"
+            min={RANGES.cloudVolume.min}
+            max={RANGES.cloudVolume.max}
+            step={RANGES.cloudVolume.step}
+            value={params.cloudVolume}
+            onInput={e => set('cloudVolume', Number(e.currentTarget.value))}
+            onChange={e => set('cloudVolume', Number(e.target.value))}
+          />
+          <span className="editor-value">{params.cloudVolume.toFixed(2)}</span>
+        </div>
+        <div className="editor-row">
+          <span className="editor-label">Storms</span>
+          <input
+            className="editor-slider"
+            type="range"
+            min={RANGES.cloudStorms.min}
+            max={RANGES.cloudStorms.max}
+            step={RANGES.cloudStorms.step}
+            value={params.cloudStorms}
+            onInput={e => set('cloudStorms', Number(e.currentTarget.value))}
+            onChange={e => set('cloudStorms', Number(e.target.value))}
+          />
+          <span className="editor-value">{params.cloudStorms.toFixed(2)}</span>
+        </div>
+        <div className="editor-row">
+          <span className="editor-label">Bands</span>
+          <input
+            className="editor-slider"
+            type="range"
+            min={RANGES.cloudBands.min}
+            max={RANGES.cloudBands.max}
+            step={RANGES.cloudBands.step}
+            value={params.cloudBands}
+            onInput={e => set('cloudBands', Number(e.currentTarget.value))}
+            onChange={e => set('cloudBands', Number(e.target.value))}
+          />
+          <span className="editor-value">{params.cloudBands.toFixed(2)}</span>
+        </div>
+        <div className="editor-row">
+          <span className="editor-label">Detail</span>
+          <input
+            className="editor-slider"
+            type="range"
+            min={RANGES.cloudDetail.min}
+            max={RANGES.cloudDetail.max}
+            step={RANGES.cloudDetail.step}
+            value={params.cloudDetail}
+            onInput={e => set('cloudDetail', Number(e.currentTarget.value))}
+            onChange={e => set('cloudDetail', Number(e.target.value))}
+          />
+          <span className="editor-value">{params.cloudDetail.toFixed(2)}</span>
+        </div>
+        <div className="editor-row">
+          <label style={{ display: 'flex', alignItems: 'center', gap: 6, cursor: 'pointer' }}>
+            <input
+              type="checkbox"
+              checked={params.cloudBillboards}
+              onChange={e => set('cloudBillboards', e.target.checked)}
+              style={{ accentColor: '#2dd4a7' }}
+            />
+            <span className="editor-label" style={{ width: 'auto' }}>Billboards</span>
+          </label>
+        </div>
+        <div className="editor-row">
+          <span className="editor-label">Billboard Count</span>
+          <input
+            className="editor-slider"
+            type="range"
+            min={RANGES.cloudBillboardCount.min}
+            max={RANGES.cloudBillboardCount.max}
+            step={RANGES.cloudBillboardCount.step}
+            value={params.cloudBillboardCount}
+            onInput={e => set('cloudBillboardCount', Number(e.currentTarget.value))}
+            onChange={e => set('cloudBillboardCount', Number(e.target.value))}
+          />
+          <span className="editor-value">{params.cloudBillboardCount}</span>
+        </div>
+      </div>
+
+      <div className="editor-section">
         <div className="editor-section-title">Lighting</div>
         <div className="editor-row">
           <span className="editor-label">Sun Color</span>
@@ -778,6 +961,17 @@ export function EditorPanel({ params, onChange }: Props) {
               style={{ accentColor: '#2dd4a7' }}
             />
             <span className="editor-label" style={{ width: 'auto' }}>Atmosphere</span>
+          </label>
+        </div>
+        <div className="editor-row">
+          <label style={{ display: 'flex', alignItems: 'center', gap: 6, cursor: 'pointer' }}>
+            <input
+              type="checkbox"
+              checked={params.debugClouds}
+              onChange={e => set('debugClouds', e.target.checked)}
+              style={{ accentColor: '#2dd4a7' }}
+            />
+            <span className="editor-label" style={{ width: 'auto' }}>Clouds</span>
           </label>
         </div>
         <div className="editor-row">

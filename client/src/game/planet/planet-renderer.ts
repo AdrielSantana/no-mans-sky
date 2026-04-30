@@ -12,6 +12,8 @@ import {
 import { TerrainChunk, type SkirtFlags } from './terrain-chunk'
 import {
   createAtmosphereMaterial,
+  createCloudBillboardMaterial,
+  createCloudMaterial,
   createPlanetFarMaterial,
   createOceanMaterial,
   createPlanetMaterial,
@@ -32,6 +34,7 @@ const MAX_TERRAIN_WORKERS = 8
 const DETAILED_MATERIAL_MIN_LOD = 6
 const DETAILED_MATERIAL_DISTANCE = WORLD_SCALE.localDetailNear * 2.2
 const LOD_COLLAPSE_HYSTERESIS = 1.35
+const CLOUD_BILLBOARD_MAX_INSTANCES = 1600
 const FAR_TEXTURE_LOD_BANDS = [
   { maxLod: 2, detailScale: 0.060, farScale: 0.035, farStrength: 0.62 },
   { maxLod: 4, detailScale: 0.120, farScale: 0.050, farStrength: 0.58 },
@@ -71,6 +74,19 @@ interface PlanetRendererParams {
   atmosphereExtinctionStrength?: number
   atmosphereNightColor?: string
   atmosphereNightAmbient?: number
+  cloudCoverage?: number
+  cloudOpacity?: number
+  cloudScale?: number
+  cloudSoftness?: number
+  cloudHeight?: number
+  cloudSpeed?: number
+  cloudShadow?: number
+  cloudVolume?: number
+  cloudStorms?: number
+  cloudBands?: number
+  cloudDetail?: number
+  cloudBillboards?: boolean
+  cloudBillboardCount?: number
   sunColor?: string
   sunTintStrength?: number
   noiseProfile?: {
@@ -127,11 +143,19 @@ export class PlanetRenderer {
   private simpleTerrainMaterial = new THREE.MeshBasicMaterial({ color: 0x8f927f })
   private oceanMaterial: THREE.ShaderMaterial | null = null
   private atmosphereMaterial: THREE.ShaderMaterial | null = null
+  private cloudMaterial: THREE.ShaderMaterial | null = null
   private quadtrees: QuadtreeNode[] = []
   private chunks = new Map<string, TerrainChunk>()
   private fallbackSphere: THREE.Mesh
   private oceanMesh: THREE.Mesh | null = null
   private atmosphereMesh: THREE.Mesh | null = null
+  private cloudMesh: THREE.Mesh | null = null
+  private cloudMeshBaseRadius = 0
+  private cloudBillboardMesh: THREE.InstancedMesh | null = null
+  private cloudBillboardMaterial: THREE.ShaderMaterial | null = null
+  private cloudBillboardAlphaAttr: THREE.InstancedBufferAttribute | null = null
+  private cloudBillboardSeedAttr: THREE.InstancedBufferAttribute | null = null
+  private cloudBillboardVisibleCount = 0
   private sunPosition = new THREE.Vector3(0, 0, 0)
   private sunColor = new THREE.Color(0xfff2c8)
   private atmosphereColor = new THREE.Color(0x6fa8dc)
@@ -147,6 +171,20 @@ export class PlanetRenderer {
   private atmosphereExtinctionStrength = 0.68
   private atmosphereNightColor = new THREE.Color(0x071226)
   private atmosphereNightAmbient = 0.28
+  private cloudCoverage = 0.68
+  private cloudOpacity = 0.78
+  private cloudScale = 2.7
+  private cloudSoftness = 0.15
+  private cloudHeight = 0.045
+  private cloudSpeed = 0.012
+  private cloudShadow = 0.14
+  private cloudVolume = 1.08
+  private cloudStorms = 0.62
+  private cloudBands = 0.72
+  private cloudDetail = 0.82
+  private cloudQuality = 2
+  private cloudBillboardsEnabled = true
+  private cloudBillboardCount = 640
   private terrainParams: PlanetTerrainParams
   private lodDistances: number[]
   private requestedTerrainWorkers: number
@@ -167,6 +205,7 @@ export class PlanetRenderer {
   private chunkIntegrationMsLastFrame = 0
   private debugShowOcean = true
   private debugShowAtmosphere = true
+  private debugShowClouds = true
   private debugSimpleTerrain = false
   private debugNearTerrainShader = true
   private debugFarTerrainShader = true
@@ -195,6 +234,23 @@ export class PlanetRenderer {
     this.atmosphereExtinctionStrength = params.atmosphereExtinctionStrength ?? 0.68
     this.atmosphereNightColor.set(params.atmosphereNightColor ?? '#071226')
     this.atmosphereNightAmbient = params.atmosphereNightAmbient ?? 0.28
+    this.cloudCoverage = params.cloudCoverage ?? 0.68
+    this.cloudOpacity = params.cloudOpacity ?? 0.78
+    this.cloudScale = params.cloudScale ?? 2.7
+    this.cloudSoftness = params.cloudSoftness ?? 0.15
+    this.cloudHeight = params.cloudHeight ?? 0.045
+    this.cloudSpeed = params.cloudSpeed ?? 0.012
+    this.cloudShadow = params.cloudShadow ?? 0.14
+    this.cloudVolume = params.cloudVolume ?? 1.08
+    this.cloudStorms = params.cloudStorms ?? 0.62
+    this.cloudBands = params.cloudBands ?? 0.72
+    this.cloudDetail = params.cloudDetail ?? 0.82
+    this.cloudBillboardsEnabled = params.cloudBillboards ?? true
+    this.cloudBillboardCount = THREE.MathUtils.clamp(
+      Math.round(params.cloudBillboardCount ?? 640),
+      0,
+      CLOUD_BILLBOARD_MAX_INSTANCES,
+    )
     this.updateAtmosphereLightColor()
     this.group = new THREE.Group()
     scene.add(this.group)
@@ -270,6 +326,16 @@ export class PlanetRenderer {
       atmosphereExtinctionStrength: this.atmosphereExtinctionStrength,
       nightColor: this.atmosphereNightColor,
       nightAmbient: this.atmosphereNightAmbient,
+      cloudCoverage: this.cloudCoverage,
+      cloudScale: this.cloudScale,
+      cloudSoftness: this.cloudSoftness,
+      cloudHeight: this.cloudHeight,
+      cloudSpeed: this.cloudSpeed,
+      cloudShadow: this.cloudShadow,
+      cloudVolume: this.cloudVolume,
+      cloudStorms: this.cloudStorms,
+      cloudBands: this.cloudBands,
+      cloudDetail: this.cloudDetail,
       atmosphereHazeStrength: this.atmosphereHazeStrength,
       atmosphereHazeDistance: this.atmosphereHazeDistance,
       planetRadius: planetRadius,
@@ -298,6 +364,16 @@ export class PlanetRenderer {
       atmosphereExtinctionStrength: this.atmosphereExtinctionStrength,
       nightColor: this.atmosphereNightColor,
       nightAmbient: this.atmosphereNightAmbient,
+      cloudCoverage: this.cloudCoverage,
+      cloudScale: this.cloudScale,
+      cloudSoftness: this.cloudSoftness,
+      cloudHeight: this.cloudHeight,
+      cloudSpeed: this.cloudSpeed,
+      cloudShadow: this.cloudShadow,
+      cloudVolume: this.cloudVolume,
+      cloudStorms: this.cloudStorms,
+      cloudBands: this.cloudBands,
+      cloudDetail: this.cloudDetail,
       atmosphereHazeStrength: this.atmosphereHazeStrength,
       atmosphereHazeDistance: this.atmosphereHazeDistance,
       planetRadius: planetRadius,
@@ -340,6 +416,16 @@ export class PlanetRenderer {
       atmosphereExtinctionStrength: this.atmosphereExtinctionStrength,
       nightColor: this.atmosphereNightColor,
       nightAmbient: this.atmosphereNightAmbient,
+      cloudCoverage: this.cloudCoverage,
+      cloudScale: this.cloudScale,
+      cloudSoftness: this.cloudSoftness,
+      cloudHeight: this.cloudHeight,
+      cloudSpeed: this.cloudSpeed,
+      cloudShadow: this.cloudShadow,
+      cloudVolume: this.cloudVolume,
+      cloudStorms: this.cloudStorms,
+      cloudBands: this.cloudBands,
+      cloudDetail: this.cloudDetail,
       atmosphereHazeStrength: this.atmosphereHazeStrength,
       atmosphereHazeDistance: this.atmosphereHazeDistance,
       planetRadius,
@@ -388,6 +474,16 @@ export class PlanetRenderer {
         atmosphereExtinctionStrength: this.atmosphereExtinctionStrength,
         nightColor: this.atmosphereNightColor,
         nightAmbient: this.atmosphereNightAmbient,
+        cloudCoverage: this.cloudCoverage,
+        cloudScale: this.cloudScale,
+        cloudSoftness: this.cloudSoftness,
+        cloudHeight: this.cloudHeight,
+        cloudSpeed: this.cloudSpeed,
+        cloudShadow: this.cloudShadow,
+        cloudVolume: this.cloudVolume,
+        cloudStorms: this.cloudStorms,
+        cloudBands: this.cloudBands,
+        cloudDetail: this.cloudDetail,
         atmosphereHazeStrength: this.atmosphereHazeStrength,
         atmosphereHazeDistance: this.atmosphereHazeDistance,
       })
@@ -395,6 +491,64 @@ export class PlanetRenderer {
       this.oceanMesh.frustumCulled = false
       this.oceanMesh.renderOrder = 2
       this.group.add(this.oceanMesh)
+    }
+
+    if (params.planetType !== 'gas' && this.cloudOpacity > 0.001) {
+      const cloudRadius = planetRadius * (1 + THREE.MathUtils.clamp(this.cloudHeight, 0.001, 0.20))
+      this.cloudMeshBaseRadius = cloudRadius
+      const cloudGeo = new THREE.SphereGeometry(cloudRadius, 128, 72)
+      this.cloudMaterial = createCloudMaterial({
+        seed: this.noiseProfile.seed,
+        coverage: this.cloudCoverage,
+        opacity: this.cloudOpacity,
+        scale: this.cloudScale,
+        softness: this.cloudSoftness,
+        height: this.cloudHeight,
+        speed: this.cloudSpeed,
+        shadow: this.cloudShadow,
+        volume: this.cloudVolume,
+        storms: this.cloudStorms,
+        bands: this.cloudBands,
+        detail: this.cloudDetail,
+        atmosphereColor: params.atmosphereColor,
+        sunColor: this.sunColor,
+        atmosphereLightColor: this.atmosphereLightColor,
+        nightColor: this.atmosphereNightColor,
+        nightAmbient: this.atmosphereNightAmbient,
+        sunPosition: this.sunPosition,
+      })
+      this.cloudMesh = new THREE.Mesh(cloudGeo, this.cloudMaterial)
+      this.cloudMesh.frustumCulled = false
+      this.cloudMesh.renderOrder = 3
+      this.group.add(this.cloudMesh)
+
+      const billboardGeo = new THREE.PlaneGeometry(1, 1, 3, 3)
+      this.cloudBillboardAlphaAttr = new THREE.InstancedBufferAttribute(new Float32Array(CLOUD_BILLBOARD_MAX_INSTANCES), 1)
+      this.cloudBillboardSeedAttr = new THREE.InstancedBufferAttribute(new Float32Array(CLOUD_BILLBOARD_MAX_INSTANCES), 1)
+      this.cloudBillboardAlphaAttr.setUsage(THREE.DynamicDrawUsage)
+      this.cloudBillboardSeedAttr.setUsage(THREE.DynamicDrawUsage)
+      billboardGeo.setAttribute('instanceAlpha', this.cloudBillboardAlphaAttr)
+      billboardGeo.setAttribute('instanceSeed', this.cloudBillboardSeedAttr)
+      this.cloudBillboardMaterial = createCloudBillboardMaterial({
+        opacity: this.cloudOpacity,
+        atmosphereColor: params.atmosphereColor,
+        sunColor: this.sunColor,
+        atmosphereLightColor: this.atmosphereLightColor,
+        nightColor: this.atmosphereNightColor,
+        nightAmbient: this.atmosphereNightAmbient,
+        sunPosition: this.sunPosition,
+      })
+      this.cloudBillboardMesh = new THREE.InstancedMesh(
+        billboardGeo,
+        this.cloudBillboardMaterial,
+        CLOUD_BILLBOARD_MAX_INSTANCES,
+      )
+      this.cloudBillboardMesh.count = 0
+      this.cloudBillboardMesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage)
+      this.cloudBillboardMesh.frustumCulled = false
+      this.cloudBillboardMesh.renderOrder = 5
+      this.cloudBillboardMesh.visible = false
+      this.group.add(this.cloudBillboardMesh)
     }
 
     if (params.atmosphereDensity > 0.01) {
@@ -457,6 +611,16 @@ export class PlanetRenderer {
       atmosphereExtinctionStrength: this.atmosphereExtinctionStrength,
       nightColor: this.atmosphereNightColor,
       nightAmbient: this.atmosphereNightAmbient,
+      cloudCoverage: this.cloudCoverage,
+      cloudScale: this.cloudScale,
+      cloudSoftness: this.cloudSoftness,
+      cloudHeight: this.cloudHeight,
+      cloudSpeed: this.cloudSpeed,
+      cloudShadow: this.cloudShadow,
+      cloudVolume: this.cloudVolume,
+      cloudStorms: this.cloudStorms,
+      cloudBands: this.cloudBands,
+      cloudDetail: this.cloudDetail,
       atmosphereHazeStrength: this.atmosphereHazeStrength,
       atmosphereHazeDistance: this.atmosphereHazeDistance,
       planetRadius: this.planetRadius,
@@ -507,6 +671,8 @@ export class PlanetRenderer {
       ...this.farLodMaterials,
       this.fallbackMaterial,
       this.oceanMaterial,
+      this.cloudMaterial,
+      this.cloudBillboardMaterial,
       this.atmosphereMaterial,
     ]
     for (const material of materials) {
@@ -548,6 +714,253 @@ export class PlanetRenderer {
     this.updateLightColorUniforms()
   }
 
+  setClouds(settings: {
+    coverage: number
+    opacity: number
+    scale: number
+    softness: number
+    height: number
+    speed: number
+    shadow: number
+    volume: number
+    storms: number
+    bands: number
+    detail: number
+    billboards: boolean
+    billboardCount: number
+  }) {
+    this.cloudCoverage = settings.coverage
+    this.cloudOpacity = settings.opacity
+    this.cloudScale = settings.scale
+    this.cloudSoftness = settings.softness
+    this.cloudHeight = settings.height
+    this.cloudSpeed = settings.speed
+    this.cloudShadow = settings.shadow
+    this.cloudVolume = settings.volume
+    this.cloudStorms = settings.storms
+    this.cloudBands = settings.bands
+    this.cloudDetail = settings.detail
+    this.cloudBillboardsEnabled = settings.billboards
+    this.cloudBillboardCount = THREE.MathUtils.clamp(
+      Math.round(settings.billboardCount),
+      0,
+      CLOUD_BILLBOARD_MAX_INSTANCES,
+    )
+
+    this.updateCloudUniforms()
+
+    if (this.cloudMesh) {
+      const scale = 1 + THREE.MathUtils.clamp(this.cloudHeight, 0.001, 0.20)
+      const targetRadius = this.planetRadius * scale
+      if (this.cloudMeshBaseRadius > 0) {
+        this.cloudMesh.scale.setScalar(targetRadius / this.cloudMeshBaseRadius)
+      }
+    }
+  }
+
+  private updateCloudUniforms() {
+    const materials = [
+      this.material,
+      ...this.farLodMaterials,
+      this.fallbackMaterial,
+      this.oceanMaterial,
+      this.cloudMaterial,
+      this.cloudBillboardMaterial,
+    ]
+    const effectiveShadow = this.debugShowClouds ? this.cloudShadow : 0
+
+    for (const material of materials) {
+      this.setFloatUniform(material, 'uCloudCoverage', this.cloudCoverage)
+      this.setFloatUniform(material, 'uCloudScale', this.cloudScale)
+      this.setFloatUniform(material, 'uCloudSoftness', this.cloudSoftness)
+      this.setFloatUniform(material, 'uCloudHeight', this.cloudHeight)
+      this.setFloatUniform(material, 'uCloudSpeed', this.cloudSpeed)
+      this.setFloatUniform(material, 'uCloudShadowStrength', effectiveShadow)
+      this.setFloatUniform(material, 'uCloudVolumeStrength', this.cloudVolume)
+      this.setFloatUniform(material, 'uCloudStormStrength', this.cloudStorms)
+      this.setFloatUniform(material, 'uCloudBandStrength', this.cloudBands)
+      this.setFloatUniform(material, 'uCloudDetailStrength', this.cloudDetail)
+      this.setFloatUniform(material, 'uCloudQuality', this.cloudQuality)
+    }
+
+    this.updateCloudRenderMix()
+  }
+
+  private updateCloudRenderMix() {
+    const billboardActive = this.cloudBillboardsEnabled && this.cloudBillboardCount > 0 && this.cloudQuality < 2
+    const shellMultiplier = !billboardActive
+      ? 1
+      : this.cloudQuality === 0
+        ? 0.18
+        : 0.48
+    const billboardMultiplier = billboardActive
+      ? this.cloudQuality === 0
+        ? 1
+        : 0.68
+      : 0
+
+    this.setFloatUniform(this.cloudMaterial, 'uOpacity', this.cloudOpacity * shellMultiplier)
+    this.setFloatUniform(this.cloudBillboardMaterial, 'uOpacity', this.cloudOpacity * billboardMultiplier)
+  }
+
+  private updateCloudQuality(surfaceDistance: number) {
+    const normalizedDistance = surfaceDistance / Math.max(this.planetRadius, 1)
+    const nextQuality = normalizedDistance < 0.70 ? 0 : normalizedDistance < 1.65 ? 1 : 2
+    if (nextQuality === this.cloudQuality) return
+
+    this.cloudQuality = nextQuality
+    const materials = [
+      this.material,
+      ...this.farLodMaterials,
+      this.fallbackMaterial,
+      this.oceanMaterial,
+      this.cloudMaterial,
+      this.cloudBillboardMaterial,
+    ]
+    for (const material of materials) {
+      this.setFloatUniform(material, 'uCloudQuality', this.cloudQuality)
+    }
+    this.updateCloudRenderMix()
+  }
+
+  private random01(value: number): number {
+    const x = Math.sin(value * 12.9898 + this.noiseProfile.seed * 78.233) * 43758.5453
+    return x - Math.floor(x)
+  }
+
+  private sampleCloudBillboardDensity(dir: THREE.Vector3): number {
+    const scale = Math.max(this.cloudScale, 0.001)
+    const wind = this.time * Math.max(this.cloudSpeed, 0) * 0.16
+    const waveA = Math.sin((dir.x * 2.13 + dir.y * 3.77 - dir.z * 1.41) * scale + this.noiseProfile.seed * 0.017 + wind)
+    const waveB = Math.sin((dir.x * -4.31 + dir.y * 1.86 + dir.z * 2.92) * scale * 0.72 + this.noiseProfile.seed * 0.031 - wind * 0.72)
+    const waveC = Math.sin((dir.x * 7.11 - dir.y * 2.34 + dir.z * 5.67) * scale * 0.36 + this.noiseProfile.seed * 0.011)
+    const band = Math.sin((dir.y * 5.6 + dir.x * 1.3) * (0.65 + this.cloudBands * 0.55) + wind * 0.42) * 0.5 + 0.5
+    const storm = THREE.MathUtils.smoothstep(waveA * 0.52 + waveB * 0.32 + waveC * 0.16, 0.08, 0.62)
+    return THREE.MathUtils.clamp(
+      0.50 + waveA * 0.20 + waveB * 0.16 + waveC * 0.10 + band * 0.14 * this.cloudBands + storm * 0.16 * this.cloudStorms,
+      0,
+      1,
+    )
+  }
+
+  private updateCloudBillboards(localCamPos: THREE.Vector3) {
+    const mesh = this.cloudBillboardMesh
+    const alphaAttr = this.cloudBillboardAlphaAttr
+    const seedAttr = this.cloudBillboardSeedAttr
+    if (!mesh || !alphaAttr || !seedAttr) return
+
+    const active = this.debugShowClouds
+      && this.cloudBillboardsEnabled
+      && this.cloudOpacity > 0.001
+      && this.cloudQuality < 2
+      && this.cloudBillboardCount > 0
+
+    if (!active) {
+      mesh.visible = false
+      mesh.count = 0
+      this.cloudBillboardVisibleCount = 0
+      return
+    }
+
+    const centerDir = localCamPos.lengthSq() > 0.0001
+      ? localCamPos.clone().normalize()
+      : new THREE.Vector3(0, 1, 0)
+
+    const cloudRadius = this.planetRadius * (1 + THREE.MathUtils.clamp(this.cloudHeight, 0.001, 0.20))
+    const qualityMultiplier = this.cloudQuality === 0 ? 1 : 0.55
+    const desiredCount = Math.min(
+      CLOUD_BILLBOARD_MAX_INSTANCES,
+      Math.max(0, Math.round(this.cloudBillboardCount * qualityMultiplier)),
+    )
+    const capAngle = this.cloudQuality === 0 ? 0.42 : 0.72
+    const baseSize = this.planetRadius * (this.cloudQuality === 0 ? 0.038 : 0.075)
+    const threshold = THREE.MathUtils.lerp(0.80, 0.26, THREE.MathUtils.clamp(this.cloudCoverage, 0, 1))
+    const candidateTarget = Math.min(CLOUD_BILLBOARD_MAX_INSTANCES, Math.max(64, Math.round(desiredCount * 2.35)))
+    const angularStep = THREE.MathUtils.clamp(
+      capAngle * Math.sqrt(Math.PI / candidateTarget),
+      0.012,
+      0.085,
+    )
+    const centerLat = Math.asin(THREE.MathUtils.clamp(centerDir.y, -1, 1))
+    const centerLon = Math.atan2(centerDir.x, centerDir.z)
+    const centerLatCell = Math.round(centerLat / angularStep)
+    const centerLonCell = Math.round(centerLon / angularStep)
+    const cellRadius = Math.ceil(capAngle / angularStep) + 2
+    const capDot = Math.cos(capAngle)
+    const alphaArray = alphaAttr.array as Float32Array
+    const seedArray = seedAttr.array as Float32Array
+    const matrix = new THREE.Matrix4()
+    const dir = new THREE.Vector3()
+    const pos = new THREE.Vector3()
+    const right = new THREE.Vector3()
+    const up = new THREE.Vector3()
+    const toCamera = new THREE.Vector3()
+    const basisX = new THREE.Vector3()
+    const basisY = new THREE.Vector3()
+    const basisZ = new THREE.Vector3()
+    let visible = 0
+
+    for (let latOffset = -cellRadius; latOffset <= cellRadius && visible < desiredCount; latOffset++) {
+      const latCell = centerLatCell + latOffset
+      const baseLat = latCell * angularStep
+      if (baseLat < -Math.PI * 0.5 || baseLat > Math.PI * 0.5) continue
+
+      for (let lonOffset = -cellRadius; lonOffset <= cellRadius && visible < desiredCount; lonOffset++) {
+        const lonCell = centerLonCell + lonOffset
+        const cellKey = latCell * 4099 + lonCell * 9173
+        const r1 = this.random01(cellKey + 11.0)
+        const r2 = this.random01(cellKey + 29.0)
+        const r3 = this.random01(cellKey + 47.0)
+        const lat = THREE.MathUtils.clamp(
+          baseLat + (r1 - 0.5) * angularStep * 0.72,
+          -Math.PI * 0.5 + 0.0001,
+          Math.PI * 0.5 - 0.0001,
+        )
+        const lon = lonCell * angularStep + (r2 - 0.5) * angularStep * 0.72
+        const cosLat = Math.cos(lat)
+        dir.set(
+          Math.sin(lon) * cosLat,
+          Math.sin(lat),
+          Math.cos(lon) * cosLat,
+        )
+        if (dir.dot(centerDir) < capDot) continue
+
+        const density = this.sampleCloudBillboardDensity(dir)
+        if (density < threshold) continue
+
+        pos.copy(dir).multiplyScalar(cloudRadius)
+        toCamera.copy(localCamPos).sub(pos).normalize()
+        right.crossVectors(dir, toCamera)
+        if (right.lengthSq() < 0.0001) {
+          right.crossVectors(new THREE.Vector3(0, 1, 0), dir)
+          if (right.lengthSq() < 0.0001) right.crossVectors(new THREE.Vector3(1, 0, 0), dir)
+        }
+        right.normalize()
+        up.crossVectors(toCamera, right).normalize()
+
+        const densityAlpha = THREE.MathUtils.smoothstep(density, threshold, Math.min(1, threshold + Math.max(this.cloudSoftness, 0.05) * 1.9))
+        const size = baseSize * (0.62 + r3 * 1.18) * (0.90 + this.cloudVolume * 0.16)
+        const aspect = 0.52 + this.random01(cellKey + 83.0) * 0.72
+        basisX.copy(right).multiplyScalar(size)
+        basisY.copy(up).multiplyScalar(size * aspect)
+        basisZ.copy(toCamera)
+        matrix.makeBasis(basisX, basisY, basisZ)
+        matrix.setPosition(pos)
+        mesh.setMatrixAt(visible, matrix)
+        alphaArray[visible] = THREE.MathUtils.clamp(densityAlpha * (0.36 + r3 * 0.44), 0, 0.86)
+        seedArray[visible] = r3
+        visible++
+      }
+    }
+
+    mesh.count = visible
+    mesh.visible = visible > 0
+    mesh.instanceMatrix.needsUpdate = true
+    alphaAttr.needsUpdate = true
+    seedAttr.needsUpdate = true
+    this.cloudBillboardVisibleCount = visible
+  }
+
   setAtmosphereOptics(settings: {
     horizonGlow: number
     sunGlare: number
@@ -572,11 +985,14 @@ export class PlanetRenderer {
     }
     this.fallbackMaterial.wireframe = enabled
     if (this.oceanMaterial) this.oceanMaterial.wireframe = enabled
+    if (this.cloudMaterial) this.cloudMaterial.wireframe = enabled
+    if (this.cloudBillboardMaterial) this.cloudBillboardMaterial.wireframe = enabled
   }
 
   setDebugRendering(options: {
     showOcean?: boolean
     showAtmosphere?: boolean
+    showClouds?: boolean
     simpleTerrain?: boolean
     nearTerrainShader?: boolean
     farTerrainShader?: boolean
@@ -584,6 +1000,10 @@ export class PlanetRenderer {
   }) {
     if (options.showOcean !== undefined) this.debugShowOcean = options.showOcean
     if (options.showAtmosphere !== undefined) this.debugShowAtmosphere = options.showAtmosphere
+    if (options.showClouds !== undefined) {
+      this.debugShowClouds = options.showClouds
+      this.updateCloudUniforms()
+    }
     if (options.simpleTerrain !== undefined) this.debugSimpleTerrain = options.simpleTerrain
     if (options.nearTerrainShader !== undefined) this.debugNearTerrainShader = options.nearTerrainShader
     if (options.farTerrainShader !== undefined) this.debugFarTerrainShader = options.farTerrainShader
@@ -696,6 +1116,8 @@ export class PlanetRenderer {
       completedBuilds: this.completedWorkerJobs.length,
       pendingCollapses: this.pendingCollapseKeys.size,
       skirtEdges,
+      cloudQuality: this.cloudQuality,
+      cloudBillboards: this.cloudBillboardVisibleCount,
       generated: this.generatedChunksLastFrame,
       chunkGenerationMs: this.chunkGenerationMsLastFrame,
       chunkIntegrationMs: this.chunkIntegrationMsLastFrame,
@@ -722,6 +1144,7 @@ export class PlanetRenderer {
     this.chunkPriorityCache.clear()
 
     const surfaceDist = this.getLocalSurfaceDistance(localCamPos)
+    this.updateCloudQuality(surfaceDist)
 
     // Update sun position uniform
     this.material.uniforms.uSunPosition.value.copy(this.sunPosition)
@@ -730,8 +1153,23 @@ export class PlanetRenderer {
     }
     this.fallbackMaterial.uniforms.uSunPosition.value.copy(this.sunPosition)
     this.oceanMaterial?.uniforms.uSunPosition.value.copy(this.sunPosition)
+    this.cloudMaterial?.uniforms.uSunPosition.value.copy(this.sunPosition)
+    this.cloudBillboardMaterial?.uniforms.uSunPosition.value.copy(this.sunPosition)
     this.atmosphereMaterial?.uniforms.uSunPosition.value.copy(this.sunPosition)
     this.updateLightColorUniforms()
+    this.setFloatUniform(this.material, 'uTime', this.time)
+    for (const material of this.farLodMaterials) {
+      this.setFloatUniform(material, 'uTime', this.time)
+    }
+    this.setFloatUniform(this.fallbackMaterial, 'uTime', this.time)
+    if (this.cloudMaterial) {
+      this.group.getWorldPosition(this.cloudMaterial.uniforms.uPlanetCenter.value)
+      this.cloudMaterial.uniforms.uTime.value = this.time
+    }
+    if (this.cloudBillboardMaterial) {
+      this.group.getWorldPosition(this.cloudBillboardMaterial.uniforms.uPlanetCenter.value)
+      this.cloudBillboardMaterial.uniforms.uTime.value = this.time
+    }
     if (this.atmosphereMaterial) {
       this.group.getWorldPosition(this.atmosphereMaterial.uniforms.uPlanetCenter.value)
     }
@@ -740,6 +1178,7 @@ export class PlanetRenderer {
       const farBlend = THREE.MathUtils.smoothstep(surfaceDist, this.planetRadius * 1.1, this.planetRadius * 4.0)
       this.oceanMaterial.uniforms.uOceanLift.value = farBlend * Math.max(2.0, this.planetRadius * 0.01)
     }
+    this.updateCloudBillboards(localCamPos)
     // Decide: show fallback sphere or quadtree terrain
     const useTerrain = surfaceDist < this.lodDistances[1]
 
@@ -749,6 +1188,12 @@ export class PlanetRenderer {
         ? this.simpleTerrainMaterial
         : this.fallbackMaterial
       if (this.oceanMesh) this.oceanMesh.visible = this.debugShowOcean
+      if (this.cloudMesh) this.cloudMesh.visible = this.debugShowClouds && this.cloudOpacity > 0.001
+      if (this.cloudBillboardMesh) {
+        this.cloudBillboardMesh.visible = false
+        this.cloudBillboardMesh.count = 0
+        this.cloudBillboardVisibleCount = 0
+      }
       if (this.atmosphereMesh) this.atmosphereMesh.visible = this.debugShowAtmosphere
       this.removeAllChunks()
       return
@@ -759,6 +1204,7 @@ export class PlanetRenderer {
       ? this.simpleTerrainMaterial
       : this.fallbackMaterial
     if (this.oceanMesh) this.oceanMesh.visible = this.debugShowOcean
+    if (this.cloudMesh) this.cloudMesh.visible = this.debugShowClouds && this.cloudOpacity > 0.001
     if (this.atmosphereMesh) this.atmosphereMesh.visible = this.debugShowAtmosphere
 
     // 1. Update quadtree structure (create/destroy children based on distance)
@@ -1316,8 +1762,12 @@ export class PlanetRenderer {
     this.fallbackMaterial.dispose()
     this.simpleTerrainMaterial.dispose()
     this.oceanMaterial?.dispose()
+    this.cloudMaterial?.dispose()
+    this.cloudBillboardMaterial?.dispose()
     this.atmosphereMaterial?.dispose()
     this.oceanMesh?.geometry.dispose()
+    this.cloudMesh?.geometry.dispose()
+    this.cloudBillboardMesh?.geometry.dispose()
     this.atmosphereMesh?.geometry.dispose()
     if (this.fallbackSphere.material instanceof THREE.ShaderMaterial) {
       this.fallbackSphere.material.dispose()
