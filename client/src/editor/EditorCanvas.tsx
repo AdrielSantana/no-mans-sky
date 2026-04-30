@@ -43,6 +43,8 @@ function createPlanet(scene: THREE.Scene, params: EditorParams): PlanetRenderer 
     atmosphereTwilightWidth: params.atmosphereTwilightWidth,
     atmosphereTwilightStrength: params.atmosphereTwilightStrength,
     atmosphereExtinctionStrength: params.atmosphereExtinctionStrength,
+    atmosphereNightColor: params.atmosphereNightColor,
+    atmosphereNightAmbient: params.atmosphereNightAmbient,
     sunColor: params.sunColor,
     sunTintStrength: params.sunTintStrength,
     noiseProfile: {
@@ -328,6 +330,7 @@ export function EditorCanvas({ params }: Props) {
     planetRef.current?.setSunColor(params.sunColor)
     planetRef.current?.setSunTintStrength(params.sunTintStrength)
     planetRef.current?.setAtmosphereHaze(params.atmosphereHazeStrength, params.atmosphereHazeDistance)
+    planetRef.current?.setAtmosphereNight(params.atmosphereNightColor, params.atmosphereNightAmbient)
     planetRef.current?.setAtmosphereOptics({
       horizonGlow: params.atmosphereHorizonGlow,
       sunGlare: params.atmosphereSunGlare,
@@ -359,6 +362,7 @@ export function EditorCanvas({ params }: Props) {
       newPlanet.setSunColor(paramsRef.current.sunColor)
       newPlanet.setSunTintStrength(paramsRef.current.sunTintStrength)
       newPlanet.setAtmosphereHaze(paramsRef.current.atmosphereHazeStrength, paramsRef.current.atmosphereHazeDistance)
+      newPlanet.setAtmosphereNight(paramsRef.current.atmosphereNightColor, paramsRef.current.atmosphereNightAmbient)
       newPlanet.setAtmosphereOptics({
         horizonGlow: paramsRef.current.atmosphereHorizonGlow,
         sunGlare: paramsRef.current.atmosphereSunGlare,

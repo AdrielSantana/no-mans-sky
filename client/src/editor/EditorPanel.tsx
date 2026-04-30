@@ -610,6 +610,30 @@ export function EditorPanel({ params, onChange }: Props) {
           />
           <span className="editor-value">{params.atmosphereExtinctionStrength.toFixed(2)}</span>
         </div>
+        <div className="editor-row">
+          <span className="editor-label">Night Color</span>
+          <input
+            className="editor-color"
+            type="color"
+            value={params.atmosphereNightColor}
+            onChange={e => set('atmosphereNightColor', e.target.value)}
+          />
+          <span className="editor-value">{params.atmosphereNightColor}</span>
+        </div>
+        <div className="editor-row">
+          <span className="editor-label">Night Ambient</span>
+          <input
+            className="editor-slider"
+            type="range"
+            min={RANGES.atmosphereNightAmbient.min}
+            max={RANGES.atmosphereNightAmbient.max}
+            step={RANGES.atmosphereNightAmbient.step}
+            value={params.atmosphereNightAmbient}
+            onInput={e => set('atmosphereNightAmbient', Number(e.currentTarget.value))}
+            onChange={e => set('atmosphereNightAmbient', Number(e.target.value))}
+          />
+          <span className="editor-value">{params.atmosphereNightAmbient.toFixed(2)}</span>
+        </div>
       </div>
 
       <div className="editor-section">

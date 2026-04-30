@@ -20,6 +20,8 @@ export interface EditorParams {
   atmosphereTwilightWidth: number
   atmosphereTwilightStrength: number
   atmosphereExtinctionStrength: number
+  atmosphereNightColor: string
+  atmosphereNightAmbient: number
   sunColor: string
   sunTintStrength: number
   sunAzimuth: number
@@ -96,8 +98,8 @@ export const DEFAULT_PARAMS: EditorParams = {
   planetRadius: 50000,
   terrainScale: 0.065,
   waterLevel: 0.45,
-  colorA: '#4f7357',
-  colorB: '#8a7a63',
+  colorA: '#26a269',
+  colorB: '#63452c',
   textureScale: 92,
   textureBlend: 0.70,
   textureNearDistance: 180,
@@ -112,6 +114,8 @@ export const DEFAULT_PARAMS: EditorParams = {
   atmosphereTwilightWidth: 0.90,
   atmosphereTwilightStrength: 0.85,
   atmosphereExtinctionStrength: 0.68,
+  atmosphereNightColor: '#071226',
+  atmosphereNightAmbient: 0.28,
   sunColor: '#fff2c8',
   sunTintStrength: 0.85,
   sunAzimuth: 315,
@@ -120,7 +124,7 @@ export const DEFAULT_PARAMS: EditorParams = {
   lacunarity: 2.05,
   gain: 0.48,
   frequency: 2.35,
-  warpStrength: 0.56,
+  warpStrength: 0.39,
   continentalScale: 1.12,
   mountainScale: 1.08,
   plainsScale: 0.68,
@@ -138,7 +142,7 @@ export const DEFAULT_PARAMS: EditorParams = {
   terrainWorkers: 0,
   bloomStrength: 1.0,
   bloomRadius: 0.5,
-  bloomThreshold: 0.7,
+  bloomThreshold: 0.75,
   toneMappingExposure: 1.0,
   debugBloom: true,
   debugOcean: true,
@@ -166,6 +170,7 @@ export const RANGES = {
   atmosphereTwilightWidth: { min: 0.2, max: 2, step: 0.01 },
   atmosphereTwilightStrength: { min: 0, max: 2, step: 0.01 },
   atmosphereExtinctionStrength: { min: 0, max: 2, step: 0.01 },
+  atmosphereNightAmbient: { min: 0, max: 1.2, step: 0.01 },
   sunTintStrength: { min: 0, max: 2, step: 0.01 },
   sunAzimuth: { min: 0, max: 360, step: 1 },
   sunElevation: { min: -20, max: 80, step: 1 },

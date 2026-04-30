@@ -69,6 +69,8 @@ interface PlanetRendererParams {
   atmosphereTwilightWidth?: number
   atmosphereTwilightStrength?: number
   atmosphereExtinctionStrength?: number
+  atmosphereNightColor?: string
+  atmosphereNightAmbient?: number
   sunColor?: string
   sunTintStrength?: number
   noiseProfile?: {
@@ -143,6 +145,8 @@ export class PlanetRenderer {
   private atmosphereTwilightWidth = 0.90
   private atmosphereTwilightStrength = 0.85
   private atmosphereExtinctionStrength = 0.68
+  private atmosphereNightColor = new THREE.Color(0x071226)
+  private atmosphereNightAmbient = 0.28
   private terrainParams: PlanetTerrainParams
   private lodDistances: number[]
   private requestedTerrainWorkers: number
@@ -189,6 +193,8 @@ export class PlanetRenderer {
     this.atmosphereTwilightWidth = params.atmosphereTwilightWidth ?? 0.90
     this.atmosphereTwilightStrength = params.atmosphereTwilightStrength ?? 0.85
     this.atmosphereExtinctionStrength = params.atmosphereExtinctionStrength ?? 0.68
+    this.atmosphereNightColor.set(params.atmosphereNightColor ?? '#071226')
+    this.atmosphereNightAmbient = params.atmosphereNightAmbient ?? 0.28
     this.updateAtmosphereLightColor()
     this.group = new THREE.Group()
     scene.add(this.group)
@@ -262,6 +268,8 @@ export class PlanetRenderer {
       atmosphereLightColor: this.atmosphereLightColor,
       sunTintStrength: this.sunTintStrength,
       atmosphereExtinctionStrength: this.atmosphereExtinctionStrength,
+      nightColor: this.atmosphereNightColor,
+      nightAmbient: this.atmosphereNightAmbient,
       atmosphereHazeStrength: this.atmosphereHazeStrength,
       atmosphereHazeDistance: this.atmosphereHazeDistance,
       planetRadius: planetRadius,
@@ -288,6 +296,8 @@ export class PlanetRenderer {
       atmosphereLightColor: this.atmosphereLightColor,
       sunTintStrength: this.sunTintStrength,
       atmosphereExtinctionStrength: this.atmosphereExtinctionStrength,
+      nightColor: this.atmosphereNightColor,
+      nightAmbient: this.atmosphereNightAmbient,
       atmosphereHazeStrength: this.atmosphereHazeStrength,
       atmosphereHazeDistance: this.atmosphereHazeDistance,
       planetRadius: planetRadius,
@@ -328,6 +338,8 @@ export class PlanetRenderer {
       atmosphereLightColor: this.atmosphereLightColor,
       sunTintStrength: this.sunTintStrength,
       atmosphereExtinctionStrength: this.atmosphereExtinctionStrength,
+      nightColor: this.atmosphereNightColor,
+      nightAmbient: this.atmosphereNightAmbient,
       atmosphereHazeStrength: this.atmosphereHazeStrength,
       atmosphereHazeDistance: this.atmosphereHazeDistance,
       planetRadius,
@@ -374,6 +386,8 @@ export class PlanetRenderer {
         atmosphereLightColor: this.atmosphereLightColor,
         sunTintStrength: this.sunTintStrength,
         atmosphereExtinctionStrength: this.atmosphereExtinctionStrength,
+        nightColor: this.atmosphereNightColor,
+        nightAmbient: this.atmosphereNightAmbient,
         atmosphereHazeStrength: this.atmosphereHazeStrength,
         atmosphereHazeDistance: this.atmosphereHazeDistance,
       })
@@ -392,6 +406,8 @@ export class PlanetRenderer {
         sunColor: this.sunColor,
         atmosphereLightColor: this.atmosphereLightColor,
         sunTintStrength: this.sunTintStrength,
+        nightColor: this.atmosphereNightColor,
+        nightAmbient: this.atmosphereNightAmbient,
         horizonGlow: this.atmosphereHorizonGlow,
         sunGlare: this.atmosphereSunGlare,
         sunGlareSize: this.atmosphereSunGlareSize,
@@ -439,6 +455,8 @@ export class PlanetRenderer {
       atmosphereLightColor: this.atmosphereLightColor,
       sunTintStrength: this.sunTintStrength,
       atmosphereExtinctionStrength: this.atmosphereExtinctionStrength,
+      nightColor: this.atmosphereNightColor,
+      nightAmbient: this.atmosphereNightAmbient,
       atmosphereHazeStrength: this.atmosphereHazeStrength,
       atmosphereHazeDistance: this.atmosphereHazeDistance,
       planetRadius: this.planetRadius,
@@ -494,6 +512,7 @@ export class PlanetRenderer {
     for (const material of materials) {
       this.copyColorUniform(material, 'uSunColor', this.sunColor)
       this.copyColorUniform(material, 'uAtmosphereLightColor', this.atmosphereLightColor)
+      this.copyColorUniform(material, 'uNightColor', this.atmosphereNightColor)
       this.setFloatUniform(material, 'uSunTintStrength', this.sunTintStrength)
       this.setFloatUniform(material, 'uAtmosphereHazeStrength', this.atmosphereHazeStrength)
       this.setFloatUniform(material, 'uAtmosphereHazeDistance', this.atmosphereHazeDistance)
@@ -503,6 +522,7 @@ export class PlanetRenderer {
       this.setFloatUniform(material, 'uTwilightWidth', this.atmosphereTwilightWidth)
       this.setFloatUniform(material, 'uTwilightStrength', this.atmosphereTwilightStrength)
       this.setFloatUniform(material, 'uAtmosphereExtinctionStrength', this.atmosphereExtinctionStrength)
+      this.setFloatUniform(material, 'uNightAmbientStrength', this.atmosphereNightAmbient)
     }
   }
 
@@ -519,6 +539,12 @@ export class PlanetRenderer {
   setAtmosphereHaze(strength: number, distance: number) {
     this.atmosphereHazeStrength = strength
     this.atmosphereHazeDistance = distance
+    this.updateLightColorUniforms()
+  }
+
+  setAtmosphereNight(color: string, ambient: number) {
+    this.atmosphereNightColor.set(color)
+    this.atmosphereNightAmbient = ambient
     this.updateLightColorUniforms()
   }
 
