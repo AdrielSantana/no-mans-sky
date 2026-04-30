@@ -40,6 +40,8 @@ function createPlanet(scene: THREE.Scene, params: EditorParams): PlanetRenderer 
     atmosphereHorizonGlow: params.atmosphereHorizonGlow,
     atmosphereSunGlare: params.atmosphereSunGlare,
     atmosphereSunGlareSize: params.atmosphereSunGlareSize,
+    atmosphereTwilightWidth: params.atmosphereTwilightWidth,
+    atmosphereTwilightStrength: params.atmosphereTwilightStrength,
     sunColor: params.sunColor,
     sunTintStrength: params.sunTintStrength,
     noiseProfile: {
@@ -317,6 +319,8 @@ export function EditorCanvas({ params }: Props) {
       horizonGlow: params.atmosphereHorizonGlow,
       sunGlare: params.atmosphereSunGlare,
       sunGlareSize: params.atmosphereSunGlareSize,
+      twilightWidth: params.atmosphereTwilightWidth,
+      twilightStrength: params.atmosphereTwilightStrength,
     })
     engineRef.current?.setSunColor(params.sunColor)
     if (engineRef.current && planetRef.current) {
@@ -345,6 +349,8 @@ export function EditorCanvas({ params }: Props) {
         horizonGlow: paramsRef.current.atmosphereHorizonGlow,
         sunGlare: paramsRef.current.atmosphereSunGlare,
         sunGlareSize: paramsRef.current.atmosphereSunGlareSize,
+        twilightWidth: paramsRef.current.atmosphereTwilightWidth,
+        twilightStrength: paramsRef.current.atmosphereTwilightStrength,
       })
       engine.setSunColor(paramsRef.current.sunColor)
       applyDebugSettings(engine, newPlanet, paramsRef.current)

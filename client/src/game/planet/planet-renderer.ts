@@ -66,6 +66,8 @@ interface PlanetRendererParams {
   atmosphereHorizonGlow?: number
   atmosphereSunGlare?: number
   atmosphereSunGlareSize?: number
+  atmosphereTwilightWidth?: number
+  atmosphereTwilightStrength?: number
   sunColor?: string
   sunTintStrength?: number
   noiseProfile?: {
@@ -129,6 +131,8 @@ export class PlanetRenderer {
   private atmosphereHorizonGlow = 0.72
   private atmosphereSunGlare = 0.62
   private atmosphereSunGlareSize = 0.72
+  private atmosphereTwilightWidth = 0.90
+  private atmosphereTwilightStrength = 0.85
   private terrainParams: PlanetTerrainParams
   private lodDistances: number[]
   private requestedTerrainWorkers: number
@@ -172,6 +176,8 @@ export class PlanetRenderer {
     this.atmosphereHorizonGlow = params.atmosphereHorizonGlow ?? 0.72
     this.atmosphereSunGlare = params.atmosphereSunGlare ?? 0.62
     this.atmosphereSunGlareSize = params.atmosphereSunGlareSize ?? 0.72
+    this.atmosphereTwilightWidth = params.atmosphereTwilightWidth ?? 0.90
+    this.atmosphereTwilightStrength = params.atmosphereTwilightStrength ?? 0.85
     this.updateAtmosphereLightColor()
     this.group = new THREE.Group()
     scene.add(this.group)
@@ -370,6 +376,8 @@ export class PlanetRenderer {
         horizonGlow: this.atmosphereHorizonGlow,
         sunGlare: this.atmosphereSunGlare,
         sunGlareSize: this.atmosphereSunGlareSize,
+        twilightWidth: this.atmosphereTwilightWidth,
+        twilightStrength: this.atmosphereTwilightStrength,
         sunPosition: this.sunPosition,
         planetRadius,
         atmosphereRadius,
@@ -472,6 +480,8 @@ export class PlanetRenderer {
       this.setFloatUniform(material, 'uHorizonGlowStrength', this.atmosphereHorizonGlow)
       this.setFloatUniform(material, 'uSunGlareStrength', this.atmosphereSunGlare)
       this.setFloatUniform(material, 'uSunGlareSize', this.atmosphereSunGlareSize)
+      this.setFloatUniform(material, 'uTwilightWidth', this.atmosphereTwilightWidth)
+      this.setFloatUniform(material, 'uTwilightStrength', this.atmosphereTwilightStrength)
     }
   }
 
@@ -491,10 +501,18 @@ export class PlanetRenderer {
     this.updateLightColorUniforms()
   }
 
-  setAtmosphereOptics(settings: { horizonGlow: number; sunGlare: number; sunGlareSize: number }) {
+  setAtmosphereOptics(settings: {
+    horizonGlow: number
+    sunGlare: number
+    sunGlareSize: number
+    twilightWidth: number
+    twilightStrength: number
+  }) {
     this.atmosphereHorizonGlow = settings.horizonGlow
     this.atmosphereSunGlare = settings.sunGlare
     this.atmosphereSunGlareSize = settings.sunGlareSize
+    this.atmosphereTwilightWidth = settings.twilightWidth
+    this.atmosphereTwilightStrength = settings.twilightStrength
     this.updateLightColorUniforms()
   }
 

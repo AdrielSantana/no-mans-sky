@@ -1299,6 +1299,8 @@ export function createAtmosphereMaterial(params: {
   horizonGlow: number
   sunGlare: number
   sunGlareSize: number
+  twilightWidth: number
+  twilightStrength: number
   sunPosition: THREE.Vector3
   planetRadius: number
   atmosphereRadius: number
@@ -1336,6 +1338,8 @@ export function createAtmosphereMaterial(params: {
   uniform float uHorizonGlowStrength;
   uniform float uSunGlareStrength;
   uniform float uSunGlareSize;
+  uniform float uTwilightWidth;
+  uniform float uTwilightStrength;
   uniform float uPlanetRadius;
   uniform float uAtmosphereRadius;
 
@@ -1365,9 +1369,17 @@ export function createAtmosphereMaterial(params: {
     float horizonGlowStrength = clamp(uHorizonGlowStrength, 0.0, 2.0);
     float sunGlareStrength = clamp(uSunGlareStrength, 0.0, 2.0);
     float sunGlareSize = clamp(uSunGlareSize, 0.1, 2.0);
+    float twilightWidth = clamp(uTwilightWidth, 0.2, 2.0);
+    float twilightStrength = clamp(uTwilightStrength, 0.0, 2.0);
     vec3 scatterColor = mix(uAtmosphereColor, uAtmosphereLightColor, clamp(0.50 + tintStrength * 0.22, 0.0, 0.92));
     vec3 sunScatterColor = mix(uAtmosphereLightColor, uSunColor, 0.28);
-    float terminatorGlow = smoothstep(-0.45, 0.14, nDotL) * (1.0 - smoothstep(0.22, 0.82, nDotL));
+    vec3 duskColor = mix(vec3(1.0, 0.30, 0.07), uSunColor, 0.38);
+    vec3 violetColor = mix(vec3(0.12, 0.08, 0.28), uAtmosphereColor * 0.42 + vec3(0.035, 0.025, 0.080), 0.52);
+    float terminatorWarm = smoothstep(-0.42 * twilightWidth, 0.10 * twilightWidth, nDotL)
+      * (1.0 - smoothstep(0.08 * twilightWidth, 0.54 * twilightWidth, nDotL));
+    float terminatorBlue = smoothstep(-0.90 * twilightWidth, -0.18 * twilightWidth, nDotL)
+      * (1.0 - smoothstep(-0.04 * twilightWidth, 0.30 * twilightWidth, nDotL));
+    float terminatorGlow = clamp(terminatorWarm + terminatorBlue * 0.62, 0.0, 1.0);
     float outsideHorizonGlow = outerFade * (0.22 + outsideDay * 0.50 + terminatorGlow * 0.72) * horizonGlowStrength;
     float outsideGlarePower = mix(34.0, 5.0, smoothstep(0.1, 2.0, sunGlareSize));
     float outsideSunGlare = pow(max(dot(toCamera, sunDir), 0.0), outsideGlarePower)
@@ -1375,19 +1387,23 @@ export function createAtmosphereMaterial(params: {
       * sunGlareStrength;
     vec3 outsideColor = uAtmosphereColor * (0.14 + outsideDay * 0.88)
       + scatterColor * outsideDay * 0.20
+      + mix(violetColor, duskColor, terminatorWarm) * outerFade * terminatorGlow * twilightStrength * 0.20
       + scatterColor * outsideHorizonGlow * (0.20 + tintStrength * 0.08)
       + sunScatterColor * (forwardScatter * (0.22 + outsideDay * 0.24) + outsideSunGlare * 0.58) * (0.72 + tintStrength * 0.55);
     float outsideAlpha = outerFade * uDensity * (0.11 + outsideDay * 0.31 + forwardScatter * (0.15 + tintStrength * 0.07));
-    outsideAlpha += uDensity * (outsideHorizonGlow * 0.16 + outsideSunGlare * 0.24);
+    outsideAlpha += uDensity * (outsideHorizonGlow * 0.16 + outsideSunGlare * 0.24 + terminatorGlow * twilightStrength * 0.06);
 
     vec3 skyDir = normalize(vWorldPos - cameraPosition);
     float skyUp = dot(skyDir, localUp);
     float horizon = pow(1.0 - clamp(skyUp, 0.0, 1.0), 1.45);
     float sunHeight = dot(sunDir, localUp);
     float sunView = max(dot(skyDir, sunDir), 0.0);
-    float day = smoothstep(-0.08, 0.28, sunHeight);
-    float twilight = smoothstep(-0.34, 0.10, sunHeight) * (1.0 - smoothstep(0.08, 0.48, sunHeight));
-    float night = 1.0 - smoothstep(-0.22, 0.05, sunHeight);
+    float day = smoothstep(-0.08 * twilightWidth, 0.28 * twilightWidth, sunHeight);
+    float twilight = smoothstep(-0.44 * twilightWidth, 0.12 * twilightWidth, sunHeight)
+      * (1.0 - smoothstep(0.08 * twilightWidth, 0.52 * twilightWidth, sunHeight));
+    float blueHour = smoothstep(-0.92 * twilightWidth, -0.18 * twilightWidth, sunHeight)
+      * (1.0 - smoothstep(-0.05 * twilightWidth, 0.18 * twilightWidth, sunHeight));
+    float night = 1.0 - smoothstep(-0.34 * twilightWidth, 0.05 * twilightWidth, sunHeight);
     float sunGlowPower = mix(28.0, 5.5, smoothstep(0.1, 2.0, sunGlareSize));
     float sunGlow = pow(sunView, sunGlowPower) * smoothstep(-0.10, 0.35, sunHeight) * sunGlareStrength;
     float sunsetForward = pow(sunView, 5.0) * twilight;
@@ -1398,12 +1414,15 @@ export function createAtmosphereMaterial(params: {
     float localHorizonGlow = horizon * (0.26 + day * 0.20 + twilight * 0.42) * horizonGlowStrength;
     vec3 dayColor = mix(zenithColor, horizonColor, clamp(horizon * (0.44 + twilight * 0.26) + localHorizonGlow * 0.28, 0.0, 1.0));
     vec3 sunsetColor = mix(mix(vec3(1.0, 0.33, 0.08), uSunColor, 0.42), scatterColor, 0.38) * mix(vec3(1.0), uAtmosphereColor, 0.18);
+    vec3 blueHourColor = mix(violetColor, uAtmosphereColor * 0.24 + vec3(0.012, 0.020, 0.060), 0.50);
     vec3 nightColor = uAtmosphereColor * 0.035 + vec3(0.003, 0.007, 0.020);
-    vec3 insideColor = mix(dayColor, sunsetColor, clamp((horizon * 0.72 + sunsetForward) * twilight, 0.0, 1.0));
+    vec3 twilightColor = mix(blueHourColor, sunsetColor, clamp(smoothstep(-0.18 * twilightWidth, 0.16 * twilightWidth, sunHeight) + sunsetForward * 0.55, 0.0, 1.0));
+    vec3 insideColor = mix(dayColor, twilightColor, clamp((horizon * 0.72 + sunsetForward) * twilight * twilightStrength, 0.0, 1.0));
+    insideColor = mix(insideColor, blueHourColor, clamp(blueHour * (0.20 + twilightStrength * 0.34), 0.0, 0.70));
     insideColor = mix(insideColor, nightColor, night * 0.92);
     insideColor += horizonColor * localHorizonGlow * (0.12 + twilight * 0.18);
     insideColor += sunScatterColor * sunGlow * (0.30 + day * 0.44) * (0.75 + tintStrength * 0.50);
-    float insideAlpha = uDensity * (0.28 + day * 0.72 + horizon * 0.20 + twilight * horizon * 0.25 + localHorizonGlow * 0.16 + sunGlow * 0.10);
+    float insideAlpha = uDensity * (0.28 + day * 0.72 + horizon * 0.20 + twilight * horizon * (0.25 + twilightStrength * 0.12) + blueHour * 0.05 + localHorizonGlow * 0.16 + sunGlow * 0.10);
     insideAlpha = mix(insideAlpha, uDensity * (0.018 + horizon * 0.040), night);
 
     vec3 color = mix(outsideColor, insideColor, inside);
@@ -1431,6 +1450,8 @@ export function createAtmosphereMaterial(params: {
       uHorizonGlowStrength: { value: params.horizonGlow },
       uSunGlareStrength: { value: params.sunGlare },
       uSunGlareSize: { value: params.sunGlareSize },
+      uTwilightWidth: { value: params.twilightWidth },
+      uTwilightStrength: { value: params.twilightStrength },
       uPlanetRadius: { value: params.planetRadius },
       uAtmosphereRadius: { value: params.atmosphereRadius },
     },

@@ -17,6 +17,8 @@ export interface EditorParams {
   atmosphereHorizonGlow: number
   atmosphereSunGlare: number
   atmosphereSunGlareSize: number
+  atmosphereTwilightWidth: number
+  atmosphereTwilightStrength: number
   sunColor: string
   sunTintStrength: number
   sunAzimuth: number
@@ -102,6 +104,8 @@ export const DEFAULT_PARAMS: EditorParams = {
   atmosphereHorizonGlow: 0.72,
   atmosphereSunGlare: 0.62,
   atmosphereSunGlareSize: 0.72,
+  atmosphereTwilightWidth: 0.90,
+  atmosphereTwilightStrength: 0.85,
   sunColor: '#fff2c8',
   sunTintStrength: 0.85,
   sunAzimuth: 315,
@@ -149,6 +153,8 @@ export const RANGES = {
   atmosphereHorizonGlow: { min: 0, max: 2, step: 0.01 },
   atmosphereSunGlare: { min: 0, max: 2, step: 0.01 },
   atmosphereSunGlareSize: { min: 0.1, max: 2, step: 0.01 },
+  atmosphereTwilightWidth: { min: 0.2, max: 2, step: 0.01 },
+  atmosphereTwilightStrength: { min: 0, max: 2, step: 0.01 },
   sunTintStrength: { min: 0, max: 2, step: 0.01 },
   sunAzimuth: { min: 0, max: 360, step: 1 },
   sunElevation: { min: -20, max: 80, step: 1 },

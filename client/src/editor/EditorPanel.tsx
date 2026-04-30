@@ -516,6 +516,34 @@ export function EditorPanel({ params, onChange }: Props) {
           />
           <span className="editor-value">{params.atmosphereSunGlareSize.toFixed(2)}</span>
         </div>
+        <div className="editor-row">
+          <span className="editor-label">Twilight Width</span>
+          <input
+            className="editor-slider"
+            type="range"
+            min={RANGES.atmosphereTwilightWidth.min}
+            max={RANGES.atmosphereTwilightWidth.max}
+            step={RANGES.atmosphereTwilightWidth.step}
+            value={params.atmosphereTwilightWidth}
+            onInput={e => set('atmosphereTwilightWidth', Number(e.currentTarget.value))}
+            onChange={e => set('atmosphereTwilightWidth', Number(e.target.value))}
+          />
+          <span className="editor-value">{params.atmosphereTwilightWidth.toFixed(2)}</span>
+        </div>
+        <div className="editor-row">
+          <span className="editor-label">Twilight</span>
+          <input
+            className="editor-slider"
+            type="range"
+            min={RANGES.atmosphereTwilightStrength.min}
+            max={RANGES.atmosphereTwilightStrength.max}
+            step={RANGES.atmosphereTwilightStrength.step}
+            value={params.atmosphereTwilightStrength}
+            onInput={e => set('atmosphereTwilightStrength', Number(e.currentTarget.value))}
+            onChange={e => set('atmosphereTwilightStrength', Number(e.target.value))}
+          />
+          <span className="editor-value">{params.atmosphereTwilightStrength.toFixed(2)}</span>
+        </div>
       </div>
 
       <div className="editor-section">
