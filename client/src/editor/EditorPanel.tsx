@@ -182,6 +182,58 @@ export function EditorPanel({ params, onChange }: Props) {
           <span className="editor-value">{params.mountainScale.toFixed(2)}</span>
         </div>
         <div className="editor-row">
+          <span className="editor-label">Plains</span>
+          <input
+            className="editor-slider"
+            type="range"
+            min={RANGES.plainsScale.min}
+            max={RANGES.plainsScale.max}
+            step={RANGES.plainsScale.step}
+            value={params.plainsScale}
+            onChange={e => set('plainsScale', Number(e.target.value))}
+          />
+          <span className="editor-value">{params.plainsScale.toFixed(2)}</span>
+        </div>
+        <div className="editor-row">
+          <span className="editor-label">Hills</span>
+          <input
+            className="editor-slider"
+            type="range"
+            min={RANGES.hillsScale.min}
+            max={RANGES.hillsScale.max}
+            step={RANGES.hillsScale.step}
+            value={params.hillsScale}
+            onChange={e => set('hillsScale', Number(e.target.value))}
+          />
+          <span className="editor-value">{params.hillsScale.toFixed(2)}</span>
+        </div>
+        <div className="editor-row">
+          <span className="editor-label">Mountain Belts</span>
+          <input
+            className="editor-slider"
+            type="range"
+            min={RANGES.mountainBeltScale.min}
+            max={RANGES.mountainBeltScale.max}
+            step={RANGES.mountainBeltScale.step}
+            value={params.mountainBeltScale}
+            onChange={e => set('mountainBeltScale', Number(e.target.value))}
+          />
+          <span className="editor-value">{params.mountainBeltScale.toFixed(2)}</span>
+        </div>
+        <div className="editor-row">
+          <span className="editor-label">Relief Variety</span>
+          <input
+            className="editor-slider"
+            type="range"
+            min={RANGES.reliefVariety.min}
+            max={RANGES.reliefVariety.max}
+            step={RANGES.reliefVariety.step}
+            value={params.reliefVariety}
+            onChange={e => set('reliefVariety', Number(e.target.value))}
+          />
+          <span className="editor-value">{params.reliefVariety.toFixed(2)}</span>
+        </div>
+        <div className="editor-row">
           <span className="editor-label">Hydraulic</span>
           <input
             className="editor-slider"
@@ -543,6 +595,20 @@ export function EditorPanel({ params, onChange }: Props) {
             onChange={e => set('atmosphereTwilightStrength', Number(e.target.value))}
           />
           <span className="editor-value">{params.atmosphereTwilightStrength.toFixed(2)}</span>
+        </div>
+        <div className="editor-row">
+          <span className="editor-label">Extinction</span>
+          <input
+            className="editor-slider"
+            type="range"
+            min={RANGES.atmosphereExtinctionStrength.min}
+            max={RANGES.atmosphereExtinctionStrength.max}
+            step={RANGES.atmosphereExtinctionStrength.step}
+            value={params.atmosphereExtinctionStrength}
+            onInput={e => set('atmosphereExtinctionStrength', Number(e.currentTarget.value))}
+            onChange={e => set('atmosphereExtinctionStrength', Number(e.target.value))}
+          />
+          <span className="editor-value">{params.atmosphereExtinctionStrength.toFixed(2)}</span>
         </div>
       </div>
 

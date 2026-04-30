@@ -42,6 +42,7 @@ function createPlanet(scene: THREE.Scene, params: EditorParams): PlanetRenderer 
     atmosphereSunGlareSize: params.atmosphereSunGlareSize,
     atmosphereTwilightWidth: params.atmosphereTwilightWidth,
     atmosphereTwilightStrength: params.atmosphereTwilightStrength,
+    atmosphereExtinctionStrength: params.atmosphereExtinctionStrength,
     sunColor: params.sunColor,
     sunTintStrength: params.sunTintStrength,
     noiseProfile: {
@@ -52,6 +53,10 @@ function createPlanet(scene: THREE.Scene, params: EditorParams): PlanetRenderer 
       warpStrength: params.warpStrength,
       continentalScale: params.continentalScale,
       mountainScale: params.mountainScale,
+      plainsScale: params.plainsScale,
+      hillsScale: params.hillsScale,
+      mountainBeltScale: params.mountainBeltScale,
+      reliefVariety: params.reliefVariety,
       erosionStrength: params.erosionStrength,
       thermalStrength: params.thermalStrength,
       detailStrength: params.detailStrength,
@@ -117,6 +122,10 @@ function buildPlanetKey(params: EditorParams): string {
     warpStrength: params.warpStrength,
     continentalScale: params.continentalScale,
     mountainScale: params.mountainScale,
+    plainsScale: params.plainsScale,
+    hillsScale: params.hillsScale,
+    mountainBeltScale: params.mountainBeltScale,
+    reliefVariety: params.reliefVariety,
     erosionStrength: params.erosionStrength,
     thermalStrength: params.thermalStrength,
     detailStrength: params.detailStrength,
@@ -146,6 +155,10 @@ function buildWalkerTarget(params: EditorParams, renderer: PlanetRenderer): Plan
       warpStrength: params.warpStrength,
       continentalScale: params.continentalScale,
       mountainScale: params.mountainScale,
+      plainsScale: params.plainsScale,
+      hillsScale: params.hillsScale,
+      mountainBeltScale: params.mountainBeltScale,
+      reliefVariety: params.reliefVariety,
       erosionStrength: params.erosionStrength,
       thermalStrength: params.thermalStrength,
       detailStrength: params.detailStrength,
@@ -321,6 +334,7 @@ export function EditorCanvas({ params }: Props) {
       sunGlareSize: params.atmosphereSunGlareSize,
       twilightWidth: params.atmosphereTwilightWidth,
       twilightStrength: params.atmosphereTwilightStrength,
+      extinctionStrength: params.atmosphereExtinctionStrength,
     })
     engineRef.current?.setSunColor(params.sunColor)
     if (engineRef.current && planetRef.current) {
@@ -351,6 +365,7 @@ export function EditorCanvas({ params }: Props) {
         sunGlareSize: paramsRef.current.atmosphereSunGlareSize,
         twilightWidth: paramsRef.current.atmosphereTwilightWidth,
         twilightStrength: paramsRef.current.atmosphereTwilightStrength,
+        extinctionStrength: paramsRef.current.atmosphereExtinctionStrength,
       })
       engine.setSunColor(paramsRef.current.sunColor)
       applyDebugSettings(engine, newPlanet, paramsRef.current)

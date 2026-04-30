@@ -19,6 +19,7 @@ export interface EditorParams {
   atmosphereSunGlareSize: number
   atmosphereTwilightWidth: number
   atmosphereTwilightStrength: number
+  atmosphereExtinctionStrength: number
   sunColor: string
   sunTintStrength: number
   sunAzimuth: number
@@ -31,6 +32,10 @@ export interface EditorParams {
   warpStrength: number
   continentalScale: number
   mountainScale: number
+  plainsScale: number
+  hillsScale: number
+  mountainBeltScale: number
+  reliefVariety: number
   erosionStrength: number
   thermalStrength: number
   detailStrength: number
@@ -86,19 +91,19 @@ export function computeAutoLod(radius: number, gridSize: number): number[] {
 export const DEFAULT_LOD_MULTIPLIERS = [5.5, 2.8205, 1.4464, 0.7417]
 
 export const DEFAULT_PARAMS: EditorParams = {
-  seed: 42,
+  seed: 67,
   planetType: 'rocky',
-  planetRadius: 650,
-  terrainScale: 0.12,
+  planetRadius: 50000,
+  terrainScale: 0.065,
   waterLevel: 0.45,
-  colorA: '#4a7c59',
-  colorB: '#8b7355',
+  colorA: '#4f7357',
+  colorB: '#8a7a63',
   textureScale: 92,
-  textureBlend: 0.48,
+  textureBlend: 0.70,
   textureNearDistance: 180,
   textureFadeDistance: 420,
   atmosphereColor: '#6fa8dc',
-  atmosphereDensity: 0.35,
+  atmosphereDensity: 0.75,
   atmosphereHazeStrength: 0.42,
   atmosphereHazeDistance: 1.85,
   atmosphereHorizonGlow: 0.72,
@@ -106,20 +111,25 @@ export const DEFAULT_PARAMS: EditorParams = {
   atmosphereSunGlareSize: 0.72,
   atmosphereTwilightWidth: 0.90,
   atmosphereTwilightStrength: 0.85,
+  atmosphereExtinctionStrength: 0.68,
   sunColor: '#fff2c8',
   sunTintStrength: 0.85,
   sunAzimuth: 315,
   sunElevation: 28,
   octaves: 6,
-  lacunarity: 2.0,
-  gain: 0.5,
-  frequency: 2.0,
-  warpStrength: 0.42,
-  continentalScale: 1.0,
-  mountainScale: 1.0,
-  erosionStrength: 0.34,
-  thermalStrength: 0.2,
-  detailStrength: 0.55,
+  lacunarity: 2.05,
+  gain: 0.48,
+  frequency: 2.35,
+  warpStrength: 0.56,
+  continentalScale: 1.12,
+  mountainScale: 1.08,
+  plainsScale: 0.68,
+  hillsScale: 0.54,
+  mountainBeltScale: 0.82,
+  reliefVariety: 0.88,
+  erosionStrength: 0.46,
+  thermalStrength: 0.34,
+  detailStrength: 0.66,
   lodMultipliers: [...DEFAULT_LOD_MULTIPLIERS],
   gridSize: 33,
   autoLod: true,
@@ -155,6 +165,7 @@ export const RANGES = {
   atmosphereSunGlareSize: { min: 0.1, max: 2, step: 0.01 },
   atmosphereTwilightWidth: { min: 0.2, max: 2, step: 0.01 },
   atmosphereTwilightStrength: { min: 0, max: 2, step: 0.01 },
+  atmosphereExtinctionStrength: { min: 0, max: 2, step: 0.01 },
   sunTintStrength: { min: 0, max: 2, step: 0.01 },
   sunAzimuth: { min: 0, max: 360, step: 1 },
   sunElevation: { min: -20, max: 80, step: 1 },
@@ -165,6 +176,10 @@ export const RANGES = {
   warpStrength: { min: 0, max: 1.2, step: 0.01 },
   continentalScale: { min: 0, max: 2.0, step: 0.01 },
   mountainScale: { min: 0, max: 2.5, step: 0.01 },
+  plainsScale: { min: 0, max: 2, step: 0.01 },
+  hillsScale: { min: 0, max: 2, step: 0.01 },
+  mountainBeltScale: { min: 0, max: 2, step: 0.01 },
+  reliefVariety: { min: 0, max: 2, step: 0.01 },
   erosionStrength: { min: 0, max: 1.0, step: 0.01 },
   thermalStrength: { min: 0, max: 1.0, step: 0.01 },
   detailStrength: { min: 0, max: 1.5, step: 0.01 },
@@ -187,6 +202,10 @@ export const TYPE_PRESETS: Record<string, Pick<EditorParams,
   | 'warpStrength'
   | 'continentalScale'
   | 'mountainScale'
+  | 'plainsScale'
+  | 'hillsScale'
+  | 'mountainBeltScale'
+  | 'reliefVariety'
   | 'erosionStrength'
   | 'thermalStrength'
   | 'detailStrength'
@@ -199,6 +218,10 @@ export const TYPE_PRESETS: Record<string, Pick<EditorParams,
     warpStrength: 0.42,
     continentalScale: 1.0,
     mountainScale: 1.0,
+    plainsScale: 0.55,
+    hillsScale: 0.45,
+    mountainBeltScale: 0.75,
+    reliefVariety: 0.7,
     erosionStrength: 0.34,
     thermalStrength: 0.2,
     detailStrength: 0.55,
@@ -211,6 +234,10 @@ export const TYPE_PRESETS: Record<string, Pick<EditorParams,
     warpStrength: 0.18,
     continentalScale: 0.15,
     mountainScale: 0,
+    plainsScale: 0,
+    hillsScale: 0,
+    mountainBeltScale: 0,
+    reliefVariety: 0,
     erosionStrength: 0,
     thermalStrength: 0,
     detailStrength: 0.25,
@@ -223,6 +250,10 @@ export const TYPE_PRESETS: Record<string, Pick<EditorParams,
     warpStrength: 0.26,
     continentalScale: 0.8,
     mountainScale: 0.72,
+    plainsScale: 0.72,
+    hillsScale: 0.30,
+    mountainBeltScale: 0.45,
+    reliefVariety: 0.55,
     erosionStrength: 0.16,
     thermalStrength: 0.48,
     detailStrength: 0.36,

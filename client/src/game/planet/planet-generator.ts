@@ -14,6 +14,10 @@ export interface PlanetNoiseProfile {
   warpStrength: number
   continentalScale: number
   mountainScale: number
+  plainsScale: number
+  hillsScale: number
+  mountainBeltScale: number
+  reliefVariety: number
   erosionStrength: number
   thermalStrength: number
   detailStrength: number
@@ -55,6 +59,10 @@ export class PlanetGenerator {
           warpStrength: 0.18,
           continentalScale: 0.15,
           mountainScale: 0,
+          plainsScale: 0,
+          hillsScale: 0,
+          mountainBeltScale: 0,
+          reliefVariety: 0,
           erosionStrength: 0,
           thermalStrength: 0,
           detailStrength: 0.25,
@@ -69,6 +77,10 @@ export class PlanetGenerator {
           warpStrength: 0.26,
           continentalScale: 0.8,
           mountainScale: 0.72,
+          plainsScale: 0.72,
+          hillsScale: 0.30,
+          mountainBeltScale: 0.45,
+          reliefVariety: 0.55,
           erosionStrength: 0.16,
           thermalStrength: 0.48,
           detailStrength: 0.36,
@@ -84,6 +96,10 @@ export class PlanetGenerator {
           warpStrength: 0.42,
           continentalScale: 1.0,
           mountainScale: 1.0,
+          plainsScale: 0.55,
+          hillsScale: 0.45,
+          mountainBeltScale: 0.75,
+          reliefVariety: 0.7,
           erosionStrength: 0.34,
           thermalStrength: 0.2,
           detailStrength: 0.55,
@@ -309,10 +325,21 @@ vec3 applyPlanetLighting(vec3 albedo, vec3 normal, vec3 worldPos, float heightNo
   float highland = smoothstep(0.60, 0.90, heightNorm) * 0.055;
   float cavity = 1.0 - slope * mix(0.12, 0.05, day);
   float tintStrength = clamp(uSunTintStrength, 0.0, 2.0);
+  float extinctionStrength = clamp(uAtmosphereExtinctionStrength, 0.0, 2.0);
+  float lowSun = pow(1.0 - clamp(nDotL * 0.92 + 0.08, 0.0, 1.0), 1.8)
+    * smoothstep(-0.24, 0.50, nDotL);
+  float terminator = smoothstep(-0.34, 0.18, nDotL) * (1.0 - smoothstep(0.22, 0.72, nDotL));
   vec3 nightTint = mix(vec3(0.025, 0.035, 0.060), uAtmosphereLightColor * 0.075, tintStrength * 0.22);
+  vec3 sunsetTint = mix(vec3(1.0, 0.34, 0.10), uSunColor, 0.36);
+  sunsetTint = mix(sunsetTint, uAtmosphereLightColor, 0.18);
   vec3 sunTint = mix(vec3(1.0), uAtmosphereLightColor, tintStrength * 0.82);
-  vec3 ambientTint = mix(vec3(1.0), uAtmosphereLightColor, tintStrength * 0.24);
-  vec3 lit = albedo * ambientTint * (ambient + highland) * cavity + albedo * sunTint * softDirect * 0.92 * cavity;
+  sunTint = mix(sunTint, sunsetTint, lowSun * extinctionStrength * 0.72);
+  vec3 ambientTint = mix(vec3(1.0), uAtmosphereLightColor, tintStrength * 0.24 + terminator * extinctionStrength * 0.12);
+  vec3 twilightFill = mix(vec3(0.08, 0.10, 0.18), uAtmosphereLightColor * 0.32, tintStrength * 0.35);
+  float directTransmission = mix(1.0, 0.58, lowSun * extinctionStrength);
+  vec3 lit = albedo * ambientTint * (ambient + highland) * cavity
+    + albedo * sunTint * softDirect * directTransmission * 0.92 * cavity;
+  lit += albedo * twilightFill * terminator * extinctionStrength * 0.10 * reliefOcclusion;
   lit = mix(albedo * nightTint, lit, day);
   lit += mix(vec3(0.32, 0.48, 0.68), uAtmosphereLightColor, tintStrength * 0.55) * rim * 0.16;
   return lit;
@@ -370,6 +397,7 @@ export function createPlanetMaterial(params: {
   sunColor: THREE.Color | string
   atmosphereLightColor: THREE.Color | string
   sunTintStrength: number
+  atmosphereExtinctionStrength: number
   planetRadius: number
   octaves: number
   frequency: number
@@ -456,6 +484,7 @@ export function createPlanetMaterial(params: {
   uniform vec3 uAtmosphereColor;
   uniform vec3 uAtmosphereLightColor;
   uniform float uSunTintStrength;
+  uniform float uAtmosphereExtinctionStrength;
   uniform float uAtmosphereHazeStrength;
   uniform float uAtmosphereHazeDistance;
   uniform float uSeed;
@@ -629,6 +658,7 @@ export function createPlanetMaterial(params: {
       uAtmosphereColor: { value: atmosphereColor },
       uAtmosphereLightColor: { value: atmosphereLightColor },
       uSunTintStrength: { value: params.sunTintStrength },
+      uAtmosphereExtinctionStrength: { value: params.atmosphereExtinctionStrength },
       uAtmosphereHazeStrength: { value: params.atmosphereHazeStrength },
       uAtmosphereHazeDistance: { value: params.atmosphereHazeDistance },
       uGrassTexture: { value: TERRAIN_TEXTURES.grass },
@@ -667,6 +697,7 @@ export function createPlanetFarMaterial(params: {
   sunColor: THREE.Color | string
   atmosphereLightColor: THREE.Color | string
   sunTintStrength: number
+  atmosphereExtinctionStrength: number
   planetRadius: number
   octaves: number
   frequency: number
@@ -755,6 +786,7 @@ export function createPlanetFarMaterial(params: {
   uniform vec3 uAtmosphereColor;
   uniform vec3 uAtmosphereLightColor;
   uniform float uSunTintStrength;
+  uniform float uAtmosphereExtinctionStrength;
   uniform float uAtmosphereHazeStrength;
   uniform float uAtmosphereHazeDistance;
   uniform float uSeaHeight;
@@ -881,6 +913,7 @@ export function createPlanetFarMaterial(params: {
       uAtmosphereColor: { value: atmosphereColor },
       uAtmosphereLightColor: { value: atmosphereLightColor },
       uSunTintStrength: { value: params.sunTintStrength },
+      uAtmosphereExtinctionStrength: { value: params.atmosphereExtinctionStrength },
       uAtmosphereHazeStrength: { value: params.atmosphereHazeStrength },
       uAtmosphereHazeDistance: { value: params.atmosphereHazeDistance },
       uGrassTexture: { value: TERRAIN_TEXTURES.grass },
@@ -918,6 +951,7 @@ export function createOceanMaterial(params: {
   atmosphereColor: string
   atmosphereLightColor: THREE.Color | string
   sunTintStrength: number
+  atmosphereExtinctionStrength: number
   atmosphereHazeStrength: number
   atmosphereHazeDistance: number
 }): THREE.ShaderMaterial {
@@ -965,6 +999,7 @@ export function createOceanMaterial(params: {
   uniform vec3 uAtmosphereColor;
   uniform vec3 uAtmosphereLightColor;
   uniform float uSunTintStrength;
+  uniform float uAtmosphereExtinctionStrength;
   uniform float uAtmosphereHazeStrength;
   uniform float uAtmosphereHazeDistance;
   uniform float uTime;
@@ -994,6 +1029,9 @@ export function createOceanMaterial(params: {
     float nDotL = dot(waterNormal, lightDir);
     float day = smoothstep(-0.12, 0.62, nDotL);
     float diffuse = max(nDotL, 0.0);
+    float extinctionStrength = clamp(uAtmosphereExtinctionStrength, 0.0, 2.0);
+    float lowSun = pow(1.0 - clamp(nDotL * 0.90 + 0.10, 0.0, 1.0), 1.7)
+      * smoothstep(-0.20, 0.52, nDotL);
 
     float cameraDist = distance(cameraPosition, vWorldPos);
     float farWater = smoothstep(0.65, 2.4, cameraDist / uPlanetRadius);
@@ -1015,14 +1053,17 @@ export function createOceanMaterial(params: {
     vec3 deep = vec3(0.02, 0.10, 0.20);
     vec3 color = mix(shallow, mid, smoothstep(0.04, 0.38, depth));
     color = mix(color, deep, smoothstep(0.42, 1.0, depth));
-    color *= mix(0.18, 1.0, day);
+    color *= mix(0.18, 1.0, day) * mix(1.0, 0.74, lowSun * extinctionStrength);
     float tintStrength = clamp(uSunTintStrength, 0.0, 2.0);
+    vec3 sunsetTint = mix(vec3(1.0, 0.36, 0.12), uSunColor, 0.34);
     vec3 waterLightColor = mix(uAtmosphereLightColor, uSunColor, 0.22);
+    waterLightColor = mix(waterLightColor, sunsetTint, lowSun * extinctionStrength * 0.82);
     color += diffuse * mix(vec3(0.025, 0.07, 0.075), waterLightColor * vec3(0.040, 0.082, 0.088), tintStrength * 0.82);
     color += surface * vec3(0.015, 0.05, 0.055);
     vec3 reflected = vec3(0.58, 0.76, 0.96) * fresnel * mix(0.18, 0.68, day);
     color = mix(color, vec3(0.82, 0.94, 0.95), foam * 0.28);
     reflected *= mix(vec3(1.0), uAtmosphereLightColor, tintStrength * 0.40);
+    reflected *= mix(vec3(1.0), sunsetTint, lowSun * extinctionStrength * 0.22);
     color += reflected + specular * mix(vec3(1.0, 0.92, 0.78), waterLightColor, tintStrength * 0.90);
     color = applyAerialPerspective(color, vWorldPos, waterNormal);
 
@@ -1062,6 +1103,7 @@ export function createOceanMaterial(params: {
       uAtmosphereColor: { value: atmosphereColor },
       uAtmosphereLightColor: { value: atmosphereLightColor },
       uSunTintStrength: { value: params.sunTintStrength },
+      uAtmosphereExtinctionStrength: { value: params.atmosphereExtinctionStrength },
       uAtmosphereHazeStrength: { value: params.atmosphereHazeStrength },
       uAtmosphereHazeDistance: { value: params.atmosphereHazeDistance },
       uTime: { value: 0 },
@@ -1089,6 +1131,7 @@ export function createPlanetFallbackMaterial(params: {
   sunColor: THREE.Color | string
   atmosphereLightColor: THREE.Color | string
   sunTintStrength: number
+  atmosphereExtinctionStrength: number
   planetRadius: number
   octaves: number
   frequency: number
@@ -1148,6 +1191,7 @@ export function createPlanetFallbackMaterial(params: {
   uniform vec3 uAtmosphereColor;
   uniform vec3 uAtmosphereLightColor;
   uniform float uSunTintStrength;
+  uniform float uAtmosphereExtinctionStrength;
   uniform float uAtmosphereHazeStrength;
   uniform float uAtmosphereHazeDistance;
   uniform float uSeaHeight;
@@ -1273,6 +1317,7 @@ export function createPlanetFallbackMaterial(params: {
       uAtmosphereColor: { value: atmosphereColor },
       uAtmosphereLightColor: { value: atmosphereLightColor },
       uSunTintStrength: { value: params.sunTintStrength },
+      uAtmosphereExtinctionStrength: { value: params.atmosphereExtinctionStrength },
       uAtmosphereHazeStrength: { value: params.atmosphereHazeStrength },
       uAtmosphereHazeDistance: { value: params.atmosphereHazeDistance },
       uGrassTexture: { value: TERRAIN_TEXTURES.grass },
