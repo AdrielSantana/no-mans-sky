@@ -332,6 +332,8 @@ vec3 applyPlanetLighting(vec3 albedo, vec3 normal, vec3 radialNormal, vec3 world
   float nDotL = dot(n, lightDir);
   float day = smoothstep(-0.18, 0.62, nDotL);
   float direct = max(nDotL, 0.0);
+  float surfaceBlend = clamp(uSurfaceLightingBlend, 0.0, 1.0);
+  if (uPlanetKind > 0.5 && uPlanetKind < 1.5) surfaceBlend = 0.0;
   float reliefOcclusion = terrainReliefOcclusion(heightNorm, slope);
   float softDirect = direct * 0.78 + direct * direct * 0.24;
   softDirect *= mix(0.82, 1.0, reliefOcclusion);
@@ -362,14 +364,13 @@ vec3 applyPlanetLighting(vec3 albedo, vec3 normal, vec3 radialNormal, vec3 world
   lit = mix(nightLit, lit, day);
   lit += mix(vec3(0.32, 0.48, 0.68), uAtmosphereLightColor, tintStrength * 0.55) * rim * 0.16;
 
-  float surfaceBlend = clamp(uSurfaceLightingBlend, 0.0, 1.0);
-  if (uPlanetKind > 0.5 && uPlanetKind < 1.5) surfaceBlend = 0.0;
-
   float skyVisibility = clamp(dot(n, r) * 0.54 + 0.46, 0.18, 1.0);
   float wrappedDay = smoothstep(-0.42, 0.58, nDotL);
   float surfaceDirect = direct * 0.70 + wrappedDay * 0.22 + direct * direct * 0.18;
-  float microCavity = smoothstep(0.06, 0.38, slope) * (1.0 - smoothstep(0.80, 1.0, heightNorm));
-  float cavityOcclusion = clamp(1.0 - microCavity * 0.20, 0.74, 1.0);
+  float microCavity = smoothstep(0.035, 0.32, slope) * (1.0 - smoothstep(0.80, 1.0, heightNorm));
+  float lowAngleRelief = 1.0 - smoothstep(0.16, 0.72, nDotL);
+  float directionalReliefShadow = clamp(1.0 - microCavity * lowAngleRelief * surfaceBlend * 0.34, 0.66, 1.0);
+  float cavityOcclusion = clamp(1.0 - microCavity * (0.24 + lowAngleRelief * surfaceBlend * 0.10), 0.68, 1.0);
   vec3 skyTint = mix(vec3(0.36, 0.48, 0.62), uAtmosphereLightColor, 0.58 + tintStrength * 0.14);
   vec3 groundBounceTint = mix(vec3(0.30, 0.27, 0.22), albedo, 0.22);
   vec3 surfaceAmbient = albedo * (
@@ -377,7 +378,7 @@ vec3 applyPlanetLighting(vec3 albedo, vec3 normal, vec3 radialNormal, vec3 world
     groundBounceTint * (0.035 + day * 0.075) * (1.0 - microCavity * 0.35)
   );
   vec3 surfaceLit = surfaceAmbient * cavityOcclusion
-    + albedo * sunTint * surfaceDirect * directTransmission * (0.78 + day * 0.16) * cavityOcclusion;
+    + albedo * sunTint * surfaceDirect * directTransmission * (0.78 + day * 0.16) * cavityOcclusion * directionalReliefShadow;
   surfaceLit += albedo * twilightFill * terminator * extinctionStrength * 0.16;
   surfaceLit = mix(nightLit, surfaceLit, smoothstep(-0.28, 0.52, nDotL));
   surfaceLit += mix(vec3(0.22, 0.34, 0.48), uAtmosphereLightColor, tintStrength * 0.46) * rim * 0.10;
