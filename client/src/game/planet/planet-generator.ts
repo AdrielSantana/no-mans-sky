@@ -1423,21 +1423,25 @@ export function createOceanMaterial(params: {
     float nightAmbientStrength = clamp(uNightAmbientStrength, 0.0, 1.5);
 
     float cameraDist = distance(cameraPosition, vWorldPos);
-    float farWater = smoothstep(0.65, 2.4, cameraDist / uPlanetRadius);
+    float farWater = smoothstep(0.75, 2.65, cameraDist / uPlanetRadius);
     float detailFade = 1.0 - farWater;
+    float nearFade = 1.0 - smoothstep(0.030, 0.32, cameraDist / uPlanetRadius);
+    float orbitalFade = smoothstep(0.85, 2.9, cameraDist / uPlanetRadius);
 
-    vec3 flowA = vec3(uTime * 0.018, 0.0, -uTime * 0.013);
-    vec3 flowB = vec3(-uTime * 0.009, uTime * 0.014, uTime * 0.006);
-    float swell = terrainFbm(vSphereDir * 11.0 + flowA, uSeed + 101.0, 4, 2.0, 0.52);
-    float chop = terrainFbm(vSphereDir * 42.0 + flowB, uSeed + 203.0, 3, 2.2, 0.46) * detailFade;
-    float rippleA = terrainFbm(vSphereDir * 24.0 + flowB * 1.7, uSeed + 509.0, 3, 2.1, 0.46);
-    float rippleB = terrainFbm(vSphereDir * 67.0 - flowA * 1.2, uSeed + 811.0, 2, 2.3, 0.44) * detailFade;
+    vec3 flowA = vec3(uTime * 0.010, 0.0, -uTime * 0.008);
+    vec3 flowB = vec3(-uTime * 0.018, uTime * 0.012, uTime * 0.010);
+    vec3 flowC = vec3(uTime * 0.038, -uTime * 0.020, uTime * 0.026);
+    float swellLong = terrainFbm(vSphereDir * 5.2 + flowA, uSeed + 91.0, 4, 2.0, 0.52);
+    float swell = terrainFbm(vSphereDir * 13.0 + flowA * 1.7, uSeed + 101.0, 4, 2.0, 0.52);
+    float chop = terrainFbm(vSphereDir * 34.0 + flowB, uSeed + 203.0, 3, 2.2, 0.46) * detailFade;
+    float rippleA = terrainFbm(vSphereDir * 72.0 + flowB * 1.7, uSeed + 509.0, 3, 2.1, 0.46) * detailFade;
+    float rippleB = terrainFbm(vSphereDir * 155.0 - flowC, uSeed + 811.0, 2, 2.3, 0.44) * nearFade;
     vec3 sphereDir = normalize(vSphereDir);
     vec3 tangent = normalize(cross(abs(sphereDir.y) < 0.94 ? vec3(0.0, 1.0, 0.0) : vec3(1.0, 0.0, 0.0), sphereDir));
     vec3 bitangent = normalize(cross(sphereDir, tangent));
     vec3 waterNormal = normalize(baseNormal
-      + tangent * (swell * 0.030 + rippleA * 0.015) * detailFade
-      + bitangent * (chop * 0.020 + rippleB * 0.010) * detailFade);
+      + tangent * (swellLong * 0.026 + swell * 0.040 + rippleA * 0.028)
+      + bitangent * (chop * 0.034 + rippleB * 0.022));
 
     vec3 halfDir = normalize(lightDir + viewDir);
     float nDotL = dot(waterNormal, lightDir);
@@ -1446,18 +1450,43 @@ export function createOceanMaterial(params: {
     float lowSun = pow(1.0 - clamp(nDotL * 0.90 + 0.10, 0.0, 1.0), 1.7)
       * smoothstep(-0.10, 0.46, nDotL);
     float fresnel = pow(1.0 - max(dot(viewDir, waterNormal), 0.0), 4.6);
-    float coastFoam = (1.0 - smoothstep(0.10, 0.58, waterMask)) * smoothstep(0.06, 0.34, waterMask);
-    float foam = (smoothstep(0.70, 0.93, swell + chop * 0.28) * 0.18 + coastFoam * 0.18) * detailFade * day;
-    float surface = clamp(swell * 0.30 + chop * 0.10 + 0.42, 0.0, 1.0);
-    float specular = pow(max(dot(waterNormal, halfDir), 0.0), 140.0) * (0.06 + surface * 0.20) * day;
+    float shallowDepth = smoothstep(0.010, 0.16, belowSea);
+    float shelfDepth = smoothstep(0.08, 0.42, belowSea);
+    float abyssDepth = smoothstep(0.36, 1.20, belowSea);
+    float latitude = abs(vSphereDir.y);
+    float polarCool = smoothstep(0.54, 0.94, latitude);
+    float depthVariation = (swellLong * 0.65 + swell * 0.35) * 0.050 * (1.0 - abyssDepth);
 
-    float terrainDepthHint = clamp(belowSea / 0.34, 0.0, 1.0);
-    float depth = mix(0.46, terrainDepthHint, 0.40);
-    vec3 shallow = mix(uOceanColor, vec3(0.22, 0.42, 0.40), 0.34);
-    vec3 mid = uOceanColor;
-    vec3 deep = mix(uOceanColor * 0.42, vec3(0.002, 0.008, 0.026), 0.58);
-    vec3 color = mix(shallow, mid, smoothstep(0.04, 0.38, depth));
-    color = mix(color, deep, smoothstep(0.42, 1.0, depth));
+    vec3 baseOcean = clamp(uOceanColor, vec3(0.0), vec3(1.0));
+    vec3 lagoon = mix(baseOcean * 1.26, vec3(0.20, 0.58, 0.50), 0.34);
+    vec3 shelfColor = mix(baseOcean * 0.98, vec3(0.035, 0.24, 0.34), 0.28);
+    vec3 openColor = mix(baseOcean * 0.64, vec3(0.004, 0.044, 0.110), 0.36);
+    vec3 abyssColor = mix(baseOcean * 0.24, vec3(0.001, 0.007, 0.028), 0.56);
+    vec3 color = mix(lagoon, shelfColor, clamp(shallowDepth + depthVariation, 0.0, 1.0));
+    color = mix(color, openColor, shelfDepth);
+    color = mix(color, abyssColor, abyssDepth);
+    color = mix(color, mix(baseOcean * 0.72, vec3(0.030, 0.090, 0.130), 0.45), polarCool * 0.22);
+
+    float wavePattern = swellLong * 0.38 + swell * 0.36 + chop * 0.26;
+    float waveBright = smoothstep(0.40, 0.82, wavePattern) * (0.18 + detailFade * 0.82);
+    float waveDark = smoothstep(0.35, 0.85, -wavePattern) * (0.12 + detailFade * 0.70);
+    color *= 1.0 - waveDark * 0.075 * day;
+    color += waveBright * vec3(0.018, 0.036, 0.044) * day;
+
+    float surfLine = (1.0 - smoothstep(0.004, 0.080, belowSea)) * smoothstep(0.040, 0.30, waterMask);
+    float coastBand = (1.0 - smoothstep(0.014, 0.42, belowSea)) * smoothstep(0.025, 0.34, waterMask);
+    float foamNoise = terrainFbm(vSphereDir * 96.0 + flowC * 4.6, uSeed + 1217.0, 3, 2.1, 0.48);
+    float breakerPhase = belowSea * 34.0 + uTime * 1.45 + foamNoise * 1.65 + swell * 0.70;
+    float breaker = pow(0.5 + 0.5 * sin(breakerPhase), 2.8);
+    breaker *= smoothstep(0.010, 0.060, belowSea) * (1.0 - smoothstep(0.11, 0.34, belowSea));
+    float washPhase = belowSea * 18.0 + uTime * 0.75 + foamNoise * 1.10;
+    float wash = (0.5 + 0.5 * sin(washPhase)) * (1.0 - smoothstep(0.04, 0.42, belowSea));
+    float lace = smoothstep(0.18, 0.82, foamNoise * 0.68 + rippleA * 0.18 + swell * 0.24 + breaker * 0.42);
+    float waveCaps = smoothstep(0.52, 0.90, swellLong * 0.34 + swell * 0.42 + chop * 0.34) * nearFade;
+    float coastFoam = coastBand * (0.18 + lace * 0.46 + breaker * 0.52 + wash * 0.18) * (0.34 + detailFade * 0.66);
+    float foam = (surfLine * (0.22 + breaker * 0.40) + coastFoam * 0.72 + waveCaps * 0.22) * (0.24 + day * 0.62);
+    float surface = clamp(swellLong * 0.24 + swell * 0.24 + chop * 0.13 + 0.45, 0.0, 1.0);
+    float specular = pow(max(dot(waterNormal, halfDir), 0.0), mix(118.0, 280.0, orbitalFade)) * (0.035 + surface * 0.16) * day;
     vec3 nightWater = mix(vec3(0.001, 0.004, 0.010), uNightColor * 0.08, 0.35);
     color *= mix(0.008 + nightAmbientStrength * 0.020, 1.0, day) * mix(1.0, 0.82, lowSun * extinctionStrength);
     color += nightWater * (1.0 - day) * (0.010 + nightAmbientStrength * 0.020);
@@ -1467,18 +1496,21 @@ export function createOceanMaterial(params: {
     waterLightColor = mix(waterLightColor, sunsetTint, lowSun * extinctionStrength * 0.56);
     color += diffuse * waterLightColor * vec3(0.018, 0.038, 0.040) * (0.55 + tintStrength * 0.28);
     color += surface * vec3(0.004, 0.016, 0.020) * day;
-    vec3 reflected = vec3(0.36, 0.50, 0.62) * fresnel * (0.04 + day * 0.34);
-    color = mix(color, vec3(0.70, 0.78, 0.76), foam * 0.18);
+    float sunGlint = pow(max(dot(reflect(-lightDir, waterNormal), viewDir), 0.0), mix(80.0, 520.0, orbitalFade))
+      * (0.018 + orbitalFade * 0.09) * day;
+    vec3 reflected = vec3(0.34, 0.48, 0.60) * fresnel * (0.045 + day * 0.36);
+    color = mix(color, vec3(0.76, 0.86, 0.83), clamp(foam * 0.58, 0.0, 0.62));
+    color += foam * vec3(0.035, 0.048, 0.042) * (0.30 + day * 0.58);
     reflected *= mix(vec3(1.0), uAtmosphereLightColor, tintStrength * 0.40);
     reflected *= mix(vec3(1.0), sunsetTint, lowSun * extinctionStrength * 0.16);
     reflected *= day;
-    color += reflected + specular * mix(vec3(1.0, 0.92, 0.78), waterLightColor, tintStrength * 0.90);
+    color += reflected + (specular + sunGlint) * mix(vec3(1.0, 0.92, 0.78), waterLightColor, tintStrength * 0.90);
     color = applyAerialPerspective(color, vWorldPos, waterNormal);
 
-    float alpha = mix(0.70, 0.88, smoothstep(0.04, 0.62, depth));
+    float alpha = mix(0.64, 0.90, smoothstep(0.02, 0.52, belowSea));
     alpha = mix(alpha, 0.94, farWater);
     alpha += fresnel * 0.035 * day;
-    alpha *= smoothstep(0.03, 0.24, waterMask);
+    alpha *= smoothstep(0.025, 0.22, waterMask);
     #include <logdepthbuf_fragment>
     gl_FragColor = vec4(color, alpha);
   }
