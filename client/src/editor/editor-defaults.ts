@@ -4,6 +4,7 @@ export interface EditorParams {
   planetRadius: number
   terrainScale: number
   waterLevel: number
+  oceanColor: string
   colorA: string
   colorB: string
   textureScale: number
@@ -112,6 +113,7 @@ export const DEFAULT_PARAMS: EditorParams = {
   planetRadius: 50000,
   terrainScale: 0.065,
   waterLevel: 0.45,
+  oceanColor: '#123d55',
   colorA: '#26a269',
   colorB: '#63452c',
   textureScale: 92,

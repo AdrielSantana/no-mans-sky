@@ -396,6 +396,16 @@ export function EditorPanel({ params, onChange }: Props) {
           <span className="editor-value">{params.waterLevel.toFixed(2)}</span>
         </div>
         <div className="editor-row">
+          <span className="editor-label">Ocean Color</span>
+          <input
+            className="editor-color"
+            type="color"
+            value={params.oceanColor}
+            onChange={e => set('oceanColor', e.target.value)}
+          />
+          <span className="editor-value">{params.oceanColor}</span>
+        </div>
+        <div className="editor-row">
           <span className="editor-label">Color A</span>
           <input
             className="editor-color"
