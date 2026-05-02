@@ -272,6 +272,45 @@ export function EditorPanel({ params, onChange }: Props) {
           />
           <span className="editor-value">{params.detailStrength.toFixed(2)}</span>
         </div>
+        <div className="editor-row">
+          <span className="editor-label">Micro Strength</span>
+          <input
+            className="editor-slider"
+            type="range"
+            min={RANGES.microDetailStrength.min}
+            max={RANGES.microDetailStrength.max}
+            step={RANGES.microDetailStrength.step}
+            value={params.microDetailStrength}
+            onChange={e => set('microDetailStrength', Number(e.target.value))}
+          />
+          <span className="editor-value">{params.microDetailStrength.toFixed(2)}</span>
+        </div>
+        <div className="editor-row">
+          <span className="editor-label">Micro Scale</span>
+          <input
+            className="editor-slider"
+            type="range"
+            min={RANGES.microDetailScale.min}
+            max={RANGES.microDetailScale.max}
+            step={RANGES.microDetailScale.step}
+            value={params.microDetailScale}
+            onChange={e => set('microDetailScale', Number(e.target.value))}
+          />
+          <span className="editor-value">{params.microDetailScale.toFixed(2)}</span>
+        </div>
+        <div className="editor-row">
+          <span className="editor-label">Micro Relief</span>
+          <input
+            className="editor-slider"
+            type="range"
+            min={RANGES.microReliefMeters.min}
+            max={RANGES.microReliefMeters.max}
+            step={RANGES.microReliefMeters.step}
+            value={params.microReliefMeters}
+            onChange={e => set('microReliefMeters', Number(e.target.value))}
+          />
+          <span className="editor-value">{params.microReliefMeters.toFixed(2)}m</span>
+        </div>
       </div>
 
       <div className="editor-section">

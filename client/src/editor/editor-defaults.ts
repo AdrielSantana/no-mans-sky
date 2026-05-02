@@ -55,6 +55,9 @@ export interface EditorParams {
   erosionStrength: number
   thermalStrength: number
   detailStrength: number
+  microDetailStrength: number
+  microDetailScale: number
+  microReliefMeters: number
   // LOD multipliers (LOD 1-N, index 0 = LOD 1)
   lodMultipliers: number[]
   // Chunk resolution
@@ -163,6 +166,9 @@ export const DEFAULT_PARAMS: EditorParams = {
   erosionStrength: 0.46,
   thermalStrength: 0.34,
   detailStrength: 0.66,
+  microDetailStrength: 0.5,
+  microDetailScale: 2.5,
+  microReliefMeters: 1.5,
   lodMultipliers: [...DEFAULT_LOD_MULTIPLIERS],
   gridSize: 33,
   autoLod: true,
@@ -230,6 +236,9 @@ export const RANGES = {
   erosionStrength: { min: 0, max: 1.0, step: 0.01 },
   thermalStrength: { min: 0, max: 1.0, step: 0.01 },
   detailStrength: { min: 0, max: 1.5, step: 0.01 },
+  microDetailStrength: { min: 0, max: 1.5, step: 0.01 },
+  microDetailScale: { min: 0.35, max: 3.0, step: 0.01 },
+  microReliefMeters: { min: 0, max: 8, step: 0.05 },
   lodMultiplier: { min: 0.01, max: 10.0, step: 0.01 },
   gridSize: { min: 9, max: 129, step: 2 },
   horizonMargin: { min: 0, max: 3, step: 0.05 },
@@ -256,6 +265,9 @@ export const TYPE_PRESETS: Record<string, Pick<EditorParams,
   | 'erosionStrength'
   | 'thermalStrength'
   | 'detailStrength'
+  | 'microDetailStrength'
+  | 'microDetailScale'
+  | 'microReliefMeters'
 >> = {
   rocky: {
     octaves: 6,
@@ -272,6 +284,9 @@ export const TYPE_PRESETS: Record<string, Pick<EditorParams,
     erosionStrength: 0.34,
     thermalStrength: 0.2,
     detailStrength: 0.55,
+    microDetailStrength: 0.5,
+    microDetailScale: 2.5,
+    microReliefMeters: 1.5,
   },
   gas: {
     octaves: 4,
@@ -288,6 +303,9 @@ export const TYPE_PRESETS: Record<string, Pick<EditorParams,
     erosionStrength: 0,
     thermalStrength: 0,
     detailStrength: 0.25,
+    microDetailStrength: 0,
+    microDetailScale: 1.0,
+    microReliefMeters: 0,
   },
   ice: {
     octaves: 5,
@@ -304,5 +322,8 @@ export const TYPE_PRESETS: Record<string, Pick<EditorParams,
     erosionStrength: 0.16,
     thermalStrength: 0.48,
     detailStrength: 0.36,
+    microDetailStrength: 0.48,
+    microDetailScale: 1.15,
+    microReliefMeters: 1.35,
   },
 }

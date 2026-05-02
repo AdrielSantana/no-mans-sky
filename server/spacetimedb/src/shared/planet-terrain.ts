@@ -19,6 +19,9 @@ export interface PlanetTerrainParams {
   erosionStrength?: number
   thermalStrength?: number
   detailStrength?: number
+  microDetailStrength?: number
+  microDetailScale?: number
+  microReliefMeters?: number
 }
 
 function mod289(x: number): number {
@@ -367,6 +370,98 @@ export function samplePlanetHeight(dir: Vec3Like, params: PlanetTerrainParams): 
     + detail
 }
 
+export function samplePlanetMicroHeight(
+  dir: Vec3Like,
+  params: PlanetTerrainParams,
+  macroHeight = samplePlanetHeight(dir, params),
+): number {
+  if (params.planetType === 'gas') return 0
+
+  const terrainMeters = Math.max(params.terrainScale * params.radius, 0.001)
+  const strength = params.microDetailStrength ?? (params.planetType === 'ice' ? 0.48 : 0.5)
+  if (strength <= 0.001) return 0
+
+  const lacunarity = params.lacunarity ?? 2
+  const gain = params.gain ?? 0.5
+  const baseDir = normalize(dir)
+  const warped = sampleWarpedDirection(baseDir, params, lacunarity, gain)
+  const scale = Math.max(params.microDetailScale ?? (params.planetType === 'ice' ? 1.15 : 2.5), 0.05)
+  const radius = Math.max(params.radius, 1)
+  const freqForMeters = (meters: number) => radius / Math.max(meters * scale, 0.25)
+
+  const broad = terrainFbm({
+    x: warped.x * freqForMeters(24) + 12.7,
+    y: warped.y * freqForMeters(24) - 31.1,
+    z: warped.z * freqForMeters(24) + 7.4,
+  }, params.seed + 1701.4, 3, 2.0, 0.52)
+  const medium = terrainFbm({
+    x: warped.x * freqForMeters(9) - 42.0,
+    y: warped.y * freqForMeters(9) + 8.5,
+    z: warped.z * freqForMeters(9) + 19.3,
+  }, params.seed + 1823.8, 4, 2.14, 0.48)
+  const fine = terrainFbm({
+    x: warped.x * freqForMeters(3.2) + 4.2,
+    y: warped.y * freqForMeters(3.2) + 51.6,
+    z: warped.z * freqForMeters(3.2) - 27.0,
+  }, params.seed + 1941.6, 3, 2.22, 0.43)
+
+  const channelRaw = Math.abs(terrainFbm({
+    x: warped.x * freqForMeters(16) - 18.0,
+    y: warped.y * freqForMeters(16) + 29.0,
+    z: warped.z * freqForMeters(16) + 3.0,
+  }, params.seed + 2031.2, 3, 2.18, 0.46))
+  const ledgeRaw = Math.abs(terrainFbm({
+    x: warped.x * freqForMeters(6.2) + 37.0,
+    y: warped.y * freqForMeters(6.2) - 12.0,
+    z: warped.z * freqForMeters(6.2) + 45.0,
+  }, params.seed + 2137.9, 3, 2.2, 0.45))
+
+  const channels = Math.pow(1 - clamp(channelRaw, 0, 1), 5.8)
+  const ledges = Math.pow(1 - clamp(ledgeRaw, 0, 1), 3.2)
+  const highland = smoothstep(0.05, 0.46, macroHeight)
+  const lowland = 1 - smoothstep(0.18, 0.58, macroHeight)
+  const shelf = smoothstep(-0.22, 0.16, macroHeight) * (1 - smoothstep(0.42, 0.78, macroHeight))
+  const regionalVariety = terrainFbm({
+    x: warped.x * freqForMeters(90) + 72.0,
+    y: warped.y * freqForMeters(90) - 13.0,
+    z: warped.z * freqForMeters(90) + 21.0,
+  }, params.seed + 2211.5, 2, 2.0, 0.5) * 0.5 + 0.5
+  const activeRegion = clamp(0.34 + shelf * 0.40 + highland * 0.24 + regionalVariety * 0.34, 0.18, 1.16)
+
+  let meters = broad * (0.95 + lowland * 0.36)
+  meters += medium * (0.52 + highland * 0.42)
+  meters += fine * 0.22
+  meters += ledges * (0.74 + highland * 0.58)
+  meters -= channels * (0.72 + lowland * 0.34)
+
+  if (params.planetType === 'ice') {
+    meters = broad * 0.54 + medium * 0.26 + fine * 0.12 - channels * 0.32 + ledges * 0.24
+  }
+
+  const reliefMeters = params.microReliefMeters ?? (params.planetType === 'ice' ? 1.35 : 1.5)
+  return clamp(meters * activeRegion * reliefMeters * strength, -4.8, 5.6) / terrainMeters
+}
+
+export function samplePlanetHeightDetailed(
+  dir: Vec3Like,
+  params: PlanetTerrainParams,
+  microAmount = 1,
+): number {
+  const macroHeight = samplePlanetHeight(dir, params)
+  const amount = clamp(microAmount, 0, 1)
+  if (amount <= 0.001) return macroHeight
+
+  return macroHeight + samplePlanetMicroHeight(dir, params, macroHeight) * amount
+}
+
 export function samplePlanetRadius(dir: Vec3Like, params: PlanetTerrainParams): number {
   return params.radius + samplePlanetHeight(dir, params) * params.terrainScale * params.radius
+}
+
+export function samplePlanetRadiusDetailed(
+  dir: Vec3Like,
+  params: PlanetTerrainParams,
+  microAmount = 1,
+): number {
+  return params.radius + samplePlanetHeightDetailed(dir, params, microAmount) * params.terrainScale * params.radius
 }

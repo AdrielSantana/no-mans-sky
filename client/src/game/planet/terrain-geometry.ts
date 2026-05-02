@@ -1,4 +1,4 @@
-import { samplePlanetHeight, type PlanetTerrainParams } from '../../../../server/spacetimedb/src/shared/planet-terrain'
+import { samplePlanetHeightDetailed, type PlanetTerrainParams } from '../../../../server/spacetimedb/src/shared/planet-terrain'
 import { type QuadtreeNode, cubeToSphere, getNodeBounds } from './quadtree'
 
 const SKIRT_DEPTH = 0.08
@@ -25,8 +25,12 @@ export function normalizeSkirtFlags(skirts: boolean | SkirtFlags): SkirtFlags {
     : { bottom: false, top: false, left: false, right: false }
 }
 
-function terrainSurfacePoint(dir: { x: number; y: number; z: number }, terrain: PlanetTerrainParams): [number, number, number] {
-  const height = samplePlanetHeight(dir, terrain)
+function terrainSurfacePoint(
+  dir: { x: number; y: number; z: number },
+  terrain: PlanetTerrainParams,
+  microDetailAmount: number,
+): [number, number, number] {
+  const height = samplePlanetHeightDetailed(dir, terrain, microDetailAmount)
   const radius = terrain.radius + height * terrain.terrainScale * terrain.radius
   return [dir.x * radius, dir.y * radius, dir.z * radius]
 }
@@ -44,7 +48,12 @@ function cross(ax: number, ay: number, az: number, bx: number, by: number, bz: n
   ]
 }
 
-function computeTerrainNormal(dir: { x: number; y: number; z: number }, terrain: PlanetTerrainParams, sampleStep: number): [number, number, number] {
+function computeTerrainNormal(
+  dir: { x: number; y: number; z: number },
+  terrain: PlanetTerrainParams,
+  sampleStep: number,
+  microDetailAmount: number,
+): [number, number, number] {
   const up = Math.abs(dir.y) < 0.94 ? { x: 0, y: 1, z: 0 } : { x: 1, y: 0, z: 0 }
   const [tx, ty, tz] = normalizeVec(
     up.y * dir.z - up.z * dir.y,
@@ -62,10 +71,10 @@ function computeTerrainNormal(dir: { x: number; y: number; z: number }, terrain:
   const [dbx0, dby0, dbz0] = normalizeVec(dir.x - bx * sampleStep, dir.y - by * sampleStep, dir.z - bz * sampleStep)
   const [dbx1, dby1, dbz1] = normalizeVec(dir.x + bx * sampleStep, dir.y + by * sampleStep, dir.z + bz * sampleStep)
 
-  const pT0 = terrainSurfacePoint({ x: dtx0, y: dty0, z: dtz0 }, terrain)
-  const pT1 = terrainSurfacePoint({ x: dtx1, y: dty1, z: dtz1 }, terrain)
-  const pB0 = terrainSurfacePoint({ x: dbx0, y: dby0, z: dbz0 }, terrain)
-  const pB1 = terrainSurfacePoint({ x: dbx1, y: dby1, z: dbz1 }, terrain)
+  const pT0 = terrainSurfacePoint({ x: dtx0, y: dty0, z: dtz0 }, terrain, microDetailAmount)
+  const pT1 = terrainSurfacePoint({ x: dtx1, y: dty1, z: dtz1 }, terrain, microDetailAmount)
+  const pB0 = terrainSurfacePoint({ x: dbx0, y: dby0, z: dbz0 }, terrain, microDetailAmount)
+  const pB1 = terrainSurfacePoint({ x: dbx1, y: dby1, z: dbz1 }, terrain, microDetailAmount)
 
   const [nx, ny, nz] = cross(
     pT1[0] - pT0[0],
@@ -84,12 +93,17 @@ function computeTerrainNormal(dir: { x: number; y: number; z: number }, terrain:
   return [outX, outY, outZ]
 }
 
-function computeTerrainNormals(positions: Float32Array, terrain: PlanetTerrainParams, sampleStep: number): Float32Array {
+function computeTerrainNormals(
+  positions: Float32Array,
+  terrain: PlanetTerrainParams,
+  sampleStep: number,
+  microDetailAmount: number,
+): Float32Array {
   const normals = new Float32Array(positions.length)
 
   for (let i = 0; i < positions.length; i += 3) {
     const [dx, dy, dz] = normalizeVec(positions[i], positions[i + 1], positions[i + 2])
-    const [nx, ny, nz] = computeTerrainNormal({ x: dx, y: dy, z: dz }, terrain, sampleStep)
+    const [nx, ny, nz] = computeTerrainNormal({ x: dx, y: dy, z: dz }, terrain, sampleStep, microDetailAmount)
     normals[i] = nx
     normals[i + 1] = ny
     normals[i + 2] = nz
@@ -109,6 +123,7 @@ export function buildTerrainChunkGeometryData(
   const { u0, v0, u1, v1 } = getNodeBounds(node)
   const du = (u1 - u0) / (gs - 1)
   const dv = (v1 - v0) / (gs - 1)
+  const microDetailAmount = 1
 
   const vertCount = gs * gs
   const positions = new Float32Array(vertCount * 3)
@@ -121,7 +136,7 @@ export function buildTerrainChunkGeometryData(
       const v = v0 + iy * dv
 
       const dir = cubeToSphere(node.face, u, v)
-      const height = samplePlanetHeight(dir, terrain)
+      const height = samplePlanetHeightDetailed(dir, terrain, microDetailAmount)
       const radius = terrain.radius + height * terrain.terrainScale * terrain.radius
       positions[i * 3] = dir.x * radius
       positions[i * 3 + 1] = dir.y * radius
@@ -152,7 +167,7 @@ export function buildTerrainChunkGeometryData(
 
   const hasAnySkirt = skirtFlags.bottom || skirtFlags.top || skirtFlags.left || skirtFlags.right
   const normalSampleStep = Math.max(0.0008, Math.min(Math.abs(du), Math.abs(dv)) * 0.45)
-  const mainNormals = computeTerrainNormals(positions, terrain, normalSampleStep)
+  const mainNormals = computeTerrainNormals(positions, terrain, normalSampleStep, microDetailAmount)
 
   if (!hasAnySkirt) {
     return {

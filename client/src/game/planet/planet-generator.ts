@@ -21,6 +21,9 @@ export interface PlanetNoiseProfile {
   erosionStrength: number
   thermalStrength: number
   detailStrength: number
+  microDetailStrength: number
+  microDetailScale: number
+  microReliefMeters: number
 }
 
 export const PlanetKind = {
@@ -66,6 +69,9 @@ export class PlanetGenerator {
           erosionStrength: 0,
           thermalStrength: 0,
           detailStrength: 0.25,
+          microDetailStrength: 0,
+          microDetailScale: 1,
+          microReliefMeters: 0,
         }
       case 'ice':
         return {
@@ -84,6 +90,9 @@ export class PlanetGenerator {
           erosionStrength: 0.16,
           thermalStrength: 0.48,
           detailStrength: 0.36,
+          microDetailStrength: 0.48,
+          microDetailScale: 1.15,
+          microReliefMeters: 1.35,
         }
       case 'rocky':
       default:
@@ -103,6 +112,9 @@ export class PlanetGenerator {
           erosionStrength: 0.34,
           thermalStrength: 0.2,
           detailStrength: 0.55,
+          microDetailStrength: 0.5,
+          microDetailScale: 2.5,
+          microReliefMeters: 1.5,
         }
     }
   }

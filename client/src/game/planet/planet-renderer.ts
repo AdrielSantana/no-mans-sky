@@ -22,7 +22,12 @@ import {
   PlanetGenerator,
 } from './planet-generator'
 import { WORLD_SCALE } from '../world-scale'
-import { samplePlanetHeight, samplePlanetRadius, type PlanetTerrainParams } from '../../../../server/spacetimedb/src/shared/planet-terrain'
+import {
+  samplePlanetHeight,
+  samplePlanetRadius,
+  samplePlanetRadiusDetailed,
+  type PlanetTerrainParams,
+} from '../../../../server/spacetimedb/src/shared/planet-terrain'
 import type { Vec3Like } from '../../../../server/spacetimedb/src/shared/vector'
 import type { TerrainWorkerBuildResponse, TerrainWorkerResponse } from './terrain-worker-types'
 import type { TerrainChunkGeometryData } from './terrain-geometry'
@@ -105,6 +110,9 @@ interface PlanetRendererParams {
     erosionStrength?: number
     thermalStrength?: number
     detailStrength?: number
+    microDetailStrength?: number
+    microDetailScale?: number
+    microReliefMeters?: number
   }
   lodMultipliers?: number[]
   gridSize?: number
@@ -131,6 +139,9 @@ export class PlanetRenderer {
     erosionStrength: number
     thermalStrength: number
     detailStrength: number
+    microDetailStrength: number
+    microDetailScale: number
+    microReliefMeters: number
     seed: number
   }
   private maxLod: number
@@ -301,6 +312,9 @@ export class PlanetRenderer {
       erosionStrength: this.noiseProfile.erosionStrength,
       thermalStrength: this.noiseProfile.thermalStrength,
       detailStrength: this.noiseProfile.detailStrength,
+      microDetailStrength: this.noiseProfile.microDetailStrength,
+      microDetailScale: this.noiseProfile.microDetailScale,
+      microReliefMeters: this.noiseProfile.microReliefMeters,
     }
     const waterLevel = params.waterLevel ?? 0
 
@@ -1083,7 +1097,7 @@ export class PlanetRenderer {
 
   sampleSurfaceRadius(dir: Vec3Like): number {
     const chunk = this.findVisibleChunkForDirection(dir)
-    return chunk?.sampleVisualRadius(dir) ?? samplePlanetRadius(dir, this.terrainParams)
+    return chunk?.sampleVisualRadius(dir) ?? samplePlanetRadiusDetailed(dir, this.terrainParams)
   }
 
   getDebugStats(camera: THREE.Camera) {

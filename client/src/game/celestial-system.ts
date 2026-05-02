@@ -128,9 +128,16 @@ export class CelestialSystem {
           warpStrength: profile.warpStrength,
           continentalScale: profile.continentalScale,
           mountainScale: profile.mountainScale,
+          plainsScale: profile.plainsScale,
+          hillsScale: profile.hillsScale,
+          mountainBeltScale: profile.mountainBeltScale,
+          reliefVariety: profile.reliefVariety,
           erosionStrength: profile.erosionStrength,
           thermalStrength: profile.thermalStrength,
           detailStrength: profile.detailStrength,
+          microDetailStrength: profile.microDetailStrength,
+          microDetailScale: profile.microDetailScale,
+          microReliefMeters: profile.microReliefMeters,
         })
       } else {
         // No params — simple sphere (backward compatible)
