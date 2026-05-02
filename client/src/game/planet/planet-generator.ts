@@ -400,10 +400,11 @@ vec3 cloudCurvedDirection(vec3 dir) {
   tangent = normalize(tangent);
   vec3 bitangent = normalize(cross(n, tangent));
   float speed = max(uCloudSpeed, 0.0);
-  float curlA = terrainFbm(n * (uCloudScale * 1.05) + vec3(uTime * speed * 0.07, 9.4, -3.1), uCloudSeed + 2201.0, 3, 2.0, 0.52);
-  float curlB = terrainFbm(n * (uCloudScale * 1.72) + vec3(-6.3, uTime * speed * 0.05, 14.7), uCloudSeed + 2603.0, 2, 2.1, 0.50);
+  float phase = uCloudSeed * 0.017;
+  float curlA = sin(dot(n, vec3(2.13, 0.71, -1.42)) * uCloudScale * 1.08 + uTime * speed * 0.24 + phase);
+  float curlB = sin(dot(n, vec3(-1.17, 1.86, 2.37)) * uCloudScale * 1.54 - uTime * speed * 0.18 + phase * 1.7);
   float bandStrength = clamp(uCloudBandStrength, 0.0, 1.5);
-  return normalize(n + tangent * curlA * 0.20 * bandStrength + bitangent * curlB * 0.11 * bandStrength);
+  return normalize(n + tangent * curlA * 0.15 * bandStrength + bitangent * curlB * 0.09 * bandStrength);
 }
 
 float cloudField(vec3 dir) {
@@ -415,12 +416,12 @@ float cloudField(vec3 dir) {
   float bandStrength = clamp(uCloudBandStrength, 0.0, 1.5);
   float detailStrength = clamp(uCloudDetailStrength, 0.0, 1.5);
 
-  float macroRaw = terrainFbm(p * 0.42 + wind * 0.55 + vec3(31.0, -18.0, 7.0), uCloudSeed + 301.7, 4, 2.0, 0.54) * 0.5 + 0.5;
-  float broad = terrainFbm(p * 0.82 + wind + vec3(13.1, -7.2, 4.8), uCloudSeed + 503.7, 4, 2.05, 0.52) * 0.5 + 0.5;
-  float medium = terrainFbm(p * 1.86 + wind * 1.55 + vec3(-5.4, 17.6, 9.2), uCloudSeed + 907.2, 4, 2.18, 0.48) * 0.5 + 0.5;
-  float fine = terrainFbm(p * 6.20 - wind * 2.30 + vec3(28.0, 3.7, -11.5), uCloudSeed + 1301.4, 3, 2.24, 0.44) * 0.5 + 0.5;
+  float macroRaw = terrainFbm(p * 0.42 + wind * 0.55 + vec3(31.0, -18.0, 7.0), uCloudSeed + 301.7, 3, 2.0, 0.54) * 0.5 + 0.5;
+  float broad = terrainFbm(p * 0.82 + wind + vec3(13.1, -7.2, 4.8), uCloudSeed + 503.7, 3, 2.05, 0.52) * 0.5 + 0.5;
+  float medium = terrainFbm(p * 1.86 + wind * 1.55 + vec3(-5.4, 17.6, 9.2), uCloudSeed + 907.2, 2, 2.18, 0.48) * 0.5 + 0.5;
+  float fine = terrainFbm(p * 6.20 - wind * 2.30 + vec3(28.0, 3.7, -11.5), uCloudSeed + 1301.4, 2, 2.24, 0.44) * 0.5 + 0.5;
 
-  float frontNoise = terrainFbm(vec3(p.x * 0.36 + p.z * 0.18, p.y * 2.20 + macroRaw * 1.20, p.z * 0.42) + wind * 0.72, uCloudSeed + 1709.1, 3, 2.0, 0.55);
+  float frontNoise = terrainFbm(vec3(p.x * 0.36 + p.z * 0.18, p.y * 2.20 + macroRaw * 1.20, p.z * 0.42) + wind * 0.72, uCloudSeed + 1709.1, 2, 2.0, 0.55);
   float fronts = pow(1.0 - clamp(abs(frontNoise), 0.0, 1.0), 2.85);
   float stormCells = pow(smoothstep(0.50, 0.92, macroRaw + medium * 0.18), 1.85);
   float brokenWisps = smoothstep(0.44, 0.84, fine + fronts * 0.24) * (1.0 - stormCells * 0.36);
@@ -439,10 +440,10 @@ float cloudFieldMedium(vec3 dir) {
   vec3 p = curved * max(uCloudScale, 0.001);
   float stormStrength = clamp(uCloudStormStrength, 0.0, 1.5);
   float bandStrength = clamp(uCloudBandStrength, 0.0, 1.5);
-  float macroRaw = terrainFbm(p * 0.42 + wind * 0.55 + vec3(31.0, -18.0, 7.0), uCloudSeed + 301.7, 3, 2.0, 0.54) * 0.5 + 0.5;
-  float broad = terrainFbm(p * 0.82 + wind + vec3(13.1, -7.2, 4.8), uCloudSeed + 503.7, 3, 2.05, 0.52) * 0.5 + 0.5;
-  float medium = terrainFbm(p * 1.86 + wind * 1.55 + vec3(-5.4, 17.6, 9.2), uCloudSeed + 907.2, 2, 2.18, 0.48) * 0.5 + 0.5;
-  float frontNoise = terrainFbm(vec3(p.x * 0.36 + p.z * 0.18, p.y * 2.20 + macroRaw * 1.20, p.z * 0.42) + wind * 0.72, uCloudSeed + 1709.1, 2, 2.0, 0.55);
+  float macroRaw = terrainFbm(p * 0.42 + wind * 0.55 + vec3(31.0, -18.0, 7.0), uCloudSeed + 301.7, 2, 2.0, 0.54) * 0.5 + 0.5;
+  float broad = terrainFbm(p * 0.82 + wind + vec3(13.1, -7.2, 4.8), uCloudSeed + 503.7, 2, 2.05, 0.52) * 0.5 + 0.5;
+  float medium = terrainFbm(p * 1.86 + wind * 1.55 + vec3(-5.4, 17.6, 9.2), uCloudSeed + 907.2, 1, 2.18, 0.48) * 0.5 + 0.5;
+  float frontNoise = terrainFbm(vec3(p.x * 0.36 + p.z * 0.18, p.y * 2.20 + macroRaw * 1.20, p.z * 0.42) + wind * 0.72, uCloudSeed + 1709.1, 1, 2.0, 0.55);
   float fronts = pow(1.0 - clamp(abs(frontNoise), 0.0, 1.0), 2.65);
   float stormCells = pow(smoothstep(0.50, 0.92, macroRaw + medium * 0.18), 1.70);
   float systems = broad * 0.38 + medium * 0.18;
@@ -457,7 +458,7 @@ float cloudFieldLow(vec3 dir) {
   vec3 p = normalize(dir) * max(uCloudScale, 0.001);
   float stormStrength = clamp(uCloudStormStrength, 0.0, 1.5);
   float bandStrength = clamp(uCloudBandStrength, 0.0, 1.5);
-  float broad = terrainFbm(p * 0.72 + wind + vec3(13.1, -7.2, 4.8), uCloudSeed + 503.7, 2, 2.0, 0.52) * 0.5 + 0.5;
+  float broad = terrainFbm(p * 0.72 + wind + vec3(13.1, -7.2, 4.8), uCloudSeed + 503.7, 1, 2.0, 0.52) * 0.5 + 0.5;
   float medium = terrainFbm(p * 1.42 + wind * 1.25 + vec3(-5.4, 17.6, 9.2), uCloudSeed + 907.2, 1, 2.0, 0.50) * 0.5 + 0.5;
   float frontNoise = terrainFbm(vec3(p.x * 0.32 + p.z * 0.18, p.y * 1.65, p.z * 0.38) + wind * 0.50, uCloudSeed + 1709.1, 1, 2.0, 0.55);
   float fronts = pow(1.0 - clamp(abs(frontNoise), 0.0, 1.0), 2.20) * bandStrength;
@@ -507,22 +508,7 @@ float cloudEdge(vec3 dir) {
 
 float cloudShadowField(vec3 dir) {
   if (uCloudQuality < 0.5) return cloudFieldLow(dir);
-  float speed = max(uCloudSpeed, 0.0);
-  vec3 wind = vec3(uTime * speed * 0.18, uTime * speed * 0.055, -uTime * speed * 0.12);
-  vec3 curved = cloudCurvedDirection(dir);
-  vec3 p = curved * max(uCloudScale, 0.001);
-  float stormStrength = clamp(uCloudStormStrength, 0.0, 1.5);
-  float bandStrength = clamp(uCloudBandStrength, 0.0, 1.5);
-  float macroRaw = terrainFbm(p * 0.42 + wind * 0.55 + vec3(31.0, -18.0, 7.0), uCloudSeed + 301.7, 3, 2.0, 0.54) * 0.5 + 0.5;
-  float broad = terrainFbm(p * 0.82 + wind + vec3(13.1, -7.2, 4.8), uCloudSeed + 503.7, 3, 2.05, 0.52) * 0.5 + 0.5;
-  float medium = terrainFbm(p * 1.86 + wind * 1.55 + vec3(-5.4, 17.6, 9.2), uCloudSeed + 907.2, 2, 2.18, 0.48) * 0.5 + 0.5;
-  float frontNoise = terrainFbm(vec3(p.x * 0.36 + p.z * 0.18, p.y * 2.20 + macroRaw * 1.20, p.z * 0.42) + wind * 0.72, uCloudSeed + 1709.1, 2, 2.0, 0.55);
-  float fronts = pow(1.0 - clamp(abs(frontNoise), 0.0, 1.0), 2.65);
-  float stormCells = pow(smoothstep(0.50, 0.92, macroRaw + medium * 0.18), 1.70);
-  float systems = broad * 0.38 + medium * 0.18;
-  systems += stormCells * (0.25 * stormStrength);
-  systems += fronts * (0.20 * bandStrength);
-  return clamp(systems, 0.0, 1.18);
+  return cloudFieldMedium(dir);
 }
 
 float cloudShadowPattern(vec3 dir) {
@@ -1428,14 +1414,18 @@ export function createOceanMaterial(params: {
     float nearFade = 1.0 - smoothstep(0.030, 0.32, cameraDist / uPlanetRadius);
     float orbitalFade = smoothstep(0.85, 2.9, cameraDist / uPlanetRadius);
 
-    vec3 flowA = vec3(uTime * 0.010, 0.0, -uTime * 0.008);
-    vec3 flowB = vec3(-uTime * 0.018, uTime * 0.012, uTime * 0.010);
     vec3 flowC = vec3(uTime * 0.038, -uTime * 0.020, uTime * 0.026);
-    float swellLong = terrainFbm(vSphereDir * 5.2 + flowA, uSeed + 91.0, 4, 2.0, 0.52);
-    float swell = terrainFbm(vSphereDir * 13.0 + flowA * 1.7, uSeed + 101.0, 4, 2.0, 0.52);
-    float chop = terrainFbm(vSphereDir * 34.0 + flowB, uSeed + 203.0, 3, 2.2, 0.46) * detailFade;
-    float rippleA = terrainFbm(vSphereDir * 72.0 + flowB * 1.7, uSeed + 509.0, 3, 2.1, 0.46) * detailFade;
-    float rippleB = terrainFbm(vSphereDir * 155.0 - flowC, uSeed + 811.0, 2, 2.3, 0.44) * nearFade;
+    float seedPhase = uSeed * 0.013;
+    float waveA = sin(dot(vSphereDir, vec3(0.82, 0.18, -0.54)) * 11.0 + uTime * 0.34 + seedPhase);
+    float waveB = sin(dot(vSphereDir, vec3(-0.30, 0.22, 0.94)) * 17.0 - uTime * 0.48 + seedPhase * 1.7);
+    float waveC = sin(dot(vSphereDir, vec3(0.48, -0.16, 0.86)) * 36.0 + uTime * 1.05 + seedPhase * 2.3);
+    float waveD = sin(dot(vSphereDir, vec3(-0.72, 0.08, 0.62)) * 68.0 - uTime * 1.74 + seedPhase * 3.1);
+    float waveE = sin(dot(vSphereDir, vec3(0.24, 0.38, -0.89)) * 132.0 + uTime * 2.35 + seedPhase * 4.7);
+    float swellLong = waveA * 0.62 + waveB * 0.38;
+    float swell = (waveB * 0.45 + waveC * 0.55) * detailFade;
+    float chop = (waveC * 0.62 + waveD * 0.38) * detailFade;
+    float rippleA = (waveD * 0.72 + waveE * 0.28) * detailFade;
+    float rippleB = waveE * nearFade;
     vec3 sphereDir = normalize(vSphereDir);
     vec3 tangent = normalize(cross(abs(sphereDir.y) < 0.94 ? vec3(0.0, 1.0, 0.0) : vec3(1.0, 0.0, 0.0), sphereDir));
     vec3 bitangent = normalize(cross(sphereDir, tangent));
@@ -1475,7 +1465,7 @@ export function createOceanMaterial(params: {
 
     float surfLine = (1.0 - smoothstep(0.004, 0.080, belowSea)) * smoothstep(0.040, 0.30, waterMask);
     float coastBand = (1.0 - smoothstep(0.014, 0.42, belowSea)) * smoothstep(0.025, 0.34, waterMask);
-    float foamNoise = terrainFbm(vSphereDir * 96.0 + flowC * 4.6, uSeed + 1217.0, 3, 2.1, 0.48);
+    float foamNoise = terrainFbm(vSphereDir * 84.0 + flowC * 4.2, uSeed + 1217.0, 2, 2.1, 0.48);
     float breakerPhase = belowSea * 34.0 + uTime * 1.45 + foamNoise * 1.65 + swell * 0.70;
     float breaker = pow(0.5 + 0.5 * sin(breakerPhase), 2.8);
     breaker *= smoothstep(0.010, 0.060, belowSea) * (1.0 - smoothstep(0.11, 0.34, belowSea));
@@ -1499,8 +1489,9 @@ export function createOceanMaterial(params: {
     float sunGlint = pow(max(dot(reflect(-lightDir, waterNormal), viewDir), 0.0), mix(80.0, 520.0, orbitalFade))
       * (0.018 + orbitalFade * 0.09) * day;
     vec3 reflected = vec3(0.34, 0.48, 0.60) * fresnel * (0.045 + day * 0.36);
-    color = mix(color, vec3(0.76, 0.86, 0.83), clamp(foam * 0.58, 0.0, 0.62));
-    color += foam * vec3(0.035, 0.048, 0.042) * (0.30 + day * 0.58);
+    float foamLight = foam * clamp(day * 0.88 + lowSun * 0.20 + nightAmbientStrength * 0.018, 0.0, 1.0);
+    color = mix(color, vec3(0.76, 0.86, 0.83), clamp(foamLight * 0.58, 0.0, 0.62));
+    color += foamLight * vec3(0.035, 0.048, 0.042) * (0.20 + day * 0.62);
     reflected *= mix(vec3(1.0), uAtmosphereLightColor, tintStrength * 0.40);
     reflected *= mix(vec3(1.0), sunsetTint, lowSun * extinctionStrength * 0.16);
     reflected *= day;
@@ -2085,33 +2076,39 @@ export function createCloudMaterial(params: {
     float cloud = cloudMaskFromDensity(density);
     float body = cloudBodyFromDensity(density);
     float edge = cloudEdgeFromMaskBody(cloud, body);
+    float densityTone = clamp(body * 0.72 + density * 0.24, 0.0, 1.0);
 
     float terminator = smoothstep(-0.34, 0.16, nDotL) * (1.0 - smoothstep(0.08, 0.56, nDotL));
     float lowSun = pow(1.0 - clamp(nDotL * 0.90 + 0.10, 0.0, 1.0), 2.0) * smoothstep(-0.26, 0.46, nDotL);
     float nightAmbient = clamp(uNightAmbientStrength, 0.0, 1.5);
+    float forwardGlow = pow(max(dot(toCamera, sunDir), 0.0), 7.5);
+    float rimLight = pow(1.0 - max(dot(toCamera, shellNormal), 0.0), 3.0);
 
     vec3 coolWhite = mix(vec3(0.74, 0.82, 0.86), uAtmosphereColor, 0.16);
     vec3 sunWhite = mix(vec3(1.0), uSunColor, 0.28);
     vec3 sunset = mix(vec3(1.0, 0.40, 0.14), uSunColor, 0.42);
-    vec3 litCloud = mix(coolWhite * (0.38 + direct * 0.58), sunWhite, direct * 0.55);
-    litCloud = mix(litCloud, sunset, lowSun * 0.50 + terminator * 0.24);
+    vec3 denseCore = mix(coolWhite * vec3(0.58, 0.62, 0.68), uAtmosphereLightColor * 0.32, 0.25);
+    vec3 litCloud = mix(coolWhite * (0.34 + direct * 0.62), sunWhite, direct * 0.58);
+    litCloud = mix(litCloud, denseCore, densityTone * (0.18 + (1.0 - direct) * 0.26));
+    litCloud = mix(litCloud, sunset, lowSun * 0.58 + terminator * 0.28);
     vec3 nightCloud = mix(uNightColor * (0.50 + nightAmbient * 0.42), uAtmosphereLightColor * 0.10, 0.28);
     vec3 color = mix(nightCloud, litCloud, day);
     float qualityVolume = mix(0.64, 1.0, smoothstep(0.0, 2.0, uCloudQuality));
     float volume = clamp(uCloudVolumeStrength, 0.0, 1.5) * qualityVolume;
-    float silverPower = pow(max(dot(toCamera, sunDir), 0.0), 5.0);
-    float silver = edge * (0.35 + silverPower * 1.65) * smoothstep(-0.22, 0.62, nDotL) * volume;
-    float selfShadow = body * (1.0 - direct) * (0.20 + volume * 0.22);
-    float baseShade = (1.0 - max(dot(shellNormal, toCamera), 0.0)) * body * volume * 0.16;
-    color = mix(color, color * vec3(0.56, 0.60, 0.66), clamp(selfShadow + baseShade, 0.0, 0.62));
-    color += mix(uAtmosphereLightColor, uSunColor, 0.42) * silver * (0.28 + day * 0.55);
-    color += uAtmosphereLightColor * rim * (0.08 + day * 0.12) * (1.0 + volume * 0.45);
-    color *= mix(0.72, 1.16 + volume * 0.08, body);
+    float silver = edge * (0.26 + forwardGlow * 2.10 + rimLight * 0.52) * smoothstep(-0.22, 0.62, nDotL) * volume;
+    float selfShadow = body * (1.0 - direct) * (0.24 + volume * 0.30);
+    float baseShade = (1.0 - max(dot(shellNormal, toCamera), 0.0)) * body * volume * 0.20;
+    float underside = body * smoothstep(-0.16, 0.30, -nDotL) * (0.12 + volume * 0.18);
+    color = mix(color, color * vec3(0.48, 0.54, 0.64), clamp(selfShadow + baseShade + underside, 0.0, 0.70));
+    color += mix(uAtmosphereLightColor, uSunColor, 0.48) * silver * (0.10 + day * 0.70);
+    color += uAtmosphereLightColor * rim * (0.012 + day * 0.13) * (1.0 + volume * 0.40);
+    color *= mix(0.74, 1.10 + volume * 0.12, body);
 
     float alpha = cloud * clamp(uOpacity, 0.0, 1.0);
     alpha *= mix(0.28 + nightAmbient * 0.18, 1.0, day);
-    alpha *= 1.0 - rim * mix(0.16, 0.06, clamp(volume, 0.0, 1.0));
-    alpha = min(alpha + silver * 0.08, 0.92);
+    alpha *= 1.0 - rim * mix(0.18, 0.07, clamp(volume, 0.0, 1.0));
+    alpha *= mix(0.88, 1.08, body);
+    alpha = min(alpha + silver * 0.07, 0.94);
     if (alpha < 0.006) discard;
 
     #include <logdepthbuf_fragment>
@@ -2254,10 +2251,14 @@ export function createCloudBillboardMaterial(params: {
     cloudDay = mix(cloudDay, sunset, smoothstep(-0.24, 0.22, nDotL) * (1.0 - smoothstep(0.12, 0.54, nDotL)) * 0.32);
     vec3 cloudNight = mix(uNightColor * (0.45 + nightAmbient * 0.34), uAtmosphereLightColor * 0.08, 0.28);
     vec3 color = mix(cloudNight, cloudDay, day);
-    color += uAtmosphereLightColor * feather * day * 0.08;
+    float edgeLight = feather * pow(max(dot(normalize(cameraPosition - vWorldPos), sunDir), 0.0), 4.5);
+    float innerShade = core * (1.0 - direct) * 0.18;
+    color = mix(color, color * vec3(0.58, 0.64, 0.72), innerShade);
+    color += mix(uAtmosphereLightColor, uSunColor, 0.35) * (feather * day * 0.07 + edgeLight * 0.22);
 
     float alpha = mask * vAlpha * clamp(uOpacity, 0.0, 1.0);
     alpha *= mix(0.35 + nightAmbient * 0.16, 1.0, day);
+    alpha *= mix(0.88, 1.06, core);
     if (alpha < 0.006) discard;
 
     #include <logdepthbuf_fragment>
