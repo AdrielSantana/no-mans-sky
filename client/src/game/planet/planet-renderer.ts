@@ -844,6 +844,23 @@ export class PlanetRenderer {
     this.updateCloudRenderMix()
   }
 
+  private updateSurfaceLightingBlend(surfaceDistance: number) {
+    const blend = 1 - THREE.MathUtils.smoothstep(
+      surfaceDistance,
+      WORLD_SCALE.localDetailNear * 1.5,
+      WORLD_SCALE.localDetailFar * 1.25,
+    )
+    const materials = [
+      this.material,
+      ...this.farLodMaterials,
+      this.fallbackMaterial,
+    ]
+
+    for (const material of materials) {
+      this.setFloatUniform(material, 'uSurfaceLightingBlend', blend)
+    }
+  }
+
   private random01(value: number): number {
     const x = Math.sin(value * 12.9898 + this.noiseProfile.seed * 78.233) * 43758.5453
     return x - Math.floor(x)
@@ -1172,6 +1189,7 @@ export class PlanetRenderer {
 
     const surfaceDist = this.getLocalSurfaceDistance(localCamPos)
     this.updateCloudQuality(surfaceDist)
+    this.updateSurfaceLightingBlend(surfaceDist)
 
     // Update sun position uniform
     this.material.uniforms.uSunPosition.value.copy(this.sunPosition)

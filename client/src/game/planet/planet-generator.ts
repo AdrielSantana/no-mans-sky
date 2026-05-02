@@ -313,6 +313,8 @@ float realisticTerrainHeight(vec3 sphereDir) {
 `
 
 const PLANET_LIGHTING_GLSL = /* glsl */ `
+uniform float uSurfaceLightingBlend;
+
 float terrainReliefOcclusion(float heightNorm, float slope) {
   if (uPlanetKind > 0.5 && uPlanetKind < 1.5) return 1.0;
 
@@ -322,8 +324,9 @@ float terrainReliefOcclusion(float heightNorm, float slope) {
   return clamp(1.0 - rugged * 0.13 - lowPocket * 0.04 + highCrisp * 0.025, 0.78, 1.03);
 }
 
-vec3 applyPlanetLighting(vec3 albedo, vec3 normal, vec3 worldPos, float heightNorm, float slope) {
+vec3 applyPlanetLighting(vec3 albedo, vec3 normal, vec3 radialNormal, vec3 worldPos, float heightNorm, float slope) {
   vec3 n = normalize(normal);
+  vec3 r = normalize(radialNormal);
   vec3 lightDir = normalize(uSunPosition - worldPos);
   vec3 viewDir = normalize(cameraPosition - worldPos);
   float nDotL = dot(n, lightDir);
@@ -358,6 +361,28 @@ vec3 applyPlanetLighting(vec3 albedo, vec3 normal, vec3 worldPos, float heightNo
   nightLit += uNightColor * nightAmbientStrength * rim * 0.055;
   lit = mix(nightLit, lit, day);
   lit += mix(vec3(0.32, 0.48, 0.68), uAtmosphereLightColor, tintStrength * 0.55) * rim * 0.16;
+
+  float surfaceBlend = clamp(uSurfaceLightingBlend, 0.0, 1.0);
+  if (uPlanetKind > 0.5 && uPlanetKind < 1.5) surfaceBlend = 0.0;
+
+  float skyVisibility = clamp(dot(n, r) * 0.54 + 0.46, 0.18, 1.0);
+  float wrappedDay = smoothstep(-0.42, 0.58, nDotL);
+  float surfaceDirect = direct * 0.70 + wrappedDay * 0.22 + direct * direct * 0.18;
+  float microCavity = smoothstep(0.06, 0.38, slope) * (1.0 - smoothstep(0.80, 1.0, heightNorm));
+  float cavityOcclusion = clamp(1.0 - microCavity * 0.20, 0.74, 1.0);
+  vec3 skyTint = mix(vec3(0.36, 0.48, 0.62), uAtmosphereLightColor, 0.58 + tintStrength * 0.14);
+  vec3 groundBounceTint = mix(vec3(0.30, 0.27, 0.22), albedo, 0.22);
+  vec3 surfaceAmbient = albedo * (
+    skyTint * (0.18 + day * 0.18) * skyVisibility +
+    groundBounceTint * (0.035 + day * 0.075) * (1.0 - microCavity * 0.35)
+  );
+  vec3 surfaceLit = surfaceAmbient * cavityOcclusion
+    + albedo * sunTint * surfaceDirect * directTransmission * (0.78 + day * 0.16) * cavityOcclusion;
+  surfaceLit += albedo * twilightFill * terminator * extinctionStrength * 0.16;
+  surfaceLit = mix(nightLit, surfaceLit, smoothstep(-0.28, 0.52, nDotL));
+  surfaceLit += mix(vec3(0.22, 0.34, 0.48), uAtmosphereLightColor, tintStrength * 0.46) * rim * 0.10;
+
+  lit = mix(lit, surfaceLit, surfaceBlend);
   return lit;
 }
 `
@@ -950,7 +975,7 @@ export function createPlanetMaterial(params: {
     terrainColor = mix(terrainColor, vec3(0.43, 0.39, 0.32), 0.06);
 
     vec3 finalNormal = detailNormal(normalize(vNormal), latitude, moisture, slope, coast);
-    vec3 finalColor = applyPlanetLighting(terrainColor, finalNormal, vWorldPos, heightNorm, slope);
+    vec3 finalColor = applyPlanetLighting(terrainColor, finalNormal, vRadialNormal, vWorldPos, heightNorm, slope);
     finalColor = applyAerialPerspective(finalColor, vWorldPos, finalNormal);
     #include <logdepthbuf_fragment>
     gl_FragColor = vec4(finalColor, 1.0);
@@ -1007,6 +1032,7 @@ export function createPlanetMaterial(params: {
       uTextureDetailScale: { value: params.textureDetailScale },
       uTextureFarScale: { value: params.textureFarScale },
       uTextureFarStrength: { value: params.textureFarStrength },
+      uSurfaceLightingBlend: { value: 0 },
     },
   })
 }
@@ -1229,7 +1255,7 @@ export function createPlanetFarMaterial(params: {
     terrain = applyTerrainTexture(terrain, vSphereDir, uPlanetKind, heightNorm, coast, rockMask, snowMask, moisture, distance(cameraPosition, vWorldPos));
     terrain = mix(terrain, vec3(0.43, 0.39, 0.32), 0.06);
 
-    vec3 finalColor = applyPlanetLighting(terrain, shadingNormal, vWorldPos, heightNorm, slope);
+    vec3 finalColor = applyPlanetLighting(terrain, shadingNormal, vRadialNormal, vWorldPos, heightNorm, slope);
     finalColor = applyAerialPerspective(finalColor, vWorldPos, shadingNormal);
     #include <logdepthbuf_fragment>
     gl_FragColor = vec4(finalColor, 1.0);
@@ -1292,6 +1318,7 @@ export function createPlanetFarMaterial(params: {
       uTextureDetailScale: { value: params.textureDetailScale },
       uTextureFarScale: { value: params.textureFarScale },
       uTextureFarStrength: { value: params.textureFarStrength },
+      uSurfaceLightingBlend: { value: 0 },
     },
   })
 }
@@ -1771,7 +1798,7 @@ export function createPlanetFallbackMaterial(params: {
     terrain = applyTerrainTexture(terrain, vSphereDir, uPlanetKind, heightNorm, coast, rockMask, snowMask, moisture, distance(cameraPosition, vWorldPos));
     terrain = mix(terrain, vec3(0.43, 0.39, 0.32), 0.06);
 
-    vec3 finalColor = applyPlanetLighting(terrain, shadingNormal, vWorldPos, heightNorm, slope);
+    vec3 finalColor = applyPlanetLighting(terrain, shadingNormal, vRadialNormal, vWorldPos, heightNorm, slope);
     finalColor = applyAerialPerspective(finalColor, vWorldPos, shadingNormal);
     #include <logdepthbuf_fragment>
     gl_FragColor = vec4(finalColor, 1.0);
@@ -1833,6 +1860,7 @@ export function createPlanetFallbackMaterial(params: {
       uTextureDetailScale: { value: params.textureDetailScale },
       uTextureFarScale: { value: params.textureFarScale },
       uTextureFarStrength: { value: params.textureFarStrength },
+      uSurfaceLightingBlend: { value: 0 },
     },
   })
 }
