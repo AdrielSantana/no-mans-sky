@@ -168,6 +168,8 @@ export function createFluffyGrassMaterial(settings: FluffyGrassSettings): THREE.
       uWindStrength: { value: settings.windStrength },
       uFadeDistance: { value: settings.distance },
       uFadeRange: { value: Math.max(8, settings.distance * 0.28) },
+      uFadeInDistance: { value: 0 },
+      uFadeInRange: { value: 1 },
       uColorA: { value: new THREE.Color(settings.colorA) },
       uColorB: { value: new THREE.Color(settings.colorB) },
       uSunPosition: { value: new THREE.Vector3(0, 1, 0) },
@@ -230,6 +232,8 @@ export function createFluffyGrassMaterial(settings: FluffyGrassSettings): THREE.
       uniform sampler2D uAlphaMap;
       uniform float uFadeDistance;
       uniform float uFadeRange;
+      uniform float uFadeInDistance;
+      uniform float uFadeInRange;
       uniform vec3 uColorA;
       uniform vec3 uColorB;
       uniform vec3 uSunPosition;
@@ -306,8 +310,9 @@ export function createFluffyGrassMaterial(settings: FluffyGrassSettings): THREE.
 
       void main() {
         float alpha = texture2D(uAlphaMap, vUv).r;
-        float distanceFade = 1.0 - smoothstep(uFadeDistance, uFadeDistance + uFadeRange, vDistance);
-        alpha *= distanceFade;
+        float fadeIn = smoothstep(uFadeInDistance, uFadeInDistance + max(uFadeInRange, 0.001), vDistance);
+        float fadeOut = 1.0 - smoothstep(uFadeDistance, uFadeDistance + uFadeRange, vDistance);
+        alpha *= fadeIn * fadeOut;
         alpha *= smoothstep(0.01, 0.18, vTip);
         alpha *= uLayerOpacity;
         if (alpha < ${MIN_GRASS_ALPHA.toFixed(2)}) discard;
@@ -339,12 +344,16 @@ export function updateFluffyGrassMaterial(
   planetRadius: number,
   distanceMultiplier = 1,
   opacity = 1,
+  fadeInDistance = 0,
+  fadeInRange = 1,
 ) {
   material.uniforms.uTime.value = time
   material.uniforms.uWindStrength.value = settings.windStrength
   const fadeDistance = settings.distance * distanceMultiplier
   material.uniforms.uFadeDistance.value = fadeDistance
   material.uniforms.uFadeRange.value = Math.max(8, fadeDistance * 0.28)
+  material.uniforms.uFadeInDistance.value = fadeInDistance
+  material.uniforms.uFadeInRange.value = Math.max(1, fadeInRange)
   material.uniforms.uColorA.value.set(settings.colorA)
   material.uniforms.uColorB.value.set(settings.colorB)
   material.uniforms.uSunPosition.value.copy(sunPosition)

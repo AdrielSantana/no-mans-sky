@@ -1281,6 +1281,8 @@ export class PlanetRenderer {
         this.planetRadius,
         1,
         1,
+        0,
+        1,
       )
     }
     if (this.farGrassMaterial) {
@@ -1293,6 +1295,8 @@ export class PlanetRenderer {
         this.planetRadius,
         GRASS_FAR_DISTANCE_MULTIPLIER,
         0.72,
+        this.grassSettings.distance * 0.58,
+        this.grassSettings.distance * 0.34,
       )
     }
     const planetQuat = new THREE.Quaternion()
