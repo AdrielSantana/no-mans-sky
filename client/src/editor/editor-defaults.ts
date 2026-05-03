@@ -36,6 +36,13 @@ export interface EditorParams {
   cloudDetail: number
   cloudBillboards: boolean
   cloudBillboardCount: number
+  grassEnabled: boolean
+  grassDensity: number
+  grassHeight: number
+  grassWindStrength: number
+  grassDistance: number
+  grassColorA: string
+  grassColorB: string
   sunColor: string
   sunTintStrength: number
   sunAzimuth: number
@@ -148,6 +155,13 @@ export const DEFAULT_PARAMS: EditorParams = {
   cloudDetail: 0.82,
   cloudBillboards: true,
   cloudBillboardCount: 1600,
+  grassEnabled: true,
+  grassDensity: 1.05,
+  grassHeight: 1.15,
+  grassWindStrength: 0.34,
+  grassDistance: 450,
+  grassColorA: '#1f6f2e',
+  grassColorB: '#64b94a',
   sunColor: '#fff2c8',
   sunTintStrength: 0.85,
   sunAzimuth: 315,
@@ -219,6 +233,10 @@ export const RANGES = {
   cloudBands: { min: 0, max: 1.5, step: 0.01 },
   cloudDetail: { min: 0, max: 1.5, step: 0.01 },
   cloudBillboardCount: { min: 0, max: 1600, step: 16 },
+  grassDensity: { min: 0, max: 1.5, step: 0.01 },
+  grassHeight: { min: 0.15, max: 8, step: 0.05 },
+  grassWindStrength: { min: 0, max: 2, step: 0.01 },
+  grassDistance: { min: 20, max: 2500, step: 10 },
   sunTintStrength: { min: 0, max: 2, step: 0.01 },
   sunAzimuth: { min: 0, max: 360, step: 1 },
   sunElevation: { min: -20, max: 80, step: 1 },

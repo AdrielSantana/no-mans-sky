@@ -18,6 +18,13 @@ export interface StitchSteps {
   right: number
 }
 
+export interface TerrainChunkSurfaceData {
+  positions: Float32Array<ArrayBufferLike>
+  normals: Float32Array<ArrayBufferLike>
+  heights: Float32Array<ArrayBufferLike>
+  gridSize: number
+}
+
 const DEFAULT_GRID_SIZE = 33
 const EPSILON = 1e-6
 const NO_STITCH_STEPS: StitchSteps = { bottom: 0, top: 0, left: 0, right: 0 }
@@ -35,6 +42,8 @@ export class TerrainChunk {
   private geometry: THREE.BufferGeometry
   private fullIndices: Uint32Array = new Uint32Array(0)
   private mainPositions: Float32Array<ArrayBufferLike> = new Float32Array(0)
+  private mainNormals: Float32Array<ArrayBufferLike> = new Float32Array(0)
+  private mainHeights: Float32Array<ArrayBufferLike> = new Float32Array(0)
   private gridSize: number
 
   constructor(
@@ -73,6 +82,8 @@ export class TerrainChunk {
   private buildGeometry(data: TerrainChunkGeometryData): THREE.BufferGeometry {
     const geo = new THREE.BufferGeometry()
     this.mainPositions = data.mainPositions
+    this.mainNormals = data.normals.slice(0, this.mainPositions.length)
+    this.mainHeights = data.heights.slice(0, this.gridSize * this.gridSize)
     this.fullIndices = data.indices
     geo.setAttribute('position', new THREE.BufferAttribute(data.positions, 3))
     geo.setAttribute('normal', new THREE.BufferAttribute(data.normals, 3))
@@ -81,6 +92,15 @@ export class TerrainChunk {
     geo.computeBoundingSphere()
 
     return geo
+  }
+
+  getSurfaceData(): TerrainChunkSurfaceData {
+    return {
+      positions: this.mainPositions,
+      normals: this.mainNormals,
+      heights: this.mainHeights,
+      gridSize: this.gridSize,
+    }
   }
 
   private buildIndexForStitching(steps: StitchSteps): Uint32Array {

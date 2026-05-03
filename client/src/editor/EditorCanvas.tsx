@@ -59,6 +59,13 @@ function createPlanet(scene: THREE.Scene, params: EditorParams): PlanetRenderer 
     cloudDetail: params.cloudDetail,
     cloudBillboards: params.cloudBillboards,
     cloudBillboardCount: params.cloudBillboardCount,
+    grassEnabled: params.grassEnabled,
+    grassDensity: params.grassDensity,
+    grassHeight: params.grassHeight,
+    grassWindStrength: params.grassWindStrength,
+    grassDistance: params.grassDistance,
+    grassColorA: params.grassColorA,
+    grassColorB: params.grassColorB,
     sunColor: params.sunColor,
     sunTintStrength: params.sunTintStrength,
     noiseProfile: {
@@ -290,7 +297,7 @@ export function EditorCanvas({ params }: Props) {
           `tone ${engine.getToneMappingName()} exposure=${engine.getToneMappingExposure().toFixed(2)}`,
           `terrain near=${paramsRef.current.debugNearTerrainShader ? 'shader' : 'simple'} far=${paramsRef.current.debugFarTerrainShader ? 'shader' : 'simple'} fallback=${paramsRef.current.debugFallbackTerrainShader ? 'shader' : 'simple'}`,
           stats
-            ? `planet dist=${stats.surfaceDistance.toFixed(1)} chunks=${stats.visible}/${stats.chunks} pending=${stats.pending} building=${stats.building}/${stats.workers} skirts=${stats.skirtEdges} stitch=${stats.stitchEdges} cloudQ=${stats.cloudQuality} cloudBB=${stats.cloudBillboards} generated=${stats.generated} build=${stats.chunkGenerationMs.toFixed(2)}ms integrate=${stats.chunkIntegrationMs.toFixed(2)}ms lod[${lods}]`
+            ? `planet dist=${stats.surfaceDistance.toFixed(1)} chunks=${stats.visible}/${stats.chunks} pending=${stats.pending} building=${stats.building}/${stats.workers} skirts=${stats.skirtEdges} stitch=${stats.stitchEdges} cloudQ=${stats.cloudQuality} cloudBB=${stats.cloudBillboards} grass=${stats.grassInstances} generated=${stats.generated} build=${stats.chunkGenerationMs.toFixed(2)}ms integrate=${stats.chunkIntegrationMs.toFixed(2)}ms lod[${lods}]`
             : 'planet unavailable',
         ].join('\n')
 
@@ -370,6 +377,15 @@ export function EditorCanvas({ params }: Props) {
       detail: params.cloudDetail,
       billboards: params.cloudBillboards,
       billboardCount: params.cloudBillboardCount,
+    })
+    planetRef.current?.setGrass({
+      enabled: params.grassEnabled,
+      density: params.grassDensity,
+      height: params.grassHeight,
+      windStrength: params.grassWindStrength,
+      distance: params.grassDistance,
+      colorA: params.grassColorA,
+      colorB: params.grassColorB,
     })
     planetRef.current?.setAtmosphereOptics({
       horizonGlow: params.atmosphereHorizonGlow,

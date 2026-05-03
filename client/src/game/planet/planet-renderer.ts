@@ -31,6 +31,12 @@ import {
 import type { Vec3Like } from '../../../../server/spacetimedb/src/shared/vector'
 import type { TerrainWorkerBuildResponse, TerrainWorkerResponse } from './terrain-worker-types'
 import type { TerrainChunkGeometryData } from './terrain-geometry'
+import {
+  FluffyGrassLayer,
+  createFluffyGrassMaterial,
+  updateFluffyGrassMaterial,
+  type FluffyGrassSettings,
+} from './fluffy-grass'
 
 const SYNC_CHUNK_BUILD_BUDGET_MS = 4
 const WORKER_DISPATCH_BUDGET_MS = 0.8
@@ -40,6 +46,9 @@ const DETAILED_MATERIAL_MIN_LOD = 6
 const DETAILED_MATERIAL_DISTANCE = WORLD_SCALE.localDetailNear * 2.2
 const LOD_COLLAPSE_HYSTERESIS = 1.35
 const CLOUD_BILLBOARD_MAX_INSTANCES = 1600
+const GRASS_NEAR_LOD_BACKOFF = 3
+const GRASS_FAR_LOD_BACKOFF = 7
+const GRASS_FAR_DISTANCE_MULTIPLIER = 3.0
 const FAR_TEXTURE_LOD_BANDS = [
   { maxLod: 2, detailScale: 0.060, farScale: 0.035, farStrength: 0.62 },
   { maxLod: 4, detailScale: 0.120, farScale: 0.050, farStrength: 0.58 },
@@ -93,6 +102,13 @@ interface PlanetRendererParams {
   cloudDetail?: number
   cloudBillboards?: boolean
   cloudBillboardCount?: number
+  grassEnabled?: boolean
+  grassDensity?: number
+  grassHeight?: number
+  grassWindStrength?: number
+  grassDistance?: number
+  grassColorA?: string
+  grassColorB?: string
   sunColor?: string
   sunTintStrength?: number
   noiseProfile?: {
@@ -168,6 +184,22 @@ export class PlanetRenderer {
   private cloudBillboardAlphaAttr: THREE.InstancedBufferAttribute | null = null
   private cloudBillboardSeedAttr: THREE.InstancedBufferAttribute | null = null
   private cloudBillboardVisibleCount = 0
+  private grassMaterial: THREE.ShaderMaterial | null = null
+  private farGrassMaterial: THREE.ShaderMaterial | null = null
+  private grassLayers = new Map<string, FluffyGrassLayer>()
+  private farGrassLayers = new Map<string, FluffyGrassLayer>()
+  private grassSettings: FluffyGrassSettings = {
+    enabled: false,
+    density: 0,
+    height: 1,
+    windStrength: 0,
+    distance: 0,
+    colorA: '#1f6f2e',
+    colorB: '#64b94a',
+  }
+  private grassNearMinLod = 0
+  private grassFarMinLod = 0
+  private grassVisibleInstances = 0
   private sunPosition = new THREE.Vector3(0, 0, 0)
   private sunColor = new THREE.Color(0xfff2c8)
   private atmosphereColor = new THREE.Color(0x6fa8dc)
@@ -198,6 +230,7 @@ export class PlanetRenderer {
   private cloudBillboardsEnabled = true
   private cloudBillboardCount = 640
   private terrainParams: PlanetTerrainParams
+  private seaHeight = -10
   private lodDistances: number[]
   private requestedTerrainWorkers: number
   private nodeSurfaceRadiusCache = new Map<string, number>()
@@ -263,6 +296,15 @@ export class PlanetRenderer {
       0,
       CLOUD_BILLBOARD_MAX_INSTANCES,
     )
+    this.grassSettings = {
+      enabled: params.grassEnabled ?? true,
+      density: THREE.MathUtils.clamp(params.grassDensity ?? 1.05, 0, 1.5),
+      height: Math.max(0.05, params.grassHeight ?? 1.15),
+      windStrength: THREE.MathUtils.clamp(params.grassWindStrength ?? 0.34, 0, 2),
+      distance: Math.max(1, params.grassDistance ?? WORLD_SCALE.localDetailFar * 2.5),
+      colorA: params.grassColorA ?? '#1f6f2e',
+      colorB: params.grassColorB ?? '#64b94a',
+    }
     this.updateAtmosphereLightColor()
     this.group = new THREE.Group()
     scene.add(this.group)
@@ -276,6 +318,8 @@ export class PlanetRenderer {
       ? [Infinity, ...params.lodMultipliers]
       : LOD_DISTANCE_MULTIPLIERS
     this.maxLod = multipliers.length - 1
+    this.grassNearMinLod = Math.max(0, this.maxLod - GRASS_NEAR_LOD_BACKOFF)
+    this.grassFarMinLod = Math.max(0, this.maxLod - GRASS_FAR_LOD_BACKOFF)
     const ABSOLUTE_BASE = 50   // finest LOD covers 50 units near camera
     const ABSOLUTE_RATIO = 2.5 // each coarser level is 2.5x further
     this.lodDistances = multipliers.map((m, i) => {
@@ -317,6 +361,12 @@ export class PlanetRenderer {
       microReliefMeters: this.noiseProfile.microReliefMeters,
     }
     const waterLevel = params.waterLevel ?? 0
+    this.seaHeight = getSeaHeight(waterLevel, params.planetType)
+    if (this.grassSettings.enabled && params.planetType === 'rocky') {
+      this.grassMaterial = createFluffyGrassMaterial(this.grassSettings)
+      this.farGrassMaterial = createFluffyGrassMaterial(this.grassSettings)
+      this.updateLightColorUniforms()
+    }
 
     this.material = createPlanetMaterial({
       seed: Number(params.seed),
@@ -460,7 +510,7 @@ export class PlanetRenderer {
     this.fallbackSphere.frustumCulled = false
     this.group.add(this.fallbackSphere)
 
-    const seaHeight = getSeaHeight(waterLevel, params.planetType)
+    const seaHeight = this.seaHeight
     if (waterLevel > 0.02 && params.planetType !== 'gas') {
       const coastClearance = Math.max(0.01, planetRadius * 0.00001)
       const waterRadius = planetRadius * (1 + seaHeight * params.terrainScale) + coastClearance
@@ -695,9 +745,12 @@ export class PlanetRenderer {
       this.cloudMaterial,
       this.cloudBillboardMaterial,
       this.atmosphereMaterial,
+      this.grassMaterial,
+      this.farGrassMaterial,
     ]
     for (const material of materials) {
       this.copyColorUniform(material, 'uSunColor', this.sunColor)
+      this.copyColorUniform(material, 'uAtmosphereColor', this.atmosphereColor)
       this.copyColorUniform(material, 'uAtmosphereLightColor', this.atmosphereLightColor)
       this.copyColorUniform(material, 'uNightColor', this.atmosphereNightColor)
       this.setFloatUniform(material, 'uSunTintStrength', this.sunTintStrength)
@@ -776,6 +829,41 @@ export class PlanetRenderer {
       if (this.cloudMeshBaseRadius > 0) {
         this.cloudMesh.scale.setScalar(targetRadius / this.cloudMeshBaseRadius)
       }
+    }
+  }
+
+  setGrass(settings: FluffyGrassSettings) {
+    const next: FluffyGrassSettings = {
+      enabled: settings.enabled,
+      density: THREE.MathUtils.clamp(settings.density, 0, 1.5),
+      height: Math.max(0.05, settings.height),
+      windStrength: THREE.MathUtils.clamp(settings.windStrength, 0, 2),
+      distance: Math.max(1, settings.distance),
+      colorA: settings.colorA,
+      colorB: settings.colorB,
+    }
+    const rebuild = next.enabled !== this.grassSettings.enabled
+      || Math.abs(next.density - this.grassSettings.density) > 0.001
+      || Math.abs(next.height - this.grassSettings.height) > 0.001
+      || Math.abs(next.distance - this.grassSettings.distance) > 80
+
+    this.grassSettings = next
+
+    if (!next.enabled || this.terrainParams.planetType !== 'rocky') {
+      this.clearGrassLayers()
+      return
+    }
+
+    if (!this.grassMaterial) {
+      this.grassMaterial = createFluffyGrassMaterial(this.grassSettings)
+    }
+    if (!this.farGrassMaterial) {
+      this.farGrassMaterial = createFluffyGrassMaterial(this.grassSettings)
+    }
+    this.updateLightColorUniforms()
+
+    if (rebuild) {
+      this.rebuildGrassLayers()
     }
   }
 
@@ -1162,6 +1250,7 @@ export class PlanetRenderer {
       stitchEdges,
       cloudQuality: this.cloudQuality,
       cloudBillboards: this.cloudBillboardVisibleCount,
+      grassInstances: this.grassVisibleInstances,
       generated: this.generatedChunksLastFrame,
       chunkGenerationMs: this.chunkGenerationMsLastFrame,
       chunkIntegrationMs: this.chunkIntegrationMsLastFrame,
@@ -1175,12 +1264,37 @@ export class PlanetRenderer {
     this.generatedChunksLastFrame = 0
     this.chunkGenerationMsLastFrame = 0
     this.chunkIntegrationMsLastFrame = 0
+    this.grassVisibleInstances = 0
 
     const camPos = new THREE.Vector3()
     camera.getWorldPosition(camPos)
 
     const planetPos = new THREE.Vector3()
     this.group.getWorldPosition(planetPos)
+    if (this.grassMaterial) {
+      updateFluffyGrassMaterial(
+        this.grassMaterial,
+        this.grassSettings,
+        this.time,
+        this.sunPosition,
+        planetPos,
+        this.planetRadius,
+        1,
+        1,
+      )
+    }
+    if (this.farGrassMaterial) {
+      updateFluffyGrassMaterial(
+        this.farGrassMaterial,
+        this.grassSettings,
+        this.time,
+        this.sunPosition,
+        planetPos,
+        this.planetRadius,
+        GRASS_FAR_DISTANCE_MULTIPLIER,
+        0.72,
+      )
+    }
     const planetQuat = new THREE.Quaternion()
     this.group.getWorldQuaternion(planetQuat)
     const inversePlanetQuat = planetQuat.clone().invert()
@@ -1296,7 +1410,7 @@ export class PlanetRenderer {
     for (const [key, chunk] of this.chunks) {
       if (!retainKeys.has(key)) {
         this.group.remove(chunk.mesh)
-        chunk.dispose()
+        this.disposeChunk(chunk)
         this.chunks.delete(key)
       } else {
         chunk.mesh.visible = renderKeys.has(key)
@@ -1309,6 +1423,7 @@ export class PlanetRenderer {
             chunk.mesh.material = this.debugFarTerrainShader ? this.getFarLodMaterial(chunk.node.lod) : this.simpleTerrainMaterial
           }
         }
+        this.updateChunkGrassVisibility(chunk, localCamPos)
       }
     }
 
@@ -1678,7 +1793,7 @@ export class PlanetRenderer {
       const chunk = this.chunks.get(key)
       if (chunk) {
         this.group.remove(chunk.mesh)
-        chunk.dispose()
+        this.disposeChunk(chunk)
         this.chunks.delete(key)
       }
       this.pendingKeys.delete(key)
@@ -1695,7 +1810,7 @@ export class PlanetRenderer {
   }
 
   private createChunk(node: QuadtreeNode, geometryData?: TerrainChunkGeometryData): TerrainChunk {
-    return new TerrainChunk(
+    const chunk = new TerrainChunk(
       node,
       this.terrainParams,
       this.farMaterial,
@@ -1703,6 +1818,102 @@ export class PlanetRenderer {
       { bottom: false, top: false, left: false, right: false },
       geometryData,
     )
+    this.attachGrassLayer(chunk)
+    return chunk
+  }
+
+  private attachGrassLayer(chunk: TerrainChunk) {
+    if (!this.grassSettings.enabled) return
+
+    const variant = chunk.node.lod >= this.grassNearMinLod
+      ? 'near'
+      : chunk.node.lod >= this.grassFarMinLod
+        ? 'far'
+        : null
+    if (!variant) return
+
+    const material = variant === 'near' ? this.grassMaterial : this.farGrassMaterial
+    if (!material) return
+
+    const grass = new FluffyGrassLayer({
+      node: chunk.node,
+      surface: chunk.getSurfaceData(),
+      material,
+      settings: this.grassSettings,
+      seed: this.noiseProfile.seed,
+      seaHeight: this.seaHeight,
+      planetType: this.terrainParams.planetType,
+      variant,
+    })
+    if (grass.instanceCount <= 0) {
+      grass.dispose()
+      return
+    }
+
+    chunk.mesh.add(grass.mesh)
+    if (variant === 'near') {
+      this.grassLayers.set(chunk.key, grass)
+    } else {
+      this.farGrassLayers.set(chunk.key, grass)
+    }
+  }
+
+  private rebuildGrassLayers() {
+    this.clearGrassLayers()
+    if (!this.grassSettings.enabled) return
+
+    for (const [, chunk] of this.chunks) {
+      this.attachGrassLayer(chunk)
+    }
+  }
+
+  private clearGrassLayers() {
+    for (const [, grass] of this.grassLayers) {
+      grass.dispose()
+    }
+    for (const [, grass] of this.farGrassLayers) {
+      grass.dispose()
+    }
+    this.grassLayers.clear()
+    this.farGrassLayers.clear()
+    this.grassVisibleInstances = 0
+  }
+
+  private updateChunkGrassVisibility(chunk: TerrainChunk, localCamPos: THREE.Vector3) {
+    const grass = this.grassLayers.get(chunk.key)
+    const farGrass = this.farGrassLayers.get(chunk.key)
+    if (!grass && !farGrass) return
+
+    const dist = this.getLocalChunkDistToCamera(chunk.node, localCamPos)
+    const nearVisible = !!grass
+      && chunk.mesh.visible
+      && this.grassSettings.enabled
+      && !this.debugSimpleTerrain
+      && dist < this.grassSettings.distance + this.grassSettings.height * 8
+    grass?.setVisible(nearVisible)
+    if (nearVisible && grass) this.grassVisibleInstances += grass.instanceCount
+
+    const farVisible = !!farGrass
+      && chunk.mesh.visible
+      && this.grassSettings.enabled
+      && !this.debugSimpleTerrain
+      && dist < this.grassSettings.distance * GRASS_FAR_DISTANCE_MULTIPLIER
+    farGrass?.setVisible(farVisible)
+    if (farVisible && farGrass) this.grassVisibleInstances += farGrass.instanceCount
+  }
+
+  private disposeChunk(chunk: TerrainChunk) {
+    const grass = this.grassLayers.get(chunk.key)
+    if (grass) {
+      grass.dispose()
+      this.grassLayers.delete(chunk.key)
+    }
+    const farGrass = this.farGrassLayers.get(chunk.key)
+    if (farGrass) {
+      farGrass.dispose()
+      this.farGrassLayers.delete(chunk.key)
+    }
+    chunk.dispose()
   }
 
   private updateVisibleStitching(renderKeys: Set<string>) {
@@ -1773,7 +1984,7 @@ export class PlanetRenderer {
     this.chunkBuildEpoch++
     for (const [, chunk] of this.chunks) {
       this.group.remove(chunk.mesh)
-      chunk.dispose()
+      this.disposeChunk(chunk)
     }
     this.chunks.clear()
     this.pendingKeys.clear()
@@ -1811,6 +2022,8 @@ export class PlanetRenderer {
     this.oceanMaterial?.dispose()
     this.cloudMaterial?.dispose()
     this.cloudBillboardMaterial?.dispose()
+    this.grassMaterial?.dispose()
+    this.farGrassMaterial?.dispose()
     this.atmosphereMaterial?.dispose()
     this.oceanMesh?.geometry.dispose()
     this.cloudMesh?.geometry.dispose()

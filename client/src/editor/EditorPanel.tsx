@@ -523,6 +523,93 @@ export function EditorPanel({ params, onChange }: Props) {
       </div>
 
       <div className="editor-section">
+        <div className="editor-section-title">Grass</div>
+        <div className="editor-row">
+          <label style={{ display: 'flex', alignItems: 'center', gap: 6, cursor: 'pointer' }}>
+            <input
+              type="checkbox"
+              checked={params.grassEnabled}
+              onChange={e => set('grassEnabled', e.target.checked)}
+              style={{ accentColor: '#2dd4a7' }}
+            />
+            <span className="editor-label" style={{ width: 'auto' }}>Fluffy Grass</span>
+          </label>
+        </div>
+        <div className="editor-row">
+          <span className="editor-label">Density</span>
+          <input
+            className="editor-slider"
+            type="range"
+            min={RANGES.grassDensity.min}
+            max={RANGES.grassDensity.max}
+            step={RANGES.grassDensity.step}
+            value={params.grassDensity}
+            onChange={e => set('grassDensity', Number(e.target.value))}
+          />
+          <span className="editor-value">{params.grassDensity.toFixed(2)}</span>
+        </div>
+        <div className="editor-row">
+          <span className="editor-label">Height</span>
+          <input
+            className="editor-slider"
+            type="range"
+            min={RANGES.grassHeight.min}
+            max={RANGES.grassHeight.max}
+            step={RANGES.grassHeight.step}
+            value={params.grassHeight}
+            onChange={e => set('grassHeight', Number(e.target.value))}
+          />
+          <span className="editor-value">{params.grassHeight.toFixed(2)}m</span>
+        </div>
+        <div className="editor-row">
+          <span className="editor-label">Wind</span>
+          <input
+            className="editor-slider"
+            type="range"
+            min={RANGES.grassWindStrength.min}
+            max={RANGES.grassWindStrength.max}
+            step={RANGES.grassWindStrength.step}
+            value={params.grassWindStrength}
+            onChange={e => set('grassWindStrength', Number(e.target.value))}
+          />
+          <span className="editor-value">{params.grassWindStrength.toFixed(2)}</span>
+        </div>
+        <div className="editor-row">
+          <span className="editor-label">Distance</span>
+          <input
+            className="editor-slider"
+            type="range"
+            min={RANGES.grassDistance.min}
+            max={RANGES.grassDistance.max}
+            step={RANGES.grassDistance.step}
+            value={params.grassDistance}
+            onChange={e => set('grassDistance', Number(e.target.value))}
+          />
+          <span className="editor-value">{params.grassDistance.toFixed(0)}m</span>
+        </div>
+        <div className="editor-row">
+          <span className="editor-label">Base Color</span>
+          <input
+            className="editor-color"
+            type="color"
+            value={params.grassColorA}
+            onChange={e => set('grassColorA', e.target.value)}
+          />
+          <span className="editor-value">{params.grassColorA}</span>
+        </div>
+        <div className="editor-row">
+          <span className="editor-label">Tip Color</span>
+          <input
+            className="editor-color"
+            type="color"
+            value={params.grassColorB}
+            onChange={e => set('grassColorB', e.target.value)}
+          />
+          <span className="editor-value">{params.grassColorB}</span>
+        </div>
+      </div>
+
+      <div className="editor-section">
         <div className="editor-section-title">Atmosphere</div>
         <div className="editor-row">
           <span className="editor-label">Color</span>
