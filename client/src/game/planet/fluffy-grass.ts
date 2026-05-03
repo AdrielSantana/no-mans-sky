@@ -1,5 +1,7 @@
 import * as THREE from 'three'
 import grassAlphaUrl from '../../assets/terrain/grass_alpha.jpg'
+import { TERRAIN_NOISE } from '../shaders/noise.glsl'
+import { CLOUD_PATTERN_GLSL } from './planet-generator'
 import type { QuadtreeNode } from './quadtree'
 import { nodeKey } from './quadtree'
 import type { TerrainChunkSurfaceData } from './terrain-chunk'
@@ -185,6 +187,18 @@ export function createFluffyGrassMaterial(settings: FluffyGrassSettings): THREE.
       uAtmosphereHazeDistance: { value: 1.85 },
       uAtmosphereExtinctionStrength: { value: 0.68 },
       uNightAmbientStrength: { value: 0.28 },
+      uCloudCoverage: { value: 0.68 },
+      uCloudScale: { value: 2.7 },
+      uCloudSoftness: { value: 0.15 },
+      uCloudHeight: { value: 0.045 },
+      uCloudSpeed: { value: 0.012 },
+      uCloudShadowStrength: { value: 0 },
+      uCloudVolumeStrength: { value: 1.08 },
+      uCloudStormStrength: { value: 0.62 },
+      uCloudBandStrength: { value: 0.72 },
+      uCloudDetailStrength: { value: 0.82 },
+      uCloudQuality: { value: 2 },
+      uCloudSeed: { value: 0 },
     },
     vertexShader: /* glsl */ `
       #include <common>
@@ -229,6 +243,8 @@ export function createFluffyGrassMaterial(settings: FluffyGrassSettings): THREE.
     `,
     fragmentShader: /* glsl */ `
       #include <common>
+      ${TERRAIN_NOISE}
+      ${CLOUD_PATTERN_GLSL}
       uniform sampler2D uAlphaMap;
       uniform float uFadeDistance;
       uniform float uFadeRange;
@@ -323,6 +339,7 @@ export function createFluffyGrassMaterial(settings: FluffyGrassSettings): THREE.
         baseColor = mix(baseColor, uColorB, pow(vTip, 2.0) * 0.08);
         vec3 up = normalize(vWorldPos - uPlanetCenter);
         vec3 color = applyGrassLighting(baseColor, up, vWorldPos);
+        color = applyCloudShadow(color, up, normalize(uSunPosition - vWorldPos), 1.0);
         color = applyGrassAerialPerspective(color, vWorldPos, up);
         gl_FragColor = vec4(color, 1.0);
       }

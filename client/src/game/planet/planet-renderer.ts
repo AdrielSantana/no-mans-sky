@@ -875,6 +875,8 @@ export class PlanetRenderer {
       this.oceanMaterial,
       this.cloudMaterial,
       this.cloudBillboardMaterial,
+      this.grassMaterial,
+      this.farGrassMaterial,
     ]
     const effectiveShadow = this.debugShowClouds ? this.cloudShadow : 0
 
@@ -890,6 +892,7 @@ export class PlanetRenderer {
       this.setFloatUniform(material, 'uCloudBandStrength', this.cloudBands)
       this.setFloatUniform(material, 'uCloudDetailStrength', this.cloudDetail)
       this.setFloatUniform(material, 'uCloudQuality', this.cloudQuality)
+      this.setFloatUniform(material, 'uCloudSeed', this.noiseProfile.seed)
     }
 
     this.updateCloudRenderMix()
@@ -925,6 +928,8 @@ export class PlanetRenderer {
       this.oceanMaterial,
       this.cloudMaterial,
       this.cloudBillboardMaterial,
+      this.grassMaterial,
+      this.farGrassMaterial,
     ]
     for (const material of materials) {
       this.setFloatUniform(material, 'uCloudQuality', this.cloudQuality)

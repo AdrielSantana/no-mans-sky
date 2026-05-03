@@ -415,7 +415,7 @@ vec3 applyAerialPerspective(vec3 color, vec3 worldPos, vec3 normal) {
 }
 `
 
-const CLOUD_PATTERN_GLSL = /* glsl */ `
+export const CLOUD_PATTERN_GLSL = /* glsl */ `
 uniform float uCloudCoverage;
 uniform float uCloudScale;
 uniform float uCloudSoftness;
@@ -562,13 +562,22 @@ float cloudShadowMask(vec3 surfaceDir, vec3 sunDir) {
   float offset = clamp(uCloudHeight, 0.0, 0.20) * 2.8 + 0.018;
   vec3 projectedDir = normalize(surfaceDir + sunDir * offset);
   float shadow = pow(cloudShadowPattern(projectedDir), 0.72);
-  return shadow * daylight * clamp(uCloudShadowStrength, 0.0, 4.0);
+  float strength = clamp(uCloudShadowStrength * 0.18, 0.0, 1.6);
+  return shadow * daylight * strength;
 }
 
 vec3 applyCloudShadow(vec3 color, vec3 surfaceDir, vec3 sunDir, float strengthMultiplier) {
   float shadow = cloudShadowMask(surfaceDir, sunDir) * strengthMultiplier;
   vec3 coolShadow = color * vec3(0.30, 0.36, 0.44);
   return mix(color, coolShadow, clamp(shadow, 0.0, 0.92));
+}
+`
+
+const TERRAIN_CLOUD_SHADOW_GLSL = /* glsl */ `
+vec3 applyTerrainCloudShadow(vec3 color, vec3 surfaceDir, float strengthMultiplier) {
+  if (uPlanetKind > 0.5 && uPlanetKind < 1.5) return color;
+  vec3 sunDir = normalize(uSunPosition - vWorldPos);
+  return applyCloudShadow(color, normalize(surfaceDir), sunDir, strengthMultiplier);
 }
 `
 
@@ -819,6 +828,7 @@ export function createPlanetMaterial(params: {
   ${TERRAIN_NOISE}
   #include <logdepthbuf_pars_fragment>
   ${TERRAIN_TEXTURE_GLSL}
+  ${CLOUD_PATTERN_GLSL}
 
   uniform vec3 uColorA;
   uniform vec3 uColorB;
@@ -850,6 +860,7 @@ export function createPlanetMaterial(params: {
 
   ${PLANET_LIGHTING_GLSL}
   ${AERIAL_PERSPECTIVE_GLSL}
+  ${TERRAIN_CLOUD_SHADOW_GLSL}
 
   float saturate(float v) {
     return clamp(v, 0.0, 1.0);
@@ -977,6 +988,7 @@ export function createPlanetMaterial(params: {
 
     vec3 finalNormal = detailNormal(normalize(vNormal), latitude, moisture, slope, coast);
     vec3 finalColor = applyPlanetLighting(terrainColor, finalNormal, vRadialNormal, vWorldPos, heightNorm, slope);
+    finalColor = applyTerrainCloudShadow(finalColor, vRadialNormal, 1.0);
     finalColor = applyAerialPerspective(finalColor, vWorldPos, finalNormal);
     #include <logdepthbuf_fragment>
     gl_FragColor = vec4(finalColor, 1.0);
@@ -1153,6 +1165,7 @@ export function createPlanetFarMaterial(params: {
   #include <logdepthbuf_pars_fragment>
   ${TERRAIN_HEIGHT_GLSL}
   ${TERRAIN_TEXTURE_GLSL}
+  ${CLOUD_PATTERN_GLSL}
 
   uniform vec3 uColorA;
   uniform vec3 uColorB;
@@ -1178,6 +1191,7 @@ export function createPlanetFarMaterial(params: {
 
   ${PLANET_LIGHTING_GLSL}
   ${AERIAL_PERSPECTIVE_GLSL}
+  ${TERRAIN_CLOUD_SHADOW_GLSL}
 
   float saturate(float v) {
     return clamp(v, 0.0, 1.0);
@@ -1257,6 +1271,7 @@ export function createPlanetFarMaterial(params: {
     terrain = mix(terrain, vec3(0.43, 0.39, 0.32), 0.06);
 
     vec3 finalColor = applyPlanetLighting(terrain, shadingNormal, vRadialNormal, vWorldPos, heightNorm, slope);
+    finalColor = applyTerrainCloudShadow(finalColor, vRadialNormal, 1.0);
     finalColor = applyAerialPerspective(finalColor, vWorldPos, shadingNormal);
     #include <logdepthbuf_fragment>
     gl_FragColor = vec4(finalColor, 1.0);
@@ -1696,6 +1711,7 @@ export function createPlanetFallbackMaterial(params: {
   ${TERRAIN_NOISE}
   #include <logdepthbuf_pars_fragment>
   ${TERRAIN_TEXTURE_GLSL}
+  ${CLOUD_PATTERN_GLSL}
 
   uniform vec3 uColorA;
   uniform vec3 uColorB;
@@ -1721,6 +1737,7 @@ export function createPlanetFallbackMaterial(params: {
 
   ${PLANET_LIGHTING_GLSL}
   ${AERIAL_PERSPECTIVE_GLSL}
+  ${TERRAIN_CLOUD_SHADOW_GLSL}
 
   float saturate(float v) {
     return clamp(v, 0.0, 1.0);
@@ -1800,6 +1817,7 @@ export function createPlanetFallbackMaterial(params: {
     terrain = mix(terrain, vec3(0.43, 0.39, 0.32), 0.06);
 
     vec3 finalColor = applyPlanetLighting(terrain, shadingNormal, vRadialNormal, vWorldPos, heightNorm, slope);
+    finalColor = applyTerrainCloudShadow(finalColor, vRadialNormal, 1.0);
     finalColor = applyAerialPerspective(finalColor, vWorldPos, shadingNormal);
     #include <logdepthbuf_fragment>
     gl_FragColor = vec4(finalColor, 1.0);
