@@ -273,6 +273,19 @@ export function EditorPanel({ params, onChange }: Props) {
           <span className="editor-value">{params.detailStrength.toFixed(2)}</span>
         </div>
         <div className="editor-row">
+          <span className="editor-label">Terrain AO</span>
+          <input
+            className="editor-slider"
+            type="range"
+            min={RANGES.terrainAoStrength.min}
+            max={RANGES.terrainAoStrength.max}
+            step={RANGES.terrainAoStrength.step}
+            value={params.terrainAoStrength}
+            onChange={e => set('terrainAoStrength', Number(e.target.value))}
+          />
+          <span className="editor-value">{params.terrainAoStrength.toFixed(2)}</span>
+        </div>
+        <div className="editor-row">
           <span className="editor-label">Micro Strength</span>
           <input
             className="editor-slider"

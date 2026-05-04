@@ -35,6 +35,8 @@ ctx.onmessage = (event: MessageEvent<TerrainWorkerRequest>) => {
       geometry.positions.buffer,
       geometry.normals.buffer,
       geometry.heights.buffer,
+      geometry.microAo.buffer,
+      geometry.macroAo.buffer,
       geometry.indices.buffer,
       geometry.mainPositions.buffer,
     ])

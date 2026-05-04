@@ -1,4 +1,9 @@
-import { samplePlanetHeightDetailed, type PlanetTerrainParams } from '../../../../server/spacetimedb/src/shared/planet-terrain'
+import {
+  samplePlanetHeight,
+  samplePlanetHeightDetailed,
+  samplePlanetMicroHeight,
+  type PlanetTerrainParams,
+} from '../../../../server/spacetimedb/src/shared/planet-terrain'
 import { type QuadtreeNode, cubeToSphere, getNodeBounds } from './quadtree'
 
 const SKIRT_DEPTH = 0.08
@@ -7,6 +12,8 @@ export interface TerrainChunkGeometryData {
   positions: Float32Array
   normals: Float32Array
   heights: Float32Array
+  microAo: Float32Array
+  macroAo: Float32Array
   indices: Uint32Array
   mainPositions: Float32Array
 }
@@ -46,6 +53,11 @@ function cross(ax: number, ay: number, az: number, bx: number, by: number, bz: n
     az * bx - ax * bz,
     ax * by - ay * bx,
   ]
+}
+
+function smoothstep(edge0: number, edge1: number, value: number): number {
+  const t = Math.max(0, Math.min(1, (value - edge0) / Math.max(edge1 - edge0, 1e-6)))
+  return t * t * (3 - 2 * t)
 }
 
 function computeTerrainNormal(
@@ -112,6 +124,182 @@ function computeTerrainNormals(
   return normals
 }
 
+function offsetDirection(
+  dir: { x: number; y: number; z: number },
+  tangent: [number, number, number],
+  bitangent: [number, number, number],
+  tx: number,
+  ty: number,
+  step: number,
+): { x: number; y: number; z: number } {
+  const [x, y, z] = normalizeVec(
+    dir.x + tangent[0] * tx * step + bitangent[0] * ty * step,
+    dir.y + tangent[1] * tx * step + bitangent[1] * ty * step,
+    dir.z + tangent[2] * tx * step + bitangent[2] * ty * step,
+  )
+  return { x, y, z }
+}
+
+function tangentFrame(dir: { x: number; y: number; z: number }): {
+  tangent: [number, number, number]
+  bitangent: [number, number, number]
+} {
+  const up = Math.abs(dir.y) < 0.94 ? { x: 0, y: 1, z: 0 } : { x: 1, y: 0, z: 0 }
+  const tangent = normalizeVec(
+    up.y * dir.z - up.z * dir.y,
+    up.z * dir.x - up.x * dir.z,
+    up.x * dir.y - up.y * dir.x,
+  )
+  const bitangent = normalizeVec(
+    dir.y * tangent[2] - dir.z * tangent[1],
+    dir.z * tangent[0] - dir.x * tangent[2],
+    dir.x * tangent[1] - dir.y * tangent[0],
+  )
+  return { tangent, bitangent }
+}
+
+function projectedTangentDirection(
+  dir: { x: number; y: number; z: number },
+  axis: [number, number, number],
+): [number, number, number] | null {
+  const dot = dir.x * axis[0] + dir.y * axis[1] + dir.z * axis[2]
+  const px = axis[0] - dir.x * dot
+  const py = axis[1] - dir.y * dot
+  const pz = axis[2] - dir.z * dot
+  if (px * px + py * py + pz * pz < 1e-4) return null
+  const [x, y, z] = normalizeVec(
+    px,
+    py,
+    pz,
+  )
+  return [x, y, z]
+}
+
+function sampleDirectionalAo(
+  center: number,
+  samplePairs: Array<[number, number]>,
+  terrainMeters: number,
+  expectedRelief: number,
+  concavityStart: number,
+  concavityEnd: number,
+  rangeStart: number,
+  rangeEnd: number,
+): number {
+  let localMin = center
+  let localMax = center
+  let maxConcavityMeters = 0
+  let concavitySum = 0
+
+  for (const [a, b] of samplePairs) {
+    localMin = Math.min(localMin, a, b)
+    localMax = Math.max(localMax, a, b)
+    const pairConcavityMeters = Math.max(0, (a + b) * 0.5 - center) * terrainMeters
+    maxConcavityMeters = Math.max(maxConcavityMeters, pairConcavityMeters)
+    concavitySum += pairConcavityMeters
+  }
+
+  const avgConcavityMeters = concavitySum / Math.max(1, samplePairs.length)
+  const localRangeMeters = Math.max(0, localMax - localMin) * terrainMeters
+  const avgCavity = smoothstep(expectedRelief * concavityStart, expectedRelief * concavityEnd, avgConcavityMeters)
+  const peakCavity = smoothstep(expectedRelief * concavityStart * 1.4, expectedRelief * concavityEnd * 1.2, maxConcavityMeters)
+  const cavity = Math.max(avgCavity, peakCavity)
+  const rangeGate = smoothstep(expectedRelief * rangeStart, expectedRelief * rangeEnd, localRangeMeters)
+  return 1 - cavity * rangeGate
+}
+
+function computeMicroAoAtDirection(
+  dir: { x: number; y: number; z: number },
+  macroHeight: number,
+  microHeight: number,
+  terrain: PlanetTerrainParams,
+): number {
+  if (terrain.planetType === 'gas') return 1
+
+  const terrainMeters = Math.max(terrain.terrainScale * terrain.radius, 0.001)
+  const reliefMeters = Math.max(terrain.microReliefMeters ?? (terrain.planetType === 'ice' ? 1.35 : 1.5), 0.001)
+  const strength = Math.max(terrain.microDetailStrength ?? (terrain.planetType === 'ice' ? 0.48 : 0.5), 0)
+  if (strength <= 0.001) return 1
+
+  const expectedRelief = Math.max(reliefMeters * strength * 0.62, 0.07)
+  const { tangent, bitangent } = tangentFrame(dir)
+  const fineStep = Math.max(0.45, Math.min(reliefMeters * 0.55, 1.1))
+  const fissureStep = Math.max(0.8, Math.min(reliefMeters * 1.0, 2.0))
+  const ledgeStep = Math.max(fissureStep * 1.7, Math.min(reliefMeters * 2.25, 3.7))
+  const sample = (tx: number, ty: number, meters: number) => {
+    const sampleDir = offsetDirection(dir, tangent, bitangent, tx, ty, meters / Math.max(terrain.radius, 1))
+    return samplePlanetMicroHeight(sampleDir, terrain, macroHeight)
+  }
+  const samplePairs: Array<[number, number]> = [
+    [sample(-1, 0, fineStep), sample(1, 0, fineStep)],
+    [sample(0, -1, fineStep), sample(0, 1, fineStep)],
+    [sample(-1, 0, fissureStep), sample(1, 0, fissureStep)],
+    [sample(0, -1, fissureStep), sample(0, 1, fissureStep)],
+    [sample(-1, -1, ledgeStep), sample(1, 1, ledgeStep)],
+    [sample(1, -1, ledgeStep), sample(-1, 1, ledgeStep)],
+  ]
+
+  return sampleDirectionalAo(
+    microHeight,
+    samplePairs,
+    terrainMeters,
+    expectedRelief,
+    0.07,
+    0.88,
+    0.07,
+    1.25,
+  )
+}
+
+function computeMacroAoAtDirection(
+  dir: { x: number; y: number; z: number },
+  macroHeight: number,
+  terrain: PlanetTerrainParams,
+): number {
+  if (terrain.planetType === 'gas') return 1
+
+  const terrainMeters = Math.max(terrain.terrainScale * terrain.radius, 0.001)
+  const expectedRelief = Math.max(terrainMeters * 0.018, 8)
+  const step = Math.max(terrain.radius * 0.010, 28) / Math.max(terrain.radius, 1)
+  const sample = (axis: [number, number, number], direction: number) => {
+    const sampleDir = {
+      x: dir.x + axis[0] * direction * step,
+      y: dir.y + axis[1] * direction * step,
+      z: dir.z + axis[2] * direction * step,
+    }
+    const [x, y, z] = normalizeVec(sampleDir.x, sampleDir.y, sampleDir.z)
+    sampleDir.x = x
+    sampleDir.y = y
+    sampleDir.z = z
+    return samplePlanetHeight(sampleDir, terrain)
+  }
+  const samplePairs: Array<[number, number]> = []
+  const axes: Array<[number, number, number]> = [
+    [1, 0, 0],
+    [0, 1, 0],
+    [0, 0, 1],
+    [0.70710678, 0.70710678, 0],
+    [0.70710678, 0, 0.70710678],
+    [0, 0.70710678, 0.70710678],
+  ]
+
+  for (const axis of axes) {
+    const projected = projectedTangentDirection(dir, axis)
+    if (!projected) continue
+    samplePairs.push([sample(projected, -1), sample(projected, 1)])
+  }
+
+  return sampleDirectionalAo(
+    macroHeight,
+    samplePairs,
+    terrainMeters,
+    expectedRelief,
+    0.10,
+    1.05,
+    0.18,
+    1.80,
+  )
+}
+
 export function buildTerrainChunkGeometryData(
   node: QuadtreeNode,
   terrain: PlanetTerrainParams,
@@ -128,6 +316,8 @@ export function buildTerrainChunkGeometryData(
   const vertCount = gs * gs
   const positions = new Float32Array(vertCount * 3)
   const heights = new Float32Array(vertCount)
+  const microAo = new Float32Array(vertCount)
+  const macroAo = new Float32Array(vertCount)
 
   for (let iy = 0; iy < gs; iy++) {
     for (let ix = 0; ix < gs; ix++) {
@@ -136,12 +326,16 @@ export function buildTerrainChunkGeometryData(
       const v = v0 + iy * dv
 
       const dir = cubeToSphere(node.face, u, v)
-      const height = samplePlanetHeightDetailed(dir, terrain, microDetailAmount)
+      const macroHeight = samplePlanetHeight(dir, terrain)
+      const microHeight = samplePlanetMicroHeight(dir, terrain, macroHeight) * microDetailAmount
+      const height = macroHeight + microHeight
       const radius = terrain.radius + height * terrain.terrainScale * terrain.radius
       positions[i * 3] = dir.x * radius
       positions[i * 3 + 1] = dir.y * radius
       positions[i * 3 + 2] = dir.z * radius
       heights[i] = height
+      microAo[i] = computeMicroAoAtDirection(dir, macroHeight, microHeight, terrain)
+      macroAo[i] = computeMacroAoAtDirection(dir, macroHeight, terrain)
     }
   }
 
@@ -173,6 +367,8 @@ export function buildTerrainChunkGeometryData(
     return {
       positions,
       heights,
+      microAo,
+      macroAo,
       indices,
       normals: mainNormals,
       mainPositions: positions.slice(),
@@ -190,9 +386,13 @@ export function buildTerrainChunkGeometryData(
 
   const allPositions = new Float32Array(totalVertCount * 3)
   const allHeights = new Float32Array(totalVertCount)
+  const allMicroAo = new Float32Array(totalVertCount)
+  const allMacroAo = new Float32Array(totalVertCount)
   const allNormals = new Float32Array(totalVertCount * 3)
   allPositions.set(positions, 0)
   allHeights.set(heights, 0)
+  allMicroAo.set(microAo, 0)
+  allMacroAo.set(macroAo, 0)
   allNormals.set(mainNormals, 0)
 
   let skirtIdx = mainVertCount
@@ -211,6 +411,8 @@ export function buildTerrainChunkGeometryData(
     allPositions[skirtIdx * 3 + 1] = my - ny * skirtDepth
     allPositions[skirtIdx * 3 + 2] = mz - nz * skirtDepth
     allHeights[targetI] = heights[mainI]
+    allMicroAo[targetI] = microAo[mainI]
+    allMacroAo[targetI] = macroAo[mainI]
     allNormals[targetI * 3] = mainNormals[mainI * 3]
     allNormals[targetI * 3 + 1] = mainNormals[mainI * 3 + 1]
     allNormals[targetI * 3 + 2] = mainNormals[mainI * 3 + 2]
@@ -286,6 +488,8 @@ export function buildTerrainChunkGeometryData(
   return {
     positions: allPositions,
     heights: allHeights,
+    microAo: allMicroAo,
+    macroAo: allMacroAo,
     indices: allIndices,
     normals: allNormals,
     mainPositions: positions.slice(),

@@ -314,6 +314,7 @@ float realisticTerrainHeight(vec3 sphereDir) {
 
 const PLANET_LIGHTING_GLSL = /* glsl */ `
 uniform float uSurfaceLightingBlend;
+uniform float uTerrainAoStrength;
 
 float terrainReliefOcclusion(float heightNorm, float slope) {
   if (uPlanetKind > 0.5 && uPlanetKind < 1.5) return 1.0;
@@ -322,6 +323,25 @@ float terrainReliefOcclusion(float heightNorm, float slope) {
   float lowPocket = 1.0 - smoothstep(0.34, 0.58, heightNorm);
   float highCrisp = smoothstep(0.58, 0.86, heightNorm) * rugged;
   return clamp(1.0 - rugged * 0.13 - lowPocket * 0.04 + highCrisp * 0.025, 0.78, 1.03);
+}
+
+float terrainBakedAmbientOcclusion(float bakedAo, float amount, float nearFloor, float farFloor) {
+  if (uPlanetKind > 0.5 && uPlanetKind < 1.5) return 1.0;
+
+  float strength = clamp(uTerrainAoStrength, 0.0, 2.0);
+  if (strength <= 0.001) return 1.0;
+
+  float cavity = 1.0 - clamp(bakedAo, 0.0, 1.0);
+  float floorValue = min(nearFloor, farFloor);
+  return clamp(1.0 - cavity * strength * amount, floorValue, 1.0);
+}
+
+vec3 applyTerrainMacroAoToColor(vec3 color, float bakedMacroAo, float amount) {
+  return color * terrainBakedAmbientOcclusion(bakedMacroAo, amount, 0.48, 0.72);
+}
+
+vec3 applyTerrainMicroAoToColor(vec3 color, float bakedMicroAo, float amount) {
+  return color * terrainBakedAmbientOcclusion(bakedMicroAo, amount, 0.68, 0.86);
 }
 
 vec3 applyPlanetLighting(vec3 albedo, vec3 normal, vec3 radialNormal, vec3 worldPos, float heightNorm, float slope) {
@@ -730,6 +750,7 @@ export function createPlanetMaterial(params: {
   textureDetailScale: number
   textureFarScale: number
   textureFarStrength: number
+  terrainAoStrength: number
   atmosphereColor: string
   atmosphereHazeStrength: number
   atmosphereHazeDistance: number
@@ -780,6 +801,8 @@ export function createPlanetMaterial(params: {
   uniform float uLocalDetailNear;
   uniform float uLocalDetailFar;
   attribute float terrainHeight;
+  attribute float terrainMicroAo;
+  attribute float terrainMacroAo;
 
   varying vec3 vNormal;
   varying vec3 vRadialNormal;
@@ -788,6 +811,8 @@ export function createPlanetMaterial(params: {
   varying vec3 vSphereDir;
   varying float vDetail;
   varying float vNearDetail;
+  varying float vMicroAo;
+  varying float vMacroAo;
 
   float getHeight(vec3 sphereDir) {
     float continental = terrainFbm(sphereDir * uFrequency, uSeed, 4, 2.0, 0.5);
@@ -808,6 +833,8 @@ export function createPlanetMaterial(params: {
 
     float h = terrainHeight;
     vHeight = h;
+    vMicroAo = terrainMicroAo;
+    vMacroAo = terrainMacroAo;
     vDetail = 0.0;
 
     vec4 worldPos = modelMatrix * vec4(position, 1.0);
@@ -857,6 +884,8 @@ export function createPlanetMaterial(params: {
   varying vec3 vSphereDir;
   varying float vDetail;
   varying float vNearDetail;
+  varying float vMicroAo;
+  varying float vMacroAo;
 
   ${PLANET_LIGHTING_GLSL}
   ${AERIAL_PERSPECTIVE_GLSL}
@@ -988,6 +1017,8 @@ export function createPlanetMaterial(params: {
 
     vec3 finalNormal = detailNormal(normalize(vNormal), latitude, moisture, slope, coast);
     vec3 finalColor = applyPlanetLighting(terrainColor, finalNormal, vRadialNormal, vWorldPos, heightNorm, slope);
+    finalColor = applyTerrainMacroAoToColor(finalColor, vMacroAo, 0.28);
+    finalColor = applyTerrainMicroAoToColor(finalColor, vMicroAo, 0.52 * vNearDetail);
     finalColor = applyTerrainCloudShadow(finalColor, vRadialNormal, 1.0);
     finalColor = applyAerialPerspective(finalColor, vWorldPos, finalNormal);
     #include <logdepthbuf_fragment>
@@ -1045,6 +1076,7 @@ export function createPlanetMaterial(params: {
       uTextureDetailScale: { value: params.textureDetailScale },
       uTextureFarScale: { value: params.textureFarScale },
       uTextureFarStrength: { value: params.textureFarStrength },
+      uTerrainAoStrength: { value: params.terrainAoStrength },
       uSurfaceLightingBlend: { value: 0 },
     },
   })
@@ -1064,6 +1096,7 @@ export function createPlanetFarMaterial(params: {
   textureDetailScale: number
   textureFarScale: number
   textureFarStrength: number
+  terrainAoStrength: number
   atmosphereColor: string
   atmosphereHazeStrength: number
   atmosphereHazeDistance: number
@@ -1120,6 +1153,7 @@ export function createPlanetFarMaterial(params: {
   uniform float uPlanetKind;
   uniform float uOctaves;
   attribute float terrainHeight;
+  attribute float terrainMacroAo;
 
   varying vec3 vWorldPos;
   varying vec3 vNormal;
@@ -1127,6 +1161,7 @@ export function createPlanetFarMaterial(params: {
   varying vec3 vSphereDir;
   varying float vHeight;
   varying float vMacro;
+  varying float vMacroAo;
 
   float getHeight(vec3 sphereDir) {
     float continental = terrainFbm(sphereDir * uFrequency, uSeed, 4, 2.0, 0.5);
@@ -1147,6 +1182,7 @@ export function createPlanetFarMaterial(params: {
 
     float h = terrainHeight;
     vHeight = h;
+    vMacroAo = terrainMacroAo;
     vMacro = terrainFbm(sphereDir * (uFrequency * 2.4) + 19.0, uSeed + 31.0, 3, 2.0, 0.5);
 
     vec4 worldPos = modelMatrix * vec4(position, 1.0);
@@ -1188,6 +1224,7 @@ export function createPlanetFarMaterial(params: {
   varying vec3 vSphereDir;
   varying float vHeight;
   varying float vMacro;
+  varying float vMacroAo;
 
   ${PLANET_LIGHTING_GLSL}
   ${AERIAL_PERSPECTIVE_GLSL}
@@ -1271,6 +1308,7 @@ export function createPlanetFarMaterial(params: {
     terrain = mix(terrain, vec3(0.43, 0.39, 0.32), 0.06);
 
     vec3 finalColor = applyPlanetLighting(terrain, shadingNormal, vRadialNormal, vWorldPos, heightNorm, slope);
+    finalColor = applyTerrainMacroAoToColor(finalColor, vMacroAo, 0.24);
     finalColor = applyTerrainCloudShadow(finalColor, vRadialNormal, 1.0);
     finalColor = applyAerialPerspective(finalColor, vWorldPos, shadingNormal);
     #include <logdepthbuf_fragment>
@@ -1334,6 +1372,7 @@ export function createPlanetFarMaterial(params: {
       uTextureDetailScale: { value: params.textureDetailScale },
       uTextureFarScale: { value: params.textureFarScale },
       uTextureFarStrength: { value: params.textureFarStrength },
+      uTerrainAoStrength: { value: params.terrainAoStrength },
       uSurfaceLightingBlend: { value: 0 },
     },
   })
@@ -1638,6 +1677,7 @@ export function createPlanetFallbackMaterial(params: {
   textureDetailScale: number
   textureFarScale: number
   textureFarStrength: number
+  terrainAoStrength: number
   atmosphereColor: string
   atmosphereHazeStrength: number
   atmosphereHazeDistance: number
@@ -1687,16 +1727,19 @@ export function createPlanetFallbackMaterial(params: {
   #include <logdepthbuf_pars_vertex>
 
   attribute float terrainHeight;
+  attribute float terrainMacroAo;
 
   varying vec3 vWorldPos;
   varying vec3 vNormal;
   varying vec3 vRadialNormal;
   varying vec3 vSphereDir;
   varying float vHeight;
+  varying float vMacroAo;
 
   void main() {
     vSphereDir = normalize(position);
     vHeight = terrainHeight;
+    vMacroAo = terrainMacroAo;
     vRadialNormal = normalize((modelMatrix * vec4(vSphereDir, 0.0)).xyz);
     vNormal = normalize((modelMatrix * vec4(normal, 0.0)).xyz);
     if (dot(vNormal, vRadialNormal) < 0.0) vNormal = -vNormal;
@@ -1734,6 +1777,7 @@ export function createPlanetFallbackMaterial(params: {
   varying vec3 vRadialNormal;
   varying vec3 vSphereDir;
   varying float vHeight;
+  varying float vMacroAo;
 
   ${PLANET_LIGHTING_GLSL}
   ${AERIAL_PERSPECTIVE_GLSL}
@@ -1817,6 +1861,7 @@ export function createPlanetFallbackMaterial(params: {
     terrain = mix(terrain, vec3(0.43, 0.39, 0.32), 0.06);
 
     vec3 finalColor = applyPlanetLighting(terrain, shadingNormal, vRadialNormal, vWorldPos, heightNorm, slope);
+    finalColor = applyTerrainMacroAoToColor(finalColor, vMacroAo, 0.14);
     finalColor = applyTerrainCloudShadow(finalColor, vRadialNormal, 1.0);
     finalColor = applyAerialPerspective(finalColor, vWorldPos, shadingNormal);
     #include <logdepthbuf_fragment>
@@ -1879,6 +1924,7 @@ export function createPlanetFallbackMaterial(params: {
       uTextureDetailScale: { value: params.textureDetailScale },
       uTextureFarScale: { value: params.textureFarScale },
       uTextureFarStrength: { value: params.textureFarStrength },
+      uTerrainAoStrength: { value: params.terrainAoStrength },
       uSurfaceLightingBlend: { value: 0 },
     },
   })

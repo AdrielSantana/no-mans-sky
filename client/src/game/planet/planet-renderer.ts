@@ -43,7 +43,7 @@ const WORKER_DISPATCH_BUDGET_MS = 0.8
 const CHUNK_INTEGRATION_BUDGET_MS = 2.5
 const MAX_TERRAIN_WORKERS = 8
 const DETAILED_MATERIAL_MIN_LOD = 6
-const DETAILED_MATERIAL_DISTANCE = WORLD_SCALE.localDetailNear * 2.2
+const DETAILED_MATERIAL_DISTANCE = WORLD_SCALE.localDetailFar
 const LOD_COLLAPSE_HYSTERESIS = 1.35
 const CLOUD_BILLBOARD_MAX_INSTANCES = 1600
 const GRASS_NEAR_LOD_BACKOFF = 3
@@ -77,6 +77,7 @@ interface PlanetRendererParams {
   textureBlend?: number
   textureNearDistance?: number
   textureFadeDistance?: number
+  terrainAoStrength?: number
   atmosphereColor: string
   atmosphereDensity: number
   atmosphereHazeStrength?: number
@@ -215,6 +216,7 @@ export class PlanetRenderer {
   private atmosphereExtinctionStrength = 0.68
   private atmosphereNightColor = new THREE.Color(0x071226)
   private atmosphereNightAmbient = 0.28
+  private terrainAoStrength = 0.45
   private cloudCoverage = 0.68
   private cloudOpacity = 0.78
   private cloudScale = 2.7
@@ -279,6 +281,7 @@ export class PlanetRenderer {
     this.atmosphereExtinctionStrength = params.atmosphereExtinctionStrength ?? 0.68
     this.atmosphereNightColor.set(params.atmosphereNightColor ?? '#071226')
     this.atmosphereNightAmbient = params.atmosphereNightAmbient ?? 0.28
+    this.terrainAoStrength = params.terrainAoStrength ?? 0.45
     this.cloudCoverage = params.cloudCoverage ?? 0.68
     this.cloudOpacity = params.cloudOpacity ?? 0.78
     this.cloudScale = params.cloudScale ?? 2.7
@@ -384,6 +387,7 @@ export class PlanetRenderer {
       textureDetailScale: 1.0,
       textureFarScale: 0.14,
       textureFarStrength: 0.42,
+      terrainAoStrength: this.terrainAoStrength,
       atmosphereColor: params.atmosphereColor,
       sunPosition: this.sunPosition,
       sunColor: this.sunColor,
@@ -422,6 +426,7 @@ export class PlanetRenderer {
       textureDetailScale: FAR_TEXTURE_LOD_BANDS[0].detailScale,
       textureFarScale: FAR_TEXTURE_LOD_BANDS[0].farScale,
       textureFarStrength: FAR_TEXTURE_LOD_BANDS[0].farStrength,
+      terrainAoStrength: this.terrainAoStrength,
       atmosphereColor: params.atmosphereColor,
       sunPosition: this.sunPosition,
       sunColor: this.sunColor,
@@ -474,6 +479,7 @@ export class PlanetRenderer {
       textureDetailScale: 0.09,
       textureFarScale: 0.045,
       textureFarStrength: 1.0,
+      terrainAoStrength: this.terrainAoStrength,
       atmosphereColor: params.atmosphereColor,
       sunPosition: this.sunPosition,
       sunColor: this.sunColor,
@@ -674,6 +680,7 @@ export class PlanetRenderer {
       textureDetailScale: band.detailScale,
       textureFarScale: band.farScale,
       textureFarStrength: band.farStrength,
+      terrainAoStrength: this.terrainAoStrength,
       atmosphereColor: params.atmosphereColor,
       sunPosition: this.sunPosition,
       sunColor: this.sunColor,
@@ -786,6 +793,18 @@ export class PlanetRenderer {
     this.atmosphereNightColor.set(color)
     this.atmosphereNightAmbient = ambient
     this.updateLightColorUniforms()
+  }
+
+  setTerrainAoStrength(strength: number) {
+    this.terrainAoStrength = THREE.MathUtils.clamp(strength, 0, 2)
+    const materials = [
+      this.material,
+      ...this.farLodMaterials,
+      this.fallbackMaterial,
+    ]
+    for (const material of materials) {
+      this.setFloatUniform(material, 'uTerrainAoStrength', this.terrainAoStrength)
+    }
   }
 
   setClouds(settings: {
@@ -1426,7 +1445,7 @@ export class PlanetRenderer {
         if (chunk.mesh.visible) {
           if (this.debugSimpleTerrain) {
             chunk.mesh.material = this.simpleTerrainMaterial
-          } else if (this.shouldUseDetailedMaterial(chunk, camPos, planetPos)) {
+          } else if (this.shouldUseDetailedMaterial(chunk, localCamPos)) {
             chunk.mesh.material = this.debugNearTerrainShader ? this.material : this.simpleTerrainMaterial
           } else {
             chunk.mesh.material = this.debugFarTerrainShader ? this.getFarLodMaterial(chunk.node.lod) : this.simpleTerrainMaterial
@@ -1545,15 +1564,12 @@ export class PlanetRenderer {
 
   private shouldUseDetailedMaterial(
     chunk: TerrainChunk,
-    camPos: THREE.Vector3,
-    planetPos: THREE.Vector3,
+    localCamPos: THREE.Vector3,
   ): boolean {
-    if (chunk.node.lod < DETAILED_MATERIAL_MIN_LOD) return false
+    const minDetailedLod = Math.min(DETAILED_MATERIAL_MIN_LOD, Math.max(0, this.maxLod - 1))
+    if (chunk.node.lod < minDetailedLod) return false
 
-    const planetQuat = new THREE.Quaternion()
-    this.group.getWorldQuaternion(planetQuat)
-    const chunkCenter = getNodeCenter(chunk.node).multiplyScalar(this.planetRadius).applyQuaternion(planetQuat).add(planetPos)
-    return camPos.distanceTo(chunkCenter) < DETAILED_MATERIAL_DISTANCE
+    return this.getLocalChunkDistToCamera(chunk.node, localCamPos) < DETAILED_MATERIAL_DISTANCE
   }
 
   private getFarLodMaterial(lod: number): THREE.ShaderMaterial {
@@ -1979,14 +1995,67 @@ export class PlanetRenderer {
   private addTerrainHeightAttribute(geometry: THREE.BufferGeometry) {
     const positions = geometry.getAttribute('position')
     const heights = new Float32Array(positions.count)
+    const macroAo = new Float32Array(positions.count)
     const dir = new THREE.Vector3()
 
     for (let i = 0; i < positions.count; i++) {
       dir.fromBufferAttribute(positions, i).normalize()
       heights[i] = samplePlanetHeight(dir, this.terrainParams)
+      macroAo[i] = this.sampleFallbackMacroAo(dir, heights[i])
     }
 
     geometry.setAttribute('terrainHeight', new THREE.BufferAttribute(heights, 1))
+    geometry.setAttribute('terrainMacroAo', new THREE.BufferAttribute(macroAo, 1))
+  }
+
+  private sampleFallbackMacroAo(dir: THREE.Vector3, centerHeight: number): number {
+    if (this.terrainParams.planetType === 'gas') return 1
+
+    const sampleStep = 0.010
+    const terrainMeters = Math.max(this.terrainParams.terrainScale * this.terrainParams.radius, 0.001)
+    const expectedRelief = Math.max(terrainMeters * 0.022, 10)
+    const axes = [
+      new THREE.Vector3(1, 0, 0),
+      new THREE.Vector3(0, 1, 0),
+      new THREE.Vector3(0, 0, 1),
+      new THREE.Vector3(1, 1, 0).normalize(),
+      new THREE.Vector3(1, 0, 1).normalize(),
+      new THREE.Vector3(0, 1, 1).normalize(),
+    ]
+
+    let localMin = centerHeight
+    let localMax = centerHeight
+    const sampleDir = new THREE.Vector3()
+    const sample = (offset: THREE.Vector3) => {
+      sampleDir.copy(dir).addScaledVector(offset, sampleStep).normalize()
+      const h = samplePlanetHeight(sampleDir, this.terrainParams)
+      localMin = Math.min(localMin, h)
+      localMax = Math.max(localMax, h)
+      return h
+    }
+    const samplePairs: Array<[number, number]> = []
+    for (const axis of axes) {
+      const projected = axis.clone().addScaledVector(dir, -axis.dot(dir))
+      if (projected.lengthSq() < 1e-4) continue
+      projected.normalize()
+      samplePairs.push([sample(projected), sample(projected.clone().multiplyScalar(-1))])
+    }
+
+    let maxConcavityMeters = 0
+    let concavitySum = 0
+    for (const [a, b] of samplePairs) {
+      const pairConcavityMeters = Math.max(0, (a + b) * 0.5 - centerHeight) * terrainMeters
+      maxConcavityMeters = Math.max(maxConcavityMeters, pairConcavityMeters)
+      concavitySum += pairConcavityMeters
+    }
+
+    const avgConcavityMeters = concavitySum / Math.max(1, samplePairs.length)
+    const localRangeMeters = Math.max(0, localMax - localMin) * terrainMeters
+    const avgBasin = THREE.MathUtils.smoothstep(avgConcavityMeters, expectedRelief * 0.12, expectedRelief * 1.10)
+    const peakBasin = THREE.MathUtils.smoothstep(maxConcavityMeters, expectedRelief * 0.18, expectedRelief * 1.32)
+    const basin = Math.max(avgBasin, peakBasin)
+    const rangeGate = THREE.MathUtils.smoothstep(localRangeMeters, expectedRelief * 0.20, expectedRelief * 1.90)
+    return 1 - basin * rangeGate
   }
 
   private removeAllChunks() {

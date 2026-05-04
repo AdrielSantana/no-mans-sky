@@ -11,6 +11,7 @@ export interface EditorParams {
   textureBlend: number
   textureNearDistance: number
   textureFadeDistance: number
+  terrainAoStrength: number
   atmosphereColor: string
   atmosphereDensity: number
   atmosphereHazeStrength: number
@@ -130,6 +131,7 @@ export const DEFAULT_PARAMS: EditorParams = {
   textureBlend: 0.70,
   textureNearDistance: 180,
   textureFadeDistance: 420,
+  terrainAoStrength: 0.45,
   atmosphereColor: '#6fa8dc',
   atmosphereDensity: 0.75,
   atmosphereHazeStrength: 0.42,
@@ -211,6 +213,7 @@ export const RANGES = {
   textureBlend: { min: 0, max: 1, step: 0.01 },
   textureNearDistance: { min: 10, max: 5000, step: 10 },
   textureFadeDistance: { min: 10, max: 10000, step: 10 },
+  terrainAoStrength: { min: 0, max: 2, step: 0.01 },
   atmosphereDensity: { min: 0, max: 1, step: 0.01 },
   atmosphereHazeStrength: { min: 0, max: 1.5, step: 0.01 },
   atmosphereHazeDistance: { min: 0.1, max: 8, step: 0.01 },

@@ -34,6 +34,7 @@ function createPlanet(scene: THREE.Scene, params: EditorParams): PlanetRenderer 
     textureBlend: params.textureBlend,
     textureNearDistance: params.textureNearDistance,
     textureFadeDistance: params.textureFadeDistance,
+    terrainAoStrength: params.terrainAoStrength,
     atmosphereColor: params.atmosphereColor,
     atmosphereDensity: params.atmosphereDensity,
     atmosphereHazeStrength: params.atmosphereHazeStrength,
@@ -363,6 +364,7 @@ export function EditorCanvas({ params }: Props) {
     planetRef.current?.setSunTintStrength(params.sunTintStrength)
     planetRef.current?.setAtmosphereHaze(params.atmosphereHazeStrength, params.atmosphereHazeDistance)
     planetRef.current?.setAtmosphereNight(params.atmosphereNightColor, params.atmosphereNightAmbient)
+    planetRef.current?.setTerrainAoStrength(params.terrainAoStrength)
     planetRef.current?.setClouds({
       coverage: params.cloudCoverage,
       opacity: params.cloudOpacity,
@@ -419,6 +421,7 @@ export function EditorCanvas({ params }: Props) {
       newPlanet.setSunTintStrength(paramsRef.current.sunTintStrength)
       newPlanet.setAtmosphereHaze(paramsRef.current.atmosphereHazeStrength, paramsRef.current.atmosphereHazeDistance)
       newPlanet.setAtmosphereNight(paramsRef.current.atmosphereNightColor, paramsRef.current.atmosphereNightAmbient)
+      newPlanet.setTerrainAoStrength(paramsRef.current.terrainAoStrength)
       newPlanet.setClouds({
         coverage: paramsRef.current.cloudCoverage,
         opacity: paramsRef.current.cloudOpacity,

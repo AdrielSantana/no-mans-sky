@@ -88,6 +88,8 @@ export class TerrainChunk {
     geo.setAttribute('position', new THREE.BufferAttribute(data.positions, 3))
     geo.setAttribute('normal', new THREE.BufferAttribute(data.normals, 3))
     geo.setAttribute('terrainHeight', new THREE.BufferAttribute(data.heights, 1))
+    geo.setAttribute('terrainMicroAo', new THREE.BufferAttribute(data.microAo, 1))
+    geo.setAttribute('terrainMacroAo', new THREE.BufferAttribute(data.macroAo, 1))
     geo.setIndex(new THREE.BufferAttribute(this.buildIndexForStitching(this.stitchSteps), 1))
     geo.computeBoundingSphere()
 
