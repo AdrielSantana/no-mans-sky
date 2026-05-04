@@ -182,7 +182,7 @@ export function createFluffyGrassMaterial(settings: FluffyGrassSettings): THREE.
       uAtmosphereColor: { value: new THREE.Color(0x6fa8dc) },
       uAtmosphereLightColor: { value: new THREE.Color(0xc4d5df) },
       uSunTintStrength: { value: 0.85 },
-      uAtmosphereExtinctionStrength: { value: 0.68 },
+      uAtmosphereExtinctionStrength: { value: 0.82 },
       uCloudCoverage: { value: 0.68 },
       uCloudScale: { value: 2.7 },
       uCloudSoftness: { value: 0.15 },

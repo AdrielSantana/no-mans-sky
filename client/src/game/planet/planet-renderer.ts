@@ -202,12 +202,12 @@ export class PlanetRenderer {
   private atmosphereColor = new THREE.Color(0x6fa8dc)
   private atmosphereLightColor = new THREE.Color(0xc4d5df)
   private sunTintStrength = 0.85
-  private atmosphereHorizonGlow = 0.72
-  private atmosphereSunGlare = 0.62
-  private atmosphereSunGlareSize = 0.72
-  private atmosphereTwilightWidth = 0.90
-  private atmosphereTwilightStrength = 0.85
-  private atmosphereExtinctionStrength = 0.68
+  private atmosphereHorizonGlow = 0.90
+  private atmosphereSunGlare = 0.56
+  private atmosphereSunGlareSize = 0.55
+  private atmosphereTwilightWidth = 1.12
+  private atmosphereTwilightStrength = 1.02
+  private atmosphereExtinctionStrength = 0.82
   private terrainAoStrength = 0.45
   private cloudCoverage = 0.68
   private cloudOpacity = 0.78
@@ -263,12 +263,12 @@ export class PlanetRenderer {
     this.sunColor.set(params.sunColor ?? '#fff2c8')
     this.atmosphereColor.set(params.atmosphereColor)
     this.sunTintStrength = params.sunTintStrength ?? 0.85
-    this.atmosphereHorizonGlow = params.atmosphereHorizonGlow ?? 0.72
-    this.atmosphereSunGlare = params.atmosphereSunGlare ?? 0.62
-    this.atmosphereSunGlareSize = params.atmosphereSunGlareSize ?? 0.72
-    this.atmosphereTwilightWidth = params.atmosphereTwilightWidth ?? 0.90
-    this.atmosphereTwilightStrength = params.atmosphereTwilightStrength ?? 0.85
-    this.atmosphereExtinctionStrength = params.atmosphereExtinctionStrength ?? 0.68
+    this.atmosphereHorizonGlow = params.atmosphereHorizonGlow ?? 0.90
+    this.atmosphereSunGlare = params.atmosphereSunGlare ?? 0.56
+    this.atmosphereSunGlareSize = params.atmosphereSunGlareSize ?? 0.55
+    this.atmosphereTwilightWidth = params.atmosphereTwilightWidth ?? 1.12
+    this.atmosphereTwilightStrength = params.atmosphereTwilightStrength ?? 1.02
+    this.atmosphereExtinctionStrength = params.atmosphereExtinctionStrength ?? 0.82
     this.terrainAoStrength = params.terrainAoStrength ?? 0.45
     this.cloudCoverage = params.cloudCoverage ?? 0.68
     this.cloudOpacity = params.cloudOpacity ?? 0.78
