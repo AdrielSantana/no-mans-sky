@@ -14,8 +14,6 @@ export interface EditorParams {
   terrainAoStrength: number
   atmosphereColor: string
   atmosphereDensity: number
-  atmosphereHazeStrength: number
-  atmosphereHazeDistance: number
   atmosphereHorizonGlow: number
   atmosphereSunGlare: number
   atmosphereSunGlareSize: number
@@ -23,7 +21,6 @@ export interface EditorParams {
   atmosphereTwilightStrength: number
   atmosphereExtinctionStrength: number
   atmosphereNightColor: string
-  atmosphereNightAmbient: number
   cloudCoverage: number
   cloudOpacity: number
   cloudScale: number
@@ -134,8 +131,6 @@ export const DEFAULT_PARAMS: EditorParams = {
   terrainAoStrength: 0.45,
   atmosphereColor: '#6fa8dc',
   atmosphereDensity: 0.75,
-  atmosphereHazeStrength: 0.42,
-  atmosphereHazeDistance: 1.85,
   atmosphereHorizonGlow: 0.72,
   atmosphereSunGlare: 0.62,
   atmosphereSunGlareSize: 0.72,
@@ -143,7 +138,6 @@ export const DEFAULT_PARAMS: EditorParams = {
   atmosphereTwilightStrength: 0.85,
   atmosphereExtinctionStrength: 0.68,
   atmosphereNightColor: '#071226',
-  atmosphereNightAmbient: 0.28,
   cloudCoverage: 0.68,
   cloudOpacity: 0.78,
   cloudScale: 2.7,
@@ -215,15 +209,12 @@ export const RANGES = {
   textureFadeDistance: { min: 10, max: 10000, step: 10 },
   terrainAoStrength: { min: 0, max: 2, step: 0.01 },
   atmosphereDensity: { min: 0, max: 1, step: 0.01 },
-  atmosphereHazeStrength: { min: 0, max: 1.5, step: 0.01 },
-  atmosphereHazeDistance: { min: 0.1, max: 8, step: 0.01 },
   atmosphereHorizonGlow: { min: 0, max: 2, step: 0.01 },
   atmosphereSunGlare: { min: 0, max: 2, step: 0.01 },
   atmosphereSunGlareSize: { min: 0.1, max: 2, step: 0.01 },
   atmosphereTwilightWidth: { min: 0.2, max: 2, step: 0.01 },
   atmosphereTwilightStrength: { min: 0, max: 2, step: 0.01 },
   atmosphereExtinctionStrength: { min: 0, max: 2, step: 0.01 },
-  atmosphereNightAmbient: { min: 0, max: 1.2, step: 0.01 },
   cloudCoverage: { min: 0, max: 1, step: 0.01 },
   cloudOpacity: { min: 0, max: 1, step: 0.01 },
   cloudScale: { min: 0.5, max: 12, step: 0.1 },

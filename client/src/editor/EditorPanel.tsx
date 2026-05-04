@@ -648,34 +648,6 @@ export function EditorPanel({ params, onChange }: Props) {
           <span className="editor-value">{params.atmosphereDensity.toFixed(2)}</span>
         </div>
         <div className="editor-row">
-          <span className="editor-label">Haze</span>
-          <input
-            className="editor-slider"
-            type="range"
-            min={RANGES.atmosphereHazeStrength.min}
-            max={RANGES.atmosphereHazeStrength.max}
-            step={RANGES.atmosphereHazeStrength.step}
-            value={params.atmosphereHazeStrength}
-            onInput={e => set('atmosphereHazeStrength', Number(e.currentTarget.value))}
-            onChange={e => set('atmosphereHazeStrength', Number(e.target.value))}
-          />
-          <span className="editor-value">{params.atmosphereHazeStrength.toFixed(2)}</span>
-        </div>
-        <div className="editor-row">
-          <span className="editor-label">Haze Dist</span>
-          <input
-            className="editor-slider"
-            type="range"
-            min={RANGES.atmosphereHazeDistance.min}
-            max={RANGES.atmosphereHazeDistance.max}
-            step={RANGES.atmosphereHazeDistance.step}
-            value={params.atmosphereHazeDistance}
-            onInput={e => set('atmosphereHazeDistance', Number(e.currentTarget.value))}
-            onChange={e => set('atmosphereHazeDistance', Number(e.target.value))}
-          />
-          <span className="editor-value">{params.atmosphereHazeDistance.toFixed(2)}R</span>
-        </div>
-        <div className="editor-row">
           <span className="editor-label">Horizon Glow</span>
           <input
             className="editor-slider"
@@ -768,20 +740,6 @@ export function EditorPanel({ params, onChange }: Props) {
             onChange={e => set('atmosphereNightColor', e.target.value)}
           />
           <span className="editor-value">{params.atmosphereNightColor}</span>
-        </div>
-        <div className="editor-row">
-          <span className="editor-label">Night Ambient</span>
-          <input
-            className="editor-slider"
-            type="range"
-            min={RANGES.atmosphereNightAmbient.min}
-            max={RANGES.atmosphereNightAmbient.max}
-            step={RANGES.atmosphereNightAmbient.step}
-            value={params.atmosphereNightAmbient}
-            onInput={e => set('atmosphereNightAmbient', Number(e.currentTarget.value))}
-            onChange={e => set('atmosphereNightAmbient', Number(e.target.value))}
-          />
-          <span className="editor-value">{params.atmosphereNightAmbient.toFixed(2)}</span>
         </div>
       </div>
 

@@ -41,3 +41,10 @@ The default local database name is `no-mans-sky`. Client connection settings can
 VITE_SPACETIMEDB_URI=ws://127.0.0.1:3000
 VITE_SPACETIMEDB_DATABASE=no-mans-sky
 ```
+
+FADE NA ATMOSFERA
+REMOVER HAZE
+SOMBRA FAKE EMBAIXO DOS PATCHES DE GRAMA
+Shader dágua/Malha dágua
+Shader em baixo dágua
+"Lua" durante a noite

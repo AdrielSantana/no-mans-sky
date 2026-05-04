@@ -37,8 +37,6 @@ function createPlanet(scene: THREE.Scene, params: EditorParams): PlanetRenderer 
     terrainAoStrength: params.terrainAoStrength,
     atmosphereColor: params.atmosphereColor,
     atmosphereDensity: params.atmosphereDensity,
-    atmosphereHazeStrength: params.atmosphereHazeStrength,
-    atmosphereHazeDistance: params.atmosphereHazeDistance,
     atmosphereHorizonGlow: params.atmosphereHorizonGlow,
     atmosphereSunGlare: params.atmosphereSunGlare,
     atmosphereSunGlareSize: params.atmosphereSunGlareSize,
@@ -46,7 +44,6 @@ function createPlanet(scene: THREE.Scene, params: EditorParams): PlanetRenderer 
     atmosphereTwilightStrength: params.atmosphereTwilightStrength,
     atmosphereExtinctionStrength: params.atmosphereExtinctionStrength,
     atmosphereNightColor: params.atmosphereNightColor,
-    atmosphereNightAmbient: params.atmosphereNightAmbient,
     cloudCoverage: params.cloudCoverage,
     cloudOpacity: params.cloudOpacity,
     cloudScale: params.cloudScale,
@@ -362,8 +359,7 @@ export function EditorCanvas({ params }: Props) {
     engineRef.current?.setSunPosition(sunPosition)
     planetRef.current?.setSunColor(params.sunColor)
     planetRef.current?.setSunTintStrength(params.sunTintStrength)
-    planetRef.current?.setAtmosphereHaze(params.atmosphereHazeStrength, params.atmosphereHazeDistance)
-    planetRef.current?.setAtmosphereNight(params.atmosphereNightColor, params.atmosphereNightAmbient)
+    planetRef.current?.setAtmosphereNight(params.atmosphereNightColor)
     planetRef.current?.setTerrainAoStrength(params.terrainAoStrength)
     planetRef.current?.setClouds({
       coverage: params.cloudCoverage,
@@ -419,8 +415,7 @@ export function EditorCanvas({ params }: Props) {
       engine.setSunPosition(latestSunPosition)
       newPlanet.setSunColor(paramsRef.current.sunColor)
       newPlanet.setSunTintStrength(paramsRef.current.sunTintStrength)
-      newPlanet.setAtmosphereHaze(paramsRef.current.atmosphereHazeStrength, paramsRef.current.atmosphereHazeDistance)
-      newPlanet.setAtmosphereNight(paramsRef.current.atmosphereNightColor, paramsRef.current.atmosphereNightAmbient)
+      newPlanet.setAtmosphereNight(paramsRef.current.atmosphereNightColor)
       newPlanet.setTerrainAoStrength(paramsRef.current.terrainAoStrength)
       newPlanet.setClouds({
         coverage: paramsRef.current.cloudCoverage,

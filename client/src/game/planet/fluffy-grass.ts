@@ -183,10 +183,7 @@ export function createFluffyGrassMaterial(settings: FluffyGrassSettings): THREE.
       uAtmosphereLightColor: { value: new THREE.Color(0xc4d5df) },
       uNightColor: { value: new THREE.Color(0x071226) },
       uSunTintStrength: { value: 0.85 },
-      uAtmosphereHazeStrength: { value: 0.42 },
-      uAtmosphereHazeDistance: { value: 1.85 },
       uAtmosphereExtinctionStrength: { value: 0.68 },
-      uNightAmbientStrength: { value: 0.28 },
       uCloudCoverage: { value: 0.68 },
       uCloudScale: { value: 2.7 },
       uCloudSoftness: { value: 0.15 },
@@ -261,10 +258,7 @@ export function createFluffyGrassMaterial(settings: FluffyGrassSettings): THREE.
       uniform vec3 uAtmosphereLightColor;
       uniform vec3 uNightColor;
       uniform float uSunTintStrength;
-      uniform float uAtmosphereHazeStrength;
-      uniform float uAtmosphereHazeDistance;
       uniform float uAtmosphereExtinctionStrength;
-      uniform float uNightAmbientStrength;
       varying vec2 vUv;
       varying float vTip;
       varying float vSeed;
@@ -283,7 +277,6 @@ export function createFluffyGrassMaterial(settings: FluffyGrassSettings): THREE.
         float terminator = smoothstep(-0.34, 0.18, nDotL) * (1.0 - smoothstep(0.22, 0.72, nDotL));
         float tintStrength = clamp(uSunTintStrength, 0.0, 2.0);
         float extinctionStrength = clamp(uAtmosphereExtinctionStrength, 0.0, 2.0);
-        float nightAmbientStrength = clamp(uNightAmbientStrength, 0.0, 1.5);
         vec3 nightTint = mix(vec3(0.010, 0.016, 0.032), uNightColor, 0.82);
         nightTint = mix(nightTint, nightTint + uAtmosphereLightColor * 0.055, tintStrength * 0.24);
         vec3 sunsetTint = mix(vec3(1.0, 0.34, 0.10), uSunColor, 0.36);
@@ -297,31 +290,10 @@ export function createFluffyGrassMaterial(settings: FluffyGrassSettings): THREE.
         vec3 lit = albedo * skyTint * (0.12 + day * 0.18)
           + albedo * sunTint * (direct * 0.74 + direct * direct * 0.18) * directTransmission;
         lit += albedo * twilightFill * terminator * extinctionStrength * 0.16;
-        vec3 nightLit = albedo * nightTint * (0.22 + nightAmbientStrength * 0.58);
+        vec3 nightLit = albedo * nightTint * 0.12;
         lit = mix(nightLit, lit, day);
         lit += mix(vec3(0.22, 0.34, 0.48), uAtmosphereLightColor, tintStrength * 0.46) * rim * 0.045 * day;
         return lit;
-      }
-
-      vec3 applyGrassAerialPerspective(vec3 color, vec3 worldPos, vec3 up) {
-        float strength = clamp(uAtmosphereHazeStrength, 0.0, 2.0);
-        if (strength <= 0.0001) return color;
-
-        vec3 viewDir = normalize(cameraPosition - worldPos);
-        vec3 lightDir = normalize(uSunPosition - worldPos);
-        float cameraDist = distance(cameraPosition, worldPos);
-        float distanceScale = max(uPlanetRadius * max(uAtmosphereHazeDistance, 0.05), 0.001);
-        float distanceFog = 1.0 - exp(-cameraDist / distanceScale);
-        float grazing = pow(1.0 - max(dot(up, viewDir), 0.0), 2.15);
-        float day = smoothstep(-0.25, 0.58, dot(up, lightDir));
-        float forwardScatter = pow(max(dot(viewDir, lightDir), 0.0), 4.0);
-        vec3 atmosphereTint = mix(uAtmosphereColor, uAtmosphereLightColor, 0.62 + forwardScatter * 0.20);
-        vec3 nightHaze = uAtmosphereColor * 0.18 + vec3(0.004, 0.007, 0.016);
-        vec3 hazeColor = mix(nightHaze, atmosphereTint, day);
-        float haze = (distanceFog * 0.54 + grazing * 0.46) * strength * (0.20 + day * 0.80);
-        haze += forwardScatter * distanceFog * strength * 0.10;
-        haze = clamp(haze, 0.0, 0.78);
-        return mix(color, hazeColor, haze);
       }
 
       void main() {
@@ -340,7 +312,6 @@ export function createFluffyGrassMaterial(settings: FluffyGrassSettings): THREE.
         vec3 up = normalize(vWorldPos - uPlanetCenter);
         vec3 color = applyGrassLighting(baseColor, up, vWorldPos);
         color = applyCloudShadow(color, up, normalize(uSunPosition - vWorldPos), 1.0);
-        color = applyGrassAerialPerspective(color, vWorldPos, up);
         gl_FragColor = vec4(color, 1.0);
       }
     `,
