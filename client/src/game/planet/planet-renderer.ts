@@ -86,7 +86,6 @@ interface PlanetRendererParams {
   atmosphereTwilightWidth?: number
   atmosphereTwilightStrength?: number
   atmosphereExtinctionStrength?: number
-  atmosphereNightColor?: string
   cloudCoverage?: number
   cloudOpacity?: number
   cloudScale?: number
@@ -209,7 +208,6 @@ export class PlanetRenderer {
   private atmosphereTwilightWidth = 0.90
   private atmosphereTwilightStrength = 0.85
   private atmosphereExtinctionStrength = 0.68
-  private atmosphereNightColor = new THREE.Color(0x071226)
   private terrainAoStrength = 0.45
   private cloudCoverage = 0.68
   private cloudOpacity = 0.78
@@ -271,7 +269,6 @@ export class PlanetRenderer {
     this.atmosphereTwilightWidth = params.atmosphereTwilightWidth ?? 0.90
     this.atmosphereTwilightStrength = params.atmosphereTwilightStrength ?? 0.85
     this.atmosphereExtinctionStrength = params.atmosphereExtinctionStrength ?? 0.68
-    this.atmosphereNightColor.set(params.atmosphereNightColor ?? '#071226')
     this.terrainAoStrength = params.terrainAoStrength ?? 0.45
     this.cloudCoverage = params.cloudCoverage ?? 0.68
     this.cloudOpacity = params.cloudOpacity ?? 0.78
@@ -385,7 +382,6 @@ export class PlanetRenderer {
       atmosphereLightColor: this.atmosphereLightColor,
       sunTintStrength: this.sunTintStrength,
       atmosphereExtinctionStrength: this.atmosphereExtinctionStrength,
-      nightColor: this.atmosphereNightColor,
       cloudCoverage: this.cloudCoverage,
       cloudScale: this.cloudScale,
       cloudSoftness: this.cloudSoftness,
@@ -421,7 +417,6 @@ export class PlanetRenderer {
       atmosphereLightColor: this.atmosphereLightColor,
       sunTintStrength: this.sunTintStrength,
       atmosphereExtinctionStrength: this.atmosphereExtinctionStrength,
-      nightColor: this.atmosphereNightColor,
       cloudCoverage: this.cloudCoverage,
       cloudScale: this.cloudScale,
       cloudSoftness: this.cloudSoftness,
@@ -471,7 +466,6 @@ export class PlanetRenderer {
       atmosphereLightColor: this.atmosphereLightColor,
       sunTintStrength: this.sunTintStrength,
       atmosphereExtinctionStrength: this.atmosphereExtinctionStrength,
-      nightColor: this.atmosphereNightColor,
       cloudCoverage: this.cloudCoverage,
       cloudScale: this.cloudScale,
       cloudSoftness: this.cloudSoftness,
@@ -530,7 +524,6 @@ export class PlanetRenderer {
         atmosphereLightColor: this.atmosphereLightColor,
         sunTintStrength: this.sunTintStrength,
         atmosphereExtinctionStrength: this.atmosphereExtinctionStrength,
-        nightColor: this.atmosphereNightColor,
         cloudCoverage: this.cloudCoverage,
         cloudScale: this.cloudScale,
         cloudSoftness: this.cloudSoftness,
@@ -569,7 +562,6 @@ export class PlanetRenderer {
         atmosphereColor: params.atmosphereColor,
         sunColor: this.sunColor,
         atmosphereLightColor: this.atmosphereLightColor,
-        nightColor: this.atmosphereNightColor,
         sunPosition: this.sunPosition,
       })
       this.cloudMesh = new THREE.Mesh(cloudGeo, this.cloudMaterial)
@@ -589,7 +581,6 @@ export class PlanetRenderer {
         atmosphereColor: params.atmosphereColor,
         sunColor: this.sunColor,
         atmosphereLightColor: this.atmosphereLightColor,
-        nightColor: this.atmosphereNightColor,
         sunPosition: this.sunPosition,
       })
       this.cloudBillboardMesh = new THREE.InstancedMesh(
@@ -614,7 +605,6 @@ export class PlanetRenderer {
         sunColor: this.sunColor,
         atmosphereLightColor: this.atmosphereLightColor,
         sunTintStrength: this.sunTintStrength,
-        nightColor: this.atmosphereNightColor,
         horizonGlow: this.atmosphereHorizonGlow,
         sunGlare: this.atmosphereSunGlare,
         sunGlareSize: this.atmosphereSunGlareSize,
@@ -663,7 +653,6 @@ export class PlanetRenderer {
       atmosphereLightColor: this.atmosphereLightColor,
       sunTintStrength: this.sunTintStrength,
       atmosphereExtinctionStrength: this.atmosphereExtinctionStrength,
-      nightColor: this.atmosphereNightColor,
       cloudCoverage: this.cloudCoverage,
       cloudScale: this.cloudScale,
       cloudSoftness: this.cloudSoftness,
@@ -732,7 +721,6 @@ export class PlanetRenderer {
       this.copyColorUniform(material, 'uSunColor', this.sunColor)
       this.copyColorUniform(material, 'uAtmosphereColor', this.atmosphereColor)
       this.copyColorUniform(material, 'uAtmosphereLightColor', this.atmosphereLightColor)
-      this.copyColorUniform(material, 'uNightColor', this.atmosphereNightColor)
       this.setFloatUniform(material, 'uSunTintStrength', this.sunTintStrength)
       this.setFloatUniform(material, 'uHorizonGlowStrength', this.atmosphereHorizonGlow)
       this.setFloatUniform(material, 'uSunGlareStrength', this.atmosphereSunGlare)
@@ -750,11 +738,6 @@ export class PlanetRenderer {
 
   setSunTintStrength(strength: number) {
     this.sunTintStrength = strength
-    this.updateLightColorUniforms()
-  }
-
-  setAtmosphereNight(color: string) {
-    this.atmosphereNightColor.set(color)
     this.updateLightColorUniforms()
   }
 

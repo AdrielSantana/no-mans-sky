@@ -20,7 +20,6 @@ export interface EditorParams {
   atmosphereTwilightWidth: number
   atmosphereTwilightStrength: number
   atmosphereExtinctionStrength: number
-  atmosphereNightColor: string
   cloudCoverage: number
   cloudOpacity: number
   cloudScale: number
@@ -137,7 +136,6 @@ export const DEFAULT_PARAMS: EditorParams = {
   atmosphereTwilightWidth: 0.90,
   atmosphereTwilightStrength: 0.85,
   atmosphereExtinctionStrength: 0.68,
-  atmosphereNightColor: '#071226',
   cloudCoverage: 0.68,
   cloudOpacity: 0.78,
   cloudScale: 2.7,

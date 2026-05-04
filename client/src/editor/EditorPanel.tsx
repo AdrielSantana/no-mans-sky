@@ -731,16 +731,6 @@ export function EditorPanel({ params, onChange }: Props) {
           />
           <span className="editor-value">{params.atmosphereExtinctionStrength.toFixed(2)}</span>
         </div>
-        <div className="editor-row">
-          <span className="editor-label">Night Color</span>
-          <input
-            className="editor-color"
-            type="color"
-            value={params.atmosphereNightColor}
-            onChange={e => set('atmosphereNightColor', e.target.value)}
-          />
-          <span className="editor-value">{params.atmosphereNightColor}</span>
-        </div>
       </div>
 
       <div className="editor-section">

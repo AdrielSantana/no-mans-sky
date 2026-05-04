@@ -43,7 +43,6 @@ function createPlanet(scene: THREE.Scene, params: EditorParams): PlanetRenderer 
     atmosphereTwilightWidth: params.atmosphereTwilightWidth,
     atmosphereTwilightStrength: params.atmosphereTwilightStrength,
     atmosphereExtinctionStrength: params.atmosphereExtinctionStrength,
-    atmosphereNightColor: params.atmosphereNightColor,
     cloudCoverage: params.cloudCoverage,
     cloudOpacity: params.cloudOpacity,
     cloudScale: params.cloudScale,
@@ -359,7 +358,6 @@ export function EditorCanvas({ params }: Props) {
     engineRef.current?.setSunPosition(sunPosition)
     planetRef.current?.setSunColor(params.sunColor)
     planetRef.current?.setSunTintStrength(params.sunTintStrength)
-    planetRef.current?.setAtmosphereNight(params.atmosphereNightColor)
     planetRef.current?.setTerrainAoStrength(params.terrainAoStrength)
     planetRef.current?.setClouds({
       coverage: params.cloudCoverage,
@@ -415,7 +413,6 @@ export function EditorCanvas({ params }: Props) {
       engine.setSunPosition(latestSunPosition)
       newPlanet.setSunColor(paramsRef.current.sunColor)
       newPlanet.setSunTintStrength(paramsRef.current.sunTintStrength)
-      newPlanet.setAtmosphereNight(paramsRef.current.atmosphereNightColor)
       newPlanet.setTerrainAoStrength(paramsRef.current.terrainAoStrength)
       newPlanet.setClouds({
         coverage: paramsRef.current.cloudCoverage,
