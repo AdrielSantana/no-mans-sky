@@ -1397,6 +1397,8 @@ export function createOceanMaterial(params: {
   cloudStorms: number
   cloudBands: number
   cloudDetail: number
+  oceanFineDistance: number
+  oceanMidDistance: number
   useTerrainAttribute?: boolean
 }): THREE.ShaderMaterial {
   const atmosphereColor = new THREE.Color(params.atmosphereColor)
@@ -1451,6 +1453,8 @@ export function createOceanMaterial(params: {
   uniform vec3 uTwilightColor;
   uniform vec3 uOceanColor;
   uniform float uAtmosphereExtinctionStrength;
+  uniform float uOceanFineDistance;
+  uniform float uOceanMidDistance;
   uniform float uSeed;
   uniform float uTime;
 
@@ -1475,8 +1479,9 @@ export function createOceanMaterial(params: {
 
     float cameraDist = distance(cameraPosition, vWorldPos);
     float farWater = smoothstep(0.75, 2.65, cameraDist / uPlanetRadius);
-    float detailFade = 1.0 - farWater;
-    float nearFade = 1.0 - smoothstep(0.030, 0.32, cameraDist / uPlanetRadius);
+    float fineLod = 1.0 - smoothstep(uOceanFineDistance * 0.42, uOceanFineDistance, cameraDist);
+    float midLod = 1.0 - smoothstep(uOceanMidDistance * 0.48, uOceanMidDistance, cameraDist);
+    float detailFade = max(midLod, fineLod);
     float orbitalFade = smoothstep(0.85, 2.9, cameraDist / uPlanetRadius);
 
     vec3 flowC = vec3(uTime * 0.038, -uTime * 0.020, uTime * 0.026);
@@ -1487,10 +1492,10 @@ export function createOceanMaterial(params: {
     float waveD = sin(dot(vSphereDir, vec3(-0.72, 0.08, 0.62)) * 68.0 - uTime * 1.74 + seedPhase * 3.1);
     float waveE = sin(dot(vSphereDir, vec3(0.24, 0.38, -0.89)) * 132.0 + uTime * 2.35 + seedPhase * 4.7);
     float swellLong = waveA * 0.62 + waveB * 0.38;
-    float swell = (waveB * 0.45 + waveC * 0.55) * detailFade;
-    float chop = (waveC * 0.62 + waveD * 0.38) * detailFade;
-    float rippleA = (waveD * 0.72 + waveE * 0.28) * detailFade;
-    float rippleB = waveE * nearFade;
+    float swell = (waveB * 0.45 + waveC * 0.55) * midLod;
+    float chop = (waveC * 0.62 + waveD * 0.38) * midLod;
+    float rippleA = (waveD * 0.72 + waveE * 0.28) * fineLod;
+    float rippleB = waveE * fineLod;
     vec3 sphereDir = normalize(vSphereDir);
     vec3 tangent = normalize(cross(abs(sphereDir.y) < 0.94 ? vec3(0.0, 1.0, 0.0) : vec3(1.0, 0.0, 0.0), sphereDir));
     vec3 bitangent = normalize(cross(sphereDir, tangent));
@@ -1515,33 +1520,38 @@ export function createOceanMaterial(params: {
     float depthVariation = (swellLong * 0.65 + swell * 0.35) * 0.050 * (1.0 - abyssDepth);
 
     vec3 baseOcean = clamp(uOceanColor, vec3(0.0), vec3(1.0));
-    vec3 lagoon = mix(baseOcean * 1.26, vec3(0.20, 0.58, 0.50), 0.34);
-    vec3 shelfColor = mix(baseOcean * 0.98, vec3(0.035, 0.24, 0.34), 0.28);
+    vec3 lagoon = mix(baseOcean * 0.62, vec3(0.026, 0.155, 0.180), 0.30);
+    vec3 shelfColor = mix(baseOcean * 0.70, vec3(0.016, 0.120, 0.185), 0.36);
     vec3 openColor = mix(baseOcean * 0.64, vec3(0.004, 0.044, 0.110), 0.36);
     vec3 abyssColor = mix(baseOcean * 0.24, vec3(0.001, 0.007, 0.028), 0.56);
     vec3 color = mix(lagoon, shelfColor, clamp(shallowDepth + depthVariation, 0.0, 1.0));
     color = mix(color, openColor, shelfDepth);
     color = mix(color, abyssColor, abyssDepth);
     color = mix(color, mix(baseOcean * 0.72, vec3(0.030, 0.090, 0.130), 0.45), polarCool * 0.22);
+    float shallowContrast = (1.0 - smoothstep(0.020, 0.26, belowSea)) * smoothstep(0.030, 0.28, waterMask);
+    color *= 1.0 - shallowContrast * 0.22;
 
     float wavePattern = swellLong * 0.38 + swell * 0.36 + chop * 0.26;
-    float waveBright = smoothstep(0.40, 0.82, wavePattern) * (0.18 + detailFade * 0.82);
-    float waveDark = smoothstep(0.35, 0.85, -wavePattern) * (0.12 + detailFade * 0.70);
+    float waveBright = smoothstep(0.40, 0.82, wavePattern) * (0.18 + midLod * 0.52 + fineLod * 0.30);
+    float waveDark = smoothstep(0.35, 0.85, -wavePattern) * (0.12 + midLod * 0.42 + fineLod * 0.28);
     color *= 1.0 - waveDark * 0.075 * day;
     color += waveBright * vec3(0.018, 0.036, 0.044) * day;
 
-    float surfLine = (1.0 - smoothstep(0.004, 0.080, belowSea)) * smoothstep(0.040, 0.30, waterMask);
-    float coastBand = (1.0 - smoothstep(0.014, 0.42, belowSea)) * smoothstep(0.025, 0.34, waterMask);
-    float foamNoise = terrainFbm(vSphereDir * 84.0 + flowC * 4.2, uSeed + 1217.0, 2, 2.1, 0.48);
+    float surfLine = (1.0 - smoothstep(0.004, 0.060, belowSea)) * smoothstep(0.040, 0.30, waterMask);
+    float coastBand = (1.0 - smoothstep(0.014, 0.34, belowSea)) * smoothstep(0.025, 0.34, waterMask);
+    float foamNoise = 0.5;
+    if (midLod > 0.01 || coastBand > 0.01 || surfLine > 0.01) {
+      foamNoise = terrainFbm(vSphereDir * mix(46.0, 92.0, fineLod) + flowC * 4.2, uSeed + 1217.0, 2, 2.1, 0.48);
+    }
     float breakerPhase = belowSea * 34.0 + uTime * 1.45 + foamNoise * 1.65 + swell * 0.70;
     float breaker = pow(0.5 + 0.5 * sin(breakerPhase), 2.8);
-    breaker *= smoothstep(0.010, 0.060, belowSea) * (1.0 - smoothstep(0.11, 0.34, belowSea));
+    breaker *= smoothstep(0.010, 0.060, belowSea) * (1.0 - smoothstep(0.11, 0.34, belowSea)) * (0.35 + midLod * 0.40 + fineLod * 0.25);
     float washPhase = belowSea * 18.0 + uTime * 0.75 + foamNoise * 1.10;
-    float wash = (0.5 + 0.5 * sin(washPhase)) * (1.0 - smoothstep(0.04, 0.42, belowSea));
-    float lace = smoothstep(0.18, 0.82, foamNoise * 0.68 + rippleA * 0.18 + swell * 0.24 + breaker * 0.42);
-    float waveCaps = smoothstep(0.52, 0.90, swellLong * 0.34 + swell * 0.42 + chop * 0.34) * nearFade;
-    float coastFoam = coastBand * (0.18 + lace * 0.46 + breaker * 0.52 + wash * 0.18) * (0.34 + detailFade * 0.66);
-    float foam = (surfLine * (0.22 + breaker * 0.40) + coastFoam * 0.72 + waveCaps * 0.22) * (0.24 + day * 0.62);
+    float wash = (0.5 + 0.5 * sin(washPhase)) * (1.0 - smoothstep(0.04, 0.42, belowSea)) * (0.45 + fineLod * 0.55);
+    float lace = smoothstep(0.18, 0.82, foamNoise * 0.68 + rippleA * 0.18 + swell * 0.24 + breaker * 0.42) * (0.55 + fineLod * 0.45);
+    float waveCaps = smoothstep(0.52, 0.90, swellLong * 0.34 + swell * 0.42 + chop * 0.34) * fineLod;
+    float coastFoam = coastBand * (0.14 + lace * 0.38 + breaker * 0.44 + wash * 0.12) * (0.26 + midLod * 0.30 + fineLod * 0.24);
+    float foam = (surfLine * (0.16 + breaker * 0.30) + coastFoam * 0.58 + waveCaps * 0.16) * (0.22 + day * 0.56);
     float surface = clamp(swellLong * 0.24 + swell * 0.24 + chop * 0.13 + 0.45, 0.0, 1.0);
     float specular = pow(max(dot(waterNormal, halfDir), 0.0), mix(118.0, 280.0, orbitalFade)) * (0.035 + surface * 0.16) * day;
     vec3 nightWater = vec3(0.001, 0.004, 0.010);
@@ -1558,8 +1568,8 @@ export function createOceanMaterial(params: {
       * (0.018 + orbitalFade * 0.09) * day;
     vec3 reflected = vec3(0.34, 0.48, 0.60) * fresnel * (0.045 + day * 0.36);
     float foamLight = foam * clamp(day * 0.88 + lowSun * 0.20, 0.0, 1.0);
-    color = mix(color, vec3(0.76, 0.86, 0.83), clamp(foamLight * 0.58, 0.0, 0.62));
-    color += foamLight * vec3(0.035, 0.048, 0.042) * (0.20 + day * 0.62);
+    color = mix(color, vec3(0.86, 0.94, 0.90), clamp(foamLight * 0.46, 0.0, 0.46));
+    color += foamLight * vec3(0.035, 0.044, 0.038) * (0.18 + day * 0.48);
     reflected *= mix(vec3(1.0), uAtmosphereLightColor, atmosphereLightInfluence * 0.40);
     reflected *= mix(vec3(1.0), sunsetTint, lowSun * extinctionStrength * 0.16);
     reflected *= day;
@@ -1601,6 +1611,8 @@ export function createOceanMaterial(params: {
       uAtmosphereLightColor: { value: atmosphereLightColor },
       uTwilightColor: { value: twilightColor },
       uAtmosphereExtinctionStrength: { value: params.atmosphereExtinctionStrength },
+      uOceanFineDistance: { value: params.oceanFineDistance },
+      uOceanMidDistance: { value: params.oceanMidDistance },
       uCloudCoverage: { value: params.cloudCoverage },
       uCloudScale: { value: params.cloudScale },
       uCloudSoftness: { value: params.cloudSoftness },

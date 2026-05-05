@@ -546,6 +546,8 @@ export class PlanetRenderer {
         cloudStorms: this.cloudStorms,
         cloudBands: this.cloudBands,
         cloudDetail: this.cloudDetail,
+        oceanFineDistance: WORLD_SCALE.localDetailFar * 1.35,
+        oceanMidDistance: WORLD_SCALE.localDetailFar * 7.5,
         useTerrainAttribute: true,
       })
       this.oceanMesh = new THREE.Mesh(oceanGeo, this.oceanMaterial)
