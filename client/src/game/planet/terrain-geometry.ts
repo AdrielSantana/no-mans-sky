@@ -14,6 +14,7 @@ export interface TerrainChunkGeometryData {
   heights: Float32Array
   microAo: Float32Array
   macroAo: Float32Array
+  grassPatch: Float32Array
   indices: Uint32Array
   mainPositions: Float32Array
 }
@@ -58,6 +59,55 @@ function cross(ax: number, ay: number, az: number, bx: number, by: number, bz: n
 function smoothstep(edge0: number, edge1: number, value: number): number {
   const t = Math.max(0, Math.min(1, (value - edge0) / Math.max(edge1 - edge0, 1e-6)))
   return t * t * (3 - 2 * t)
+}
+
+function hashGrid(ix: number, iy: number, iz: number, seed: number): number {
+  let h = Math.imul(ix, 374761393) ^ Math.imul(iy, 668265263) ^ Math.imul(iz, 2147483647) ^ seed
+  h = Math.imul(h ^ (h >>> 13), 1274126177)
+  return ((h ^ (h >>> 16)) >>> 0) / 4294967295
+}
+
+function noiseFade(t: number): number {
+  return t * t * t * (t * (t * 6 - 15) + 10)
+}
+
+function lerp(a: number, b: number, t: number): number {
+  return a + (b - a) * t
+}
+
+function valueNoise3(x: number, y: number, z: number, seed: number): number {
+  const ix = Math.floor(x)
+  const iy = Math.floor(y)
+  const iz = Math.floor(z)
+  const fx = noiseFade(x - ix)
+  const fy = noiseFade(y - iy)
+  const fz = noiseFade(z - iz)
+
+  const x00 = lerp(hashGrid(ix, iy, iz, seed), hashGrid(ix + 1, iy, iz, seed), fx)
+  const x10 = lerp(hashGrid(ix, iy + 1, iz, seed), hashGrid(ix + 1, iy + 1, iz, seed), fx)
+  const x01 = lerp(hashGrid(ix, iy, iz + 1, seed), hashGrid(ix + 1, iy, iz + 1, seed), fx)
+  const x11 = lerp(hashGrid(ix, iy + 1, iz + 1, seed), hashGrid(ix + 1, iy + 1, iz + 1, seed), fx)
+  return lerp(lerp(x00, x10, fy), lerp(x01, x11, fy), fz)
+}
+
+function grassPatchNoise(x: number, y: number, z: number, seed: number): number {
+  let frequency = 1 / 72
+  let amplitude = 0.62
+  let total = 0
+  let norm = 0
+
+  for (let octave = 0; octave < 3; octave++) {
+    total += valueNoise3(x * frequency, y * frequency, z * frequency, seed + octave * 1013) * amplitude
+    norm += amplitude
+    frequency *= 2.05
+    amplitude *= 0.48
+  }
+
+  return norm > 0 ? total / norm : 0
+}
+
+function computeGrassPatchMask(x: number, y: number, z: number, seed: number): number {
+  return smoothstep(0.44, 0.60, grassPatchNoise(x, y, z, seed))
 }
 
 function computeTerrainNormal(
@@ -318,6 +368,7 @@ export function buildTerrainChunkGeometryData(
   const heights = new Float32Array(vertCount)
   const microAo = new Float32Array(vertCount)
   const macroAo = new Float32Array(vertCount)
+  const grassPatch = new Float32Array(vertCount)
 
   for (let iy = 0; iy < gs; iy++) {
     for (let ix = 0; ix < gs; ix++) {
@@ -336,6 +387,7 @@ export function buildTerrainChunkGeometryData(
       heights[i] = height
       microAo[i] = computeMicroAoAtDirection(dir, macroHeight, microHeight, terrain)
       macroAo[i] = computeMacroAoAtDirection(dir, macroHeight, terrain)
+      grassPatch[i] = computeGrassPatchMask(positions[i * 3], positions[i * 3 + 1], positions[i * 3 + 2], terrain.seed)
     }
   }
 
@@ -369,6 +421,7 @@ export function buildTerrainChunkGeometryData(
       heights,
       microAo,
       macroAo,
+      grassPatch,
       indices,
       normals: mainNormals,
       mainPositions: positions.slice(),
@@ -388,11 +441,13 @@ export function buildTerrainChunkGeometryData(
   const allHeights = new Float32Array(totalVertCount)
   const allMicroAo = new Float32Array(totalVertCount)
   const allMacroAo = new Float32Array(totalVertCount)
+  const allGrassPatch = new Float32Array(totalVertCount)
   const allNormals = new Float32Array(totalVertCount * 3)
   allPositions.set(positions, 0)
   allHeights.set(heights, 0)
   allMicroAo.set(microAo, 0)
   allMacroAo.set(macroAo, 0)
+  allGrassPatch.set(grassPatch, 0)
   allNormals.set(mainNormals, 0)
 
   let skirtIdx = mainVertCount
@@ -413,6 +468,7 @@ export function buildTerrainChunkGeometryData(
     allHeights[targetI] = heights[mainI]
     allMicroAo[targetI] = microAo[mainI]
     allMacroAo[targetI] = macroAo[mainI]
+    allGrassPatch[targetI] = grassPatch[mainI]
     allNormals[targetI * 3] = mainNormals[mainI * 3]
     allNormals[targetI * 3 + 1] = mainNormals[mainI * 3 + 1]
     allNormals[targetI * 3 + 2] = mainNormals[mainI * 3 + 2]
@@ -490,6 +546,7 @@ export function buildTerrainChunkGeometryData(
     heights: allHeights,
     microAo: allMicroAo,
     macroAo: allMacroAo,
+    grassPatch: allGrassPatch,
     indices: allIndices,
     normals: allNormals,
     mainPositions: positions.slice(),

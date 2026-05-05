@@ -162,8 +162,14 @@ function buildBladeGeometry(): THREE.InstancedBufferGeometry {
   return geometry
 }
 
-export function createFluffyGrassMaterial(settings: FluffyGrassSettings): THREE.ShaderMaterial {
+export function createFluffyGrassMaterial(
+  settings: FluffyGrassSettings,
+  variant: FluffyGrassVariant = 'near',
+): THREE.ShaderMaterial {
   return new THREE.ShaderMaterial({
+    defines: {
+      GRASS_ANIMATED: variant === 'near' ? 1 : 0,
+    },
     uniforms: {
       uAlphaMap: { value: GRASS_ALPHA_TEXTURE },
       uTime: { value: 0 },
@@ -221,6 +227,7 @@ export function createFluffyGrassMaterial(settings: FluffyGrassSettings): THREE.
         vSeed = instanceSeed;
 
         vec3 transformed = position;
+        #if GRASS_ANIMATED == 1
         vec3 instanceWorld = (modelMatrix * instanceMatrix * vec4(0.0, 0.0, 0.0, 1.0)).xyz;
         vec3 windDirA = normalize(vec3(0.74, 0.18, -0.65));
         vec3 windDirB = normalize(vec3(-0.32, 0.09, -0.94));
@@ -232,6 +239,7 @@ export function createFluffyGrassMaterial(settings: FluffyGrassSettings): THREE.
         float bend = vTip * vTip * uWindStrength * gust * 0.30;
         transformed.x += bend;
         transformed.z += bend * 0.24 * cos(dot(instanceWorld, windDirB) * 0.030 + uTime * 0.80);
+        #endif
 
         #ifdef USE_INSTANCING
           transformed = (instanceMatrix * vec4(transformed, 1.0)).xyz;

@@ -351,8 +351,8 @@ export class PlanetRenderer {
     const waterLevel = params.waterLevel ?? 0
     this.seaHeight = getSeaHeight(waterLevel, params.planetType)
     if (this.grassSettings.enabled && params.planetType === 'rocky') {
-      this.grassMaterial = createFluffyGrassMaterial(this.grassSettings)
-      this.farGrassMaterial = createFluffyGrassMaterial(this.grassSettings)
+      this.grassMaterial = createFluffyGrassMaterial(this.grassSettings, 'near')
+      this.farGrassMaterial = createFluffyGrassMaterial(this.grassSettings, 'far')
       this.updateLightColorUniforms()
     }
 
@@ -616,6 +616,8 @@ export class PlanetRenderer {
       this.group.add(this.atmosphereMesh)
     }
 
+    this.updateGrassGroundAoUniforms()
+
     // Initialize 6 quadtree roots
     for (let f = 0; f < NUM_FACES; f++) {
       this.quadtrees.push(createRoot(f as CubeFace))
@@ -698,6 +700,23 @@ export class PlanetRenderer {
   private setFloatUniform(material: THREE.ShaderMaterial | null, name: string, value: number) {
     const uniform = material?.uniforms[name]
     if (uniform) uniform.value = value
+  }
+
+  private getGrassGroundAoStrength(): number {
+    if (!this.grassSettings.enabled || this.terrainParams.planetType !== 'rocky') return 0
+    return THREE.MathUtils.clamp(this.grassSettings.density * 0.34, 0, 0.46)
+  }
+
+  private updateGrassGroundAoUniforms() {
+    const strength = this.getGrassGroundAoStrength()
+    const materials = [
+      this.material,
+      ...this.farLodMaterials,
+      this.fallbackMaterial,
+    ]
+    for (const material of materials) {
+      this.setFloatUniform(material, 'uGrassGroundAoStrength', strength)
+    }
   }
 
   private updateLightColorUniforms() {
@@ -808,18 +827,20 @@ export class PlanetRenderer {
 
     if (!next.enabled || this.terrainParams.planetType !== 'rocky') {
       this.clearGrassLayers()
+      this.updateGrassGroundAoUniforms()
       return
     }
 
     if (!this.grassMaterial) {
-      this.grassMaterial = createFluffyGrassMaterial(this.grassSettings)
+      this.grassMaterial = createFluffyGrassMaterial(this.grassSettings, 'near')
     }
     if (!this.farGrassMaterial) {
-      this.farGrassMaterial = createFluffyGrassMaterial(this.grassSettings)
+      this.farGrassMaterial = createFluffyGrassMaterial(this.grassSettings, 'far')
     }
     this.updateLightColorUniforms()
     this.setFloatUniform(this.grassMaterial, 'uTerrainAoStrength', this.terrainAoStrength)
     this.setFloatUniform(this.farGrassMaterial, 'uTerrainAoStrength', this.terrainAoStrength)
+    this.updateGrassGroundAoUniforms()
 
     if (rebuild) {
       this.rebuildGrassLayers()

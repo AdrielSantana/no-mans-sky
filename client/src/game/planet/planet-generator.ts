@@ -406,6 +406,32 @@ vec3 applyPlanetLighting(vec3 albedo, vec3 normal, vec3 radialNormal, vec3 world
 }
 `
 
+const TERRAIN_GRASS_AO_GLSL = /* glsl */ `
+uniform float uGrassGroundAoStrength;
+
+float terrainGrassGroundMask(float grassPatch, float heightNorm, float moisture, float slope, float coast, float rockMask, float snowMask) {
+  if (uPlanetKind > 0.5) return 0.0;
+
+  float aboveSeaMask = smoothstep(uSeaHeight + 0.018, uSeaHeight + 0.075, vHeight);
+  float slopeDot = clamp(1.0 - slope, 0.0, 1.0);
+  float slopeMask = smoothstep(0.62, 0.88, slopeDot);
+  float grassBiomeMask = smoothstep(0.34, 0.62, moisture)
+    * (1.0 - coast)
+    * (1.0 - clamp(rockMask, 0.0, 1.0))
+    * (1.0 - clamp(snowMask, 0.0, 1.0))
+    * (1.0 - smoothstep(0.58, 0.70, heightNorm));
+
+  return clamp(grassPatch, 0.0, 1.0) * aboveSeaMask * slopeMask * grassBiomeMask;
+}
+
+vec3 applyGrassGroundAo(vec3 color, float grassPatch, float heightNorm, float moisture, float slope, float coast, float rockMask, float snowMask) {
+  float mask = terrainGrassGroundMask(grassPatch, heightNorm, moisture, slope, coast, rockMask, snowMask);
+  float amount = clamp(mask * uGrassGroundAoStrength, 0.0, 0.48);
+  vec3 occluded = color * vec3(0.58, 0.62, 0.52);
+  return mix(color, occluded, amount);
+}
+`
+
 export const CLOUD_PATTERN_GLSL = /* glsl */ `
 uniform float uCloudCoverage;
 uniform float uCloudScale;
@@ -770,6 +796,7 @@ export function createPlanetMaterial(params: {
   attribute float terrainHeight;
   attribute float terrainMicroAo;
   attribute float terrainMacroAo;
+  attribute float terrainGrassPatch;
 
   varying vec3 vNormal;
   varying vec3 vRadialNormal;
@@ -780,6 +807,7 @@ export function createPlanetMaterial(params: {
   varying float vNearDetail;
   varying float vMicroAo;
   varying float vMacroAo;
+  varying float vGrassPatch;
 
   float getHeight(vec3 sphereDir) {
     float continental = terrainFbm(sphereDir * uFrequency, uSeed, 4, 2.0, 0.5);
@@ -802,6 +830,7 @@ export function createPlanetMaterial(params: {
     vHeight = h;
     vMicroAo = terrainMicroAo;
     vMacroAo = terrainMacroAo;
+    vGrassPatch = terrainGrassPatch;
     vDetail = 0.0;
 
     vec4 worldPos = modelMatrix * vec4(position, 1.0);
@@ -849,8 +878,10 @@ export function createPlanetMaterial(params: {
   varying float vNearDetail;
   varying float vMicroAo;
   varying float vMacroAo;
+  varying float vGrassPatch;
 
   ${PLANET_LIGHTING_GLSL}
+  ${TERRAIN_GRASS_AO_GLSL}
   ${TERRAIN_CLOUD_SHADOW_GLSL}
 
   float saturate(float v) {
@@ -981,6 +1012,7 @@ export function createPlanetMaterial(params: {
     vec3 finalColor = applyPlanetLighting(terrainColor, finalNormal, vRadialNormal, vWorldPos, heightNorm, slope);
     finalColor = applyTerrainMacroAoToColor(finalColor, vMacroAo, 0.28);
     finalColor = applyTerrainMicroAoToColor(finalColor, vMicroAo, 0.52 * vNearDetail);
+    finalColor = applyGrassGroundAo(finalColor, vGrassPatch, heightNorm, moisture, slope, coast, rockMask, snowMask);
     finalColor = applyTerrainCloudShadow(finalColor, vRadialNormal, 1.0);
     #include <logdepthbuf_fragment>
     gl_FragColor = vec4(finalColor, 1.0);
@@ -1034,6 +1066,7 @@ export function createPlanetMaterial(params: {
       uTextureFarScale: { value: params.textureFarScale },
       uTextureFarStrength: { value: params.textureFarStrength },
       uTerrainAoStrength: { value: params.terrainAoStrength },
+      uGrassGroundAoStrength: { value: 0 },
       uSurfaceLightingBlend: { value: 0 },
     },
   })
@@ -1107,6 +1140,7 @@ export function createPlanetFarMaterial(params: {
   uniform float uOctaves;
   attribute float terrainHeight;
   attribute float terrainMacroAo;
+  attribute float terrainGrassPatch;
 
   varying vec3 vWorldPos;
   varying vec3 vNormal;
@@ -1115,6 +1149,7 @@ export function createPlanetFarMaterial(params: {
   varying float vHeight;
   varying float vMacro;
   varying float vMacroAo;
+  varying float vGrassPatch;
 
   float getHeight(vec3 sphereDir) {
     float continental = terrainFbm(sphereDir * uFrequency, uSeed, 4, 2.0, 0.5);
@@ -1136,6 +1171,7 @@ export function createPlanetFarMaterial(params: {
     float h = terrainHeight;
     vHeight = h;
     vMacroAo = terrainMacroAo;
+    vGrassPatch = terrainGrassPatch;
     vMacro = terrainFbm(sphereDir * (uFrequency * 2.4) + 19.0, uSeed + 31.0, 3, 2.0, 0.5);
 
     vec4 worldPos = modelMatrix * vec4(position, 1.0);
@@ -1174,8 +1210,10 @@ export function createPlanetFarMaterial(params: {
   varying float vHeight;
   varying float vMacro;
   varying float vMacroAo;
+  varying float vGrassPatch;
 
   ${PLANET_LIGHTING_GLSL}
+  ${TERRAIN_GRASS_AO_GLSL}
   ${TERRAIN_CLOUD_SHADOW_GLSL}
 
   float saturate(float v) {
@@ -1257,6 +1295,7 @@ export function createPlanetFarMaterial(params: {
 
     vec3 finalColor = applyPlanetLighting(terrain, shadingNormal, vRadialNormal, vWorldPos, heightNorm, slope);
     finalColor = applyTerrainMacroAoToColor(finalColor, vMacroAo, 0.24);
+    finalColor = applyGrassGroundAo(finalColor, vGrassPatch, heightNorm, moisture, slope, coast, rockMask, snowMask);
     finalColor = applyTerrainCloudShadow(finalColor, vRadialNormal, 1.0);
     #include <logdepthbuf_fragment>
     gl_FragColor = vec4(finalColor, 1.0);
@@ -1316,6 +1355,7 @@ export function createPlanetFarMaterial(params: {
       uTextureFarScale: { value: params.textureFarScale },
       uTextureFarStrength: { value: params.textureFarStrength },
       uTerrainAoStrength: { value: params.terrainAoStrength },
+      uGrassGroundAoStrength: { value: 0 },
       uSurfaceLightingBlend: { value: 0 },
     },
   })
