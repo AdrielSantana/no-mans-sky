@@ -4,8 +4,75 @@ import { EffectComposer } from 'three/examples/jsm/postprocessing/EffectComposer
 import { RenderPass } from 'three/examples/jsm/postprocessing/RenderPass.js'
 import { UnrealBloomPass } from 'three/examples/jsm/postprocessing/UnrealBloomPass.js'
 import { OutputPass } from 'three/examples/jsm/postprocessing/OutputPass.js'
+import { ShaderPass } from 'three/examples/jsm/postprocessing/ShaderPass.js'
 import { createSkybox } from './skybox'
 import { WORLD_SCALE } from './world-scale'
+
+const UNDERWATER_SHADER = {
+  uniforms: {
+    tDiffuse: { value: null },
+    uAmount: { value: 0 },
+    uDepth: { value: 0 },
+    uResolution: { value: new THREE.Vector2(1, 1) },
+    uTime: { value: 0 },
+    uWaterColor: { value: new THREE.Color(0x123d55) },
+  },
+  vertexShader: /* glsl */ `
+    varying vec2 vUv;
+
+    void main() {
+      vUv = uv;
+      gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+    }
+  `,
+  fragmentShader: /* glsl */ `
+    uniform sampler2D tDiffuse;
+    uniform float uAmount;
+    uniform float uDepth;
+    uniform vec2 uResolution;
+    uniform float uTime;
+    uniform vec3 uWaterColor;
+
+    varying vec2 vUv;
+
+    void main() {
+      float amount = clamp(uAmount, 0.0, 1.0);
+      float depth = clamp(uDepth, 0.0, 1.0);
+      vec2 texel = 1.0 / max(uResolution, vec2(1.0));
+      vec2 wave = vec2(
+        sin((vUv.y + uTime * 0.035) * 38.0),
+        cos((vUv.x - uTime * 0.026) * 31.0)
+      ) * texel * (2.0 + depth * 5.0) * amount;
+
+      vec4 base = texture2D(tDiffuse, vUv + wave);
+      vec3 blur = base.rgb;
+      float blurRadius = (1.5 + depth * 5.5) * amount;
+      blur += texture2D(tDiffuse, vUv + vec2(texel.x, 0.0) * blurRadius).rgb;
+      blur += texture2D(tDiffuse, vUv - vec2(texel.x, 0.0) * blurRadius).rgb;
+      blur += texture2D(tDiffuse, vUv + vec2(0.0, texel.y) * blurRadius).rgb;
+      blur += texture2D(tDiffuse, vUv - vec2(0.0, texel.y) * blurRadius).rgb;
+      blur *= 0.2;
+
+      vec3 color = mix(base.rgb, blur, amount * (0.46 + depth * 0.34));
+      float luminance = dot(color, vec3(0.2126, 0.7152, 0.0722));
+      color = mix(color, vec3(luminance), amount * (0.14 + depth * 0.20));
+
+      vec3 waterTint = mix(clamp(uWaterColor, vec3(0.0), vec3(1.0)), vec3(0.010, 0.070, 0.100), 0.46);
+      float murk = amount * (0.52 + depth * 0.40);
+      color = mix(color, waterTint, murk);
+
+      float vignette = smoothstep(0.18, 0.82, length(vUv - 0.5));
+      color *= 1.0 - amount * (0.16 + depth * 0.18 + vignette * 0.22);
+
+      float caustic = sin((vUv.x + vUv.y) * 84.0 + uTime * 1.35)
+        * sin((vUv.x - vUv.y) * 63.0 - uTime * 1.10);
+      caustic = smoothstep(0.56, 0.94, caustic * 0.5 + 0.5);
+      color += waterTint * caustic * amount * (1.0 - depth * 0.72) * 0.038;
+
+      gl_FragColor = vec4(color, base.a);
+    }
+  `,
+}
 
 export class GameEngine {
   readonly scene: THREE.Scene
@@ -21,6 +88,7 @@ export class GameEngine {
   private pixelRatioLimit = Math.min(window.devicePixelRatio, 2)
   private sunLight: THREE.PointLight | null = null
   private bloomPass: UnrealBloomPass | null = null
+  private underwaterPass: ShaderPass | null = null
   private outputPass: OutputPass | null = null
 
   constructor(container: HTMLElement) {
@@ -69,6 +137,11 @@ export class GameEngine {
     bloomPass.radius = 0.5
     this.composer.addPass(bloomPass)
     this.bloomPass = bloomPass
+    const underwaterPass = new ShaderPass(UNDERWATER_SHADER)
+    underwaterPass.enabled = false
+    underwaterPass.uniforms.uResolution.value.set(width * this.pixelRatioLimit, height * this.pixelRatioLimit)
+    this.composer.addPass(underwaterPass)
+    this.underwaterPass = underwaterPass
     const outputPass = new OutputPass()
     this.composer.addPass(outputPass)
     this.outputPass = outputPass
@@ -124,6 +197,15 @@ export class GameEngine {
 
   setToneMappingExposure(exposure: number) {
     this.renderer.toneMappingExposure = exposure
+  }
+
+  setUnderwaterEffect(settings: { amount: number; depth: number; color: THREE.Color } | null) {
+    if (!this.underwaterPass) return
+    const amount = THREE.MathUtils.clamp(settings?.amount ?? 0, 0, 1)
+    this.underwaterPass.enabled = amount > 0.001
+    this.underwaterPass.uniforms.uAmount.value = amount
+    this.underwaterPass.uniforms.uDepth.value = THREE.MathUtils.clamp(settings?.depth ?? 0, 0, 1)
+    if (settings) this.underwaterPass.uniforms.uWaterColor.value.copy(settings.color)
   }
 
   getToneMappingExposure(): number {
@@ -202,6 +284,7 @@ export class GameEngine {
     this.camera.updateProjectionMatrix()
     this.renderer.setSize(w, h)
     this.composer.setSize(w, h)
+    this.underwaterPass?.uniforms.uResolution.value.set(w * this.pixelRatioLimit, h * this.pixelRatioLimit)
   }
 
   start(onFrame?: (dt: number) => void) {
@@ -211,6 +294,7 @@ export class GameEngine {
       const dt = this.clock.getDelta()
       this.controls.update()
       onFrame?.(dt)
+      if (this.underwaterPass?.enabled) this.underwaterPass.uniforms.uTime.value += dt
       this.composer.render()
     }
     loop()
@@ -228,6 +312,7 @@ export class GameEngine {
     window.removeEventListener('resize', this.boundResize)
     this.controls.dispose()
     this.outputPass?.dispose()
+    this.underwaterPass?.dispose()
     this.composer.dispose()
     this.renderer.dispose()
     this.container.removeChild(this.renderer.domElement)

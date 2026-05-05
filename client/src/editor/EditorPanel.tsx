@@ -886,6 +886,25 @@ export function EditorPanel({ params, onChange }: Props) {
           <span className="editor-value">{params.cloudDetail.toFixed(2)}</span>
         </div>
         <div className="editor-row">
+          <span className="editor-label">Color</span>
+          <input className="editor-color" type="color" value={params.cloudColor} onChange={e => set('cloudColor', e.target.value)} />
+          <span className="editor-value">{params.cloudColor}</span>
+        </div>
+        <div className="editor-row">
+          <span className="editor-label">Color Strength</span>
+          <input
+            className="editor-slider"
+            type="range"
+            min={RANGES.cloudColorStrength.min}
+            max={RANGES.cloudColorStrength.max}
+            step={RANGES.cloudColorStrength.step}
+            value={params.cloudColorStrength}
+            onInput={e => set('cloudColorStrength', Number(e.currentTarget.value))}
+            onChange={e => set('cloudColorStrength', Number(e.target.value))}
+          />
+          <span className="editor-value">{params.cloudColorStrength.toFixed(2)}</span>
+        </div>
+        <div className="editor-row">
           <label style={{ display: 'flex', alignItems: 'center', gap: 6, cursor: 'pointer' }}>
             <input
               type="checkbox"

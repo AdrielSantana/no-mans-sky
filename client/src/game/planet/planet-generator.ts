@@ -1468,12 +1468,10 @@ export function createOceanMaterial(params: {
     if (waterMask <= 0.025) discard;
 
     vec3 baseNormal = normalize(vNormal);
-    if (!gl_FrontFacing) {
-      baseNormal = -baseNormal;
-    }
     vec3 viewDir = normalize(cameraPosition - vWorldPos);
     vec3 lightDir = normalize(uSunPosition - vWorldPos);
     float extinctionStrength = clamp(uAtmosphereExtinctionStrength, 0.0, 2.0);
+    float innerSurface = gl_FrontFacing ? 0.0 : 1.0;
 
     float cameraDist = distance(cameraPosition, vWorldPos);
     float farWater = smoothstep(0.75, 2.65, cameraDist / uPlanetRadius);
@@ -1502,8 +1500,10 @@ export function createOceanMaterial(params: {
 
     vec3 halfDir = normalize(lightDir + viewDir);
     float nDotL = dot(waterNormal, lightDir);
-    float day = smoothstep(-0.04, 0.64, nDotL);
-    float diffuse = max(nDotL, 0.0);
+    float outerDay = smoothstep(-0.04, 0.64, nDotL);
+    float innerDay = smoothstep(-0.12, 0.56, dot(sphereDir, lightDir));
+    float day = max(outerDay, innerDay * innerSurface * 0.92);
+    float diffuse = max(max(nDotL, 0.0), innerDay * innerSurface * 0.38);
     float lowSun = pow(1.0 - clamp(nDotL * 0.90 + 0.10, 0.0, 1.0), 1.7)
       * smoothstep(-0.10, 0.46, nDotL);
     float fresnel = pow(1.0 - max(dot(viewDir, waterNormal), 0.0), 4.6);
@@ -1547,6 +1547,7 @@ export function createOceanMaterial(params: {
     vec3 nightWater = vec3(0.001, 0.004, 0.010);
     color *= mix(0.008, 1.0, day) * mix(1.0, 0.82, lowSun * extinctionStrength);
     color += nightWater * (1.0 - day) * 0.010;
+    color += baseOcean * innerDay * innerSurface * 0.18;
     const float atmosphereLightInfluence = 0.85;
     vec3 sunsetTint = mix(uTwilightColor, uSunColor, 0.24);
     vec3 waterLightColor = mix(uAtmosphereLightColor, uSunColor, 0.18);
@@ -1564,9 +1565,7 @@ export function createOceanMaterial(params: {
     reflected *= day;
     color += reflected + (specular + sunGlint) * mix(vec3(1.0, 0.92, 0.78), waterLightColor, atmosphereLightInfluence * 0.90);
     float alpha = mix(0.64, 0.90, smoothstep(0.02, 0.52, belowSea));
-    alpha = mix(alpha, 0.94, farWater);
-    alpha += fresnel * 0.035 * day;
-    alpha *= smoothstep(0.025, 0.22, waterMask);
+    alpha = 1.0;
     #include <logdepthbuf_fragment>
     gl_FragColor = vec4(color, alpha);
   }
@@ -1575,7 +1574,7 @@ export function createOceanMaterial(params: {
   return new THREE.ShaderMaterial({
     vertexShader,
     fragmentShader,
-    transparent: true,
+    transparent: false,
     depthWrite: true,
     side: THREE.DoubleSide,
     uniforms: {
@@ -2068,10 +2067,12 @@ export function createCloudMaterial(params: {
   sunColor: THREE.Color | string
   atmosphereLightColor: THREE.Color | string
   sunPosition: THREE.Vector3
+  cloudColor: string
 }): THREE.ShaderMaterial {
   const atmosphereColor = new THREE.Color(params.atmosphereColor)
   const sunColor = new THREE.Color(params.sunColor)
   const atmosphereLightColor = new THREE.Color(params.atmosphereLightColor)
+  const cloudColor = new THREE.Color(params.cloudColor)
 
   const vertexShader = /* glsl */ `
   #include <common>
@@ -2097,10 +2098,12 @@ export function createCloudMaterial(params: {
   uniform vec3 uAtmosphereColor;
   uniform vec3 uSunColor;
   uniform vec3 uAtmosphereLightColor;
+  uniform vec3 uCloudColor;
   uniform vec3 uSunPosition;
   uniform vec3 uPlanetCenter;
   uniform float uSeed;
   uniform float uOpacity;
+  uniform float uCloudColorStrength;
 
   varying vec3 vWorldPos;
   varying vec3 vNormal;
@@ -2126,7 +2129,7 @@ export function createCloudMaterial(params: {
     float forwardGlow = pow(max(dot(toCamera, sunDir), 0.0), 7.5);
     float rimLight = pow(1.0 - max(dot(toCamera, shellNormal), 0.0), 3.0);
 
-    vec3 coolWhite = mix(vec3(0.74, 0.82, 0.86), uAtmosphereColor, 0.16);
+    vec3 coolWhite = mix(uCloudColor, uAtmosphereColor, 0.16);
     vec3 sunWhite = mix(vec3(1.0), uSunColor, 0.28);
     vec3 sunset = mix(vec3(1.0, 0.40, 0.14), uSunColor, 0.42);
     vec3 denseCore = mix(coolWhite * vec3(0.58, 0.62, 0.68), uAtmosphereLightColor * 0.32, 0.25);
@@ -2145,6 +2148,10 @@ export function createCloudMaterial(params: {
     color += mix(uAtmosphereLightColor, uSunColor, 0.48) * silver * (0.10 + day * 0.70);
     color += uAtmosphereLightColor * rim * (0.012 + day * 0.13) * (1.0 + volume * 0.40);
     color *= mix(0.74, 1.10 + volume * 0.12, body);
+
+    float colorStr = clamp(uCloudColorStrength, 0.0, 1.0);
+    float lum = dot(color, vec3(0.2126, 0.7152, 0.0722));
+    color = mix(color, uCloudColor * max(lum, 0.0), colorStr);
 
     float alpha = cloud * clamp(uOpacity, 0.0, 1.0);
     alpha *= mix(0.28, 1.0, day);
@@ -2170,11 +2177,13 @@ export function createCloudMaterial(params: {
       uAtmosphereColor: { value: atmosphereColor },
       uSunColor: { value: sunColor },
       uAtmosphereLightColor: { value: atmosphereLightColor },
+      uCloudColor: { value: cloudColor },
       uSunPosition: { value: params.sunPosition.clone() },
       uPlanetCenter: { value: new THREE.Vector3() },
       uSeed: { value: params.seed },
       uTime: { value: 0 },
       uOpacity: { value: params.opacity },
+      uCloudColorStrength: { value: 0 },
       uCloudCoverage: { value: params.coverage },
       uCloudScale: { value: params.scale },
       uCloudSoftness: { value: params.softness },
@@ -2197,10 +2206,12 @@ export function createCloudBillboardMaterial(params: {
   sunColor: THREE.Color | string
   atmosphereLightColor: THREE.Color | string
   sunPosition: THREE.Vector3
+  cloudColor: string
 }): THREE.ShaderMaterial {
   const atmosphereColor = new THREE.Color(params.atmosphereColor)
   const sunColor = new THREE.Color(params.sunColor)
   const atmosphereLightColor = new THREE.Color(params.atmosphereLightColor)
+  const cloudColor = new THREE.Color(params.cloudColor)
 
   const vertexShader = /* glsl */ `
   #include <common>
@@ -2232,10 +2243,12 @@ export function createCloudBillboardMaterial(params: {
   uniform vec3 uAtmosphereColor;
   uniform vec3 uSunColor;
   uniform vec3 uAtmosphereLightColor;
+  uniform vec3 uCloudColor;
   uniform vec3 uSunPosition;
   uniform vec3 uPlanetCenter;
   uniform float uOpacity;
   uniform float uTime;
+  uniform float uCloudColorStrength;
 
   varying vec2 vUv;
   varying float vAlpha;
@@ -2278,7 +2291,7 @@ export function createCloudBillboardMaterial(params: {
     float nDotL = dot(dir, sunDir);
     float day = smoothstep(-0.22, 0.58, nDotL);
     float direct = clamp(nDotL, 0.0, 1.0);
-    vec3 cloudDay = mix(vec3(0.74, 0.82, 0.86), uAtmosphereColor, 0.13);
+    vec3 cloudDay = mix(uCloudColor, uAtmosphereColor, 0.13);
     cloudDay = mix(cloudDay * (0.56 + direct * 0.42), mix(vec3(1.0), uSunColor, 0.25), direct * 0.52);
     vec3 sunset = mix(vec3(1.0, 0.42, 0.16), uSunColor, 0.42);
     cloudDay = mix(cloudDay, sunset, smoothstep(-0.24, 0.22, nDotL) * (1.0 - smoothstep(0.12, 0.54, nDotL)) * 0.32);
@@ -2288,6 +2301,10 @@ export function createCloudBillboardMaterial(params: {
     float innerShade = core * (1.0 - direct) * 0.18;
     color = mix(color, color * vec3(0.58, 0.64, 0.72), innerShade);
     color += mix(uAtmosphereLightColor, uSunColor, 0.35) * (feather * day * 0.07 + edgeLight * 0.22);
+
+    float colorStr = clamp(uCloudColorStrength, 0.0, 1.0);
+    float lum = dot(color, vec3(0.2126, 0.7152, 0.0722));
+    color = mix(color, uCloudColor * max(lum, 0.0), colorStr);
 
     float alpha = mask * vAlpha * clamp(uOpacity, 0.0, 1.0);
     alpha *= mix(0.35, 1.0, day);
@@ -2311,10 +2328,12 @@ export function createCloudBillboardMaterial(params: {
       uAtmosphereColor: { value: atmosphereColor },
       uSunColor: { value: sunColor },
       uAtmosphereLightColor: { value: atmosphereLightColor },
+      uCloudColor: { value: cloudColor },
       uSunPosition: { value: params.sunPosition.clone() },
       uPlanetCenter: { value: new THREE.Vector3() },
       uOpacity: { value: params.opacity },
       uTime: { value: 0 },
+      uCloudColorStrength: { value: 0 },
     },
   })
 }

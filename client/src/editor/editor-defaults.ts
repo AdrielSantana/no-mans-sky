@@ -31,6 +31,8 @@ export interface EditorParams {
   cloudStorms: number
   cloudBands: number
   cloudDetail: number
+  cloudColor: string
+  cloudColorStrength: number
   cloudBillboards: boolean
   cloudBillboardCount: number
   grassEnabled: boolean
@@ -146,8 +148,10 @@ export const DEFAULT_PARAMS: EditorParams = {
   cloudStorms: 0.62,
   cloudBands: 0.72,
   cloudDetail: 0.82,
+  cloudColor: '#e8edf2',
+  cloudColorStrength: 0,
   cloudBillboards: true,
-  cloudBillboardCount: 1600,
+  cloudBillboardCount: 3200,
   grassEnabled: true,
   grassDensity: 1.05,
   grassHeight: 1.15,
@@ -221,7 +225,8 @@ export const RANGES = {
   cloudStorms: { min: 0, max: 1.5, step: 0.01 },
   cloudBands: { min: 0, max: 1.5, step: 0.01 },
   cloudDetail: { min: 0, max: 1.5, step: 0.01 },
-  cloudBillboardCount: { min: 0, max: 1600, step: 16 },
+  cloudBillboardCount: { min: 0, max: 5000, step: 16 },
+  cloudColorStrength: { min: 0, max: 1, step: 0.01 },
   grassDensity: { min: 0, max: 1.5, step: 0.01 },
   grassHeight: { min: 0.15, max: 8, step: 0.05 },
   grassWindStrength: { min: 0, max: 2, step: 0.01 },

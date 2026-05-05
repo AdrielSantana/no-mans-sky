@@ -2,7 +2,7 @@ import * as THREE from 'three'
 import type { CelestialBody } from '../module_bindings/types'
 import type { GameEngine } from './engine'
 import { SunRenderer } from './sun-renderer'
-import { PlanetRenderer } from './planet/planet-renderer'
+import { PlanetRenderer, type UnderwaterViewInfo } from './planet/planet-renderer'
 import { PlanetGenerator } from './planet/planet-generator'
 import { PlanetWalkerController, type PlanetWalkerTarget } from './planet-walker-controller'
 
@@ -171,9 +171,15 @@ export class CelestialSystem {
     this.updateWalkerTargets()
     this.walkerController.update(dt)
     this.sunRenderer?.update(dt)
+    let underwater: UnderwaterViewInfo | null = null
     for (const renderer of this.planetRenderers.values()) {
       renderer.update(this.engine.camera, dt)
+      const viewInfo = renderer.getUnderwaterViewInfo(this.engine.camera)
+      if (viewInfo && (!underwater || viewInfo.amount > underwater.amount)) {
+        underwater = viewInfo
+      }
     }
+    this.engine.setUnderwaterEffect(underwater)
   }
 
   getDebugStats() {

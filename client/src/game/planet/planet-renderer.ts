@@ -98,6 +98,7 @@ interface PlanetRendererParams {
   cloudStorms?: number
   cloudBands?: number
   cloudDetail?: number
+  cloudColor?: string
   cloudBillboards?: boolean
   cloudBillboardCount?: number
   grassEnabled?: boolean
@@ -134,6 +135,12 @@ interface PlanetRendererParams {
   terrainWorkers?: number
 }
 
+export interface UnderwaterViewInfo {
+  amount: number
+  depth: number
+  color: THREE.Color
+}
+
 export class PlanetRenderer {
   private group: THREE.Group
   private planetRadius: number
@@ -167,6 +174,8 @@ export class PlanetRenderer {
   private fallbackMaterial: THREE.ShaderMaterial
   private simpleTerrainMaterial = new THREE.MeshBasicMaterial({ color: 0x8f927f })
   private oceanMaterial: THREE.ShaderMaterial | null = null
+  private oceanColor = new THREE.Color(0x123d55)
+  private oceanRadius = 0
   private atmosphereMaterial: THREE.ShaderMaterial | null = null
   private cloudMaterial: THREE.ShaderMaterial | null = null
   private quadtrees: QuadtreeNode[] = []
@@ -200,6 +209,7 @@ export class PlanetRenderer {
   private sunPosition = new THREE.Vector3(0, 0, 0)
   private sunColor = new THREE.Color(0xfff2c8)
   private atmosphereColor = new THREE.Color(0x6fa8dc)
+  private cloudColor = new THREE.Color(0xe8edf2)
   private atmosphereLightColor = new THREE.Color(0xc4d5df)
   private atmosphereSunGlare = 0.56
   private atmosphereSunGlareSize = 0.55
@@ -219,6 +229,7 @@ export class PlanetRenderer {
   private cloudStorms = 0.62
   private cloudBands = 0.72
   private cloudDetail = 0.82
+  private cloudColorStrength = 0
   private cloudQuality = 2
   private cloudBillboardsEnabled = true
   private cloudBillboardCount = 640
@@ -260,7 +271,9 @@ export class PlanetRenderer {
     this.horizonMargin = params.horizonMargin ?? 1.0
     this.requestedTerrainWorkers = params.terrainWorkers ?? 0
     this.sunColor.set(params.sunColor ?? '#fff2c8')
+    this.oceanColor.set(params.oceanColor ?? '#123d55')
     this.atmosphereColor.set(params.atmosphereColor)
+    this.cloudColor.set(params.cloudColor ?? '#e8edf2')
     this.atmosphereSunGlare = params.atmosphereSunGlare ?? 0.56
     this.atmosphereSunGlareSize = params.atmosphereSunGlareSize ?? 0.55
     this.atmosphereTwilightColor.set(params.atmosphereTwilightColor ?? '#ff8a3d')
@@ -494,6 +507,7 @@ export class PlanetRenderer {
     if (waterLevel > 0.02 && params.planetType !== 'gas') {
       const coastClearance = Math.max(0.01, planetRadius * 0.00001)
       const waterRadius = planetRadius * (1 + seaHeight * params.terrainScale) + coastClearance
+      this.oceanRadius = waterRadius
       const oceanGeo = new THREE.SphereGeometry(waterRadius, 384, 192)
       this.addTerrainHeightAttribute(oceanGeo)
       this.oceanMaterial = createOceanMaterial({
@@ -515,7 +529,7 @@ export class PlanetRenderer {
         erosionStrength: this.noiseProfile.erosionStrength,
         thermalStrength: this.noiseProfile.thermalStrength,
         detailStrength: this.noiseProfile.detailStrength,
-        oceanColor: params.oceanColor ?? '#123d55',
+        oceanColor: this.oceanColor.getStyle(),
         sunPosition: this.sunPosition,
         sunColor: this.sunColor,
         atmosphereColor: params.atmosphereColor,
@@ -561,6 +575,7 @@ export class PlanetRenderer {
         sunColor: this.sunColor,
         atmosphereLightColor: this.atmosphereLightColor,
         sunPosition: this.sunPosition,
+        cloudColor: params.cloudColor ?? '#e8edf2',
       })
       this.cloudMesh = new THREE.Mesh(cloudGeo, this.cloudMaterial)
       this.cloudMesh.frustumCulled = false
@@ -580,6 +595,7 @@ export class PlanetRenderer {
         sunColor: this.sunColor,
         atmosphereLightColor: this.atmosphereLightColor,
         sunPosition: this.sunPosition,
+        cloudColor: params.cloudColor ?? '#e8edf2',
       })
       this.cloudBillboardMesh = new THREE.InstancedMesh(
         billboardGeo,
@@ -736,6 +752,7 @@ export class PlanetRenderer {
     for (const material of materials) {
       this.copyColorUniform(material, 'uSunColor', this.sunColor)
       this.copyColorUniform(material, 'uAtmosphereColor', this.atmosphereColor)
+      this.copyColorUniform(material, 'uCloudColor', this.cloudColor)
       this.copyColorUniform(material, 'uAtmosphereLightColor', this.atmosphereLightColor)
       this.copyColorUniform(material, 'uTwilightColor', this.atmosphereTwilightColor)
       this.setFloatUniform(material, 'uSunGlareStrength', this.atmosphereSunGlare)
@@ -748,6 +765,11 @@ export class PlanetRenderer {
 
   setSunColor(color: string) {
     this.sunColor.set(color)
+    this.updateLightColorUniforms()
+  }
+
+  setCloudColor(color: string) {
+    this.cloudColor.set(color)
     this.updateLightColorUniforms()
   }
 
@@ -777,6 +799,7 @@ export class PlanetRenderer {
     storms: number
     bands: number
     detail: number
+    colorStrength: number
     billboards: boolean
     billboardCount: number
   }) {
@@ -791,6 +814,7 @@ export class PlanetRenderer {
     this.cloudStorms = settings.storms
     this.cloudBands = settings.bands
     this.cloudDetail = settings.detail
+    this.cloudColorStrength = settings.colorStrength
     this.cloudBillboardsEnabled = settings.billboards
     this.cloudBillboardCount = THREE.MathUtils.clamp(
       Math.round(settings.billboardCount),
@@ -872,6 +896,7 @@ export class PlanetRenderer {
       this.setFloatUniform(material, 'uCloudStormStrength', this.cloudStorms)
       this.setFloatUniform(material, 'uCloudBandStrength', this.cloudBands)
       this.setFloatUniform(material, 'uCloudDetailStrength', this.cloudDetail)
+      this.setFloatUniform(material, 'uCloudColorStrength', this.cloudColorStrength)
       this.setFloatUniform(material, 'uCloudQuality', this.cloudQuality)
       this.setFloatUniform(material, 'uCloudSeed', this.noiseProfile.seed)
     }
@@ -1242,6 +1267,31 @@ export class PlanetRenderer {
       chunkIntegrationMs: this.chunkIntegrationMsLastFrame,
       byLod,
       usingTerrain: !this.fallbackSphere.visible,
+    }
+  }
+
+  getUnderwaterViewInfo(camera: THREE.Camera): UnderwaterViewInfo | null {
+    if (!this.oceanMesh || !this.debugShowOcean || this.oceanRadius <= 0) return null
+
+    const camPos = new THREE.Vector3()
+    camera.getWorldPosition(camPos)
+    const planetPos = new THREE.Vector3()
+    this.group.getWorldPosition(planetPos)
+    const planetQuat = new THREE.Quaternion()
+    this.group.getWorldQuaternion(planetQuat)
+    const localCamPos = camPos.sub(planetPos).applyQuaternion(planetQuat.invert())
+    const depth = this.oceanRadius - localCamPos.length()
+    const entryFeather = Math.max(0.75, this.planetRadius * 0.00002)
+    const fullEffectDepth = Math.max(1.5, Math.min(6, this.planetRadius * 0.00008))
+    if (depth <= -entryFeather) return null
+
+    const amount = THREE.MathUtils.smoothstep(depth, -entryFeather, fullEffectDepth)
+    if (amount <= 0.001) return null
+
+    return {
+      amount,
+      depth: THREE.MathUtils.clamp(Math.max(depth, 0) / Math.max(10, this.planetRadius * 0.0012), 0, 1),
+      color: this.oceanColor,
     }
   }
 

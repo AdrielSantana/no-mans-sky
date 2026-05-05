@@ -54,6 +54,7 @@ function createPlanet(scene: THREE.Scene, params: EditorParams): PlanetRenderer 
     cloudStorms: params.cloudStorms,
     cloudBands: params.cloudBands,
     cloudDetail: params.cloudDetail,
+    cloudColor: params.cloudColor,
     cloudBillboards: params.cloudBillboards,
     cloudBillboardCount: params.cloudBillboardCount,
     grassEnabled: params.grassEnabled,
@@ -321,6 +322,7 @@ export function EditorCanvas({ params }: Props) {
       const updateStart = showPerf ? performance.now() : 0
       walker.update(dt)
       planetRef.current?.update(engine.camera, dt)
+      engine.setUnderwaterEffect(planetRef.current?.getUnderwaterViewInfo(engine.camera) ?? null)
       if (showPerf) {
         updateSamples.push(performance.now() - updateStart)
         if (updateSamples.length > 240) updateSamples.shift()
@@ -356,6 +358,7 @@ export function EditorCanvas({ params }: Props) {
     planetRef.current?.setSunPosition(sunPosition)
     engineRef.current?.setSunPosition(sunPosition)
     planetRef.current?.setSunColor(params.sunColor)
+    planetRef.current?.setCloudColor(params.cloudColor)
     planetRef.current?.setTerrainAoStrength(params.terrainAoStrength)
     planetRef.current?.setClouds({
       coverage: params.cloudCoverage,
@@ -369,6 +372,7 @@ export function EditorCanvas({ params }: Props) {
       storms: params.cloudStorms,
       bands: params.cloudBands,
       detail: params.cloudDetail,
+      colorStrength: params.cloudColorStrength,
       billboards: params.cloudBillboards,
       billboardCount: params.cloudBillboardCount,
     })
@@ -410,6 +414,7 @@ export function EditorCanvas({ params }: Props) {
       newPlanet.setSunPosition(latestSunPosition)
       engine.setSunPosition(latestSunPosition)
       newPlanet.setSunColor(paramsRef.current.sunColor)
+      newPlanet.setCloudColor(paramsRef.current.cloudColor)
       newPlanet.setTerrainAoStrength(paramsRef.current.terrainAoStrength)
       newPlanet.setClouds({
         coverage: paramsRef.current.cloudCoverage,
@@ -423,6 +428,7 @@ export function EditorCanvas({ params }: Props) {
         storms: paramsRef.current.cloudStorms,
         bands: paramsRef.current.cloudBands,
         detail: paramsRef.current.cloudDetail,
+        colorStrength: paramsRef.current.cloudColorStrength,
         billboards: paramsRef.current.cloudBillboards,
         billboardCount: paramsRef.current.cloudBillboardCount,
       })

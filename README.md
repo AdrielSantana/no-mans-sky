@@ -42,12 +42,17 @@ VITE_SPACETIMEDB_URI=ws://127.0.0.1:3000
 VITE_SPACETIMEDB_DATABASE=no-mans-sky
 ```
 
-FADE NA ATMOSFERA
-Shader da grama atras de montanha
-SOMBRA FAKE (REGIÃO MAIS ESCURA) EMBAIXO DOS PATCHES DE GRAMA (LOD DISTANTES PARA GRAMA TAMBÉM)
+Selecionar cor da neve e areia
+
 Shader dágua/Malha dágua
+
 Shader em baixo dágua
+
+Melhorar Shader do oceano
+
 "Lua" durante a noite
-Sombra da núvem deixar mais escuro
-Luz acaba refratando na água
+
 Texture e color mixing no terreno (e grama também)
+
+Árvore
+Pedras
