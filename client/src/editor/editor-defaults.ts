@@ -152,7 +152,7 @@ export const DEFAULT_PARAMS: EditorParams = {
   grassDensity: 1.05,
   grassHeight: 1.15,
   grassWindStrength: 1.5,
-  grassDistance: 450,
+  grassDistance: 1500,
   grassColorA: '#1f6f2e',
   grassColorB: '#64b94a',
   sunColor: '#fff2c8',

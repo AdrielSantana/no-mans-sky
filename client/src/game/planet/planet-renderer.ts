@@ -35,6 +35,7 @@ import {
   FluffyGrassLayer,
   createFluffyGrassMaterial,
   updateFluffyGrassMaterial,
+  type FluffyGrassVariant,
   type FluffyGrassSettings,
 } from './fluffy-grass'
 
@@ -1280,8 +1281,8 @@ export class PlanetRenderer {
         this.planetRadius,
         GRASS_FAR_DISTANCE_MULTIPLIER,
         0.72,
-        this.grassSettings.distance * 0.58,
-        this.grassSettings.distance * 0.34,
+        this.grassSettings.distance,
+        1,
       )
     }
     const planetQuat = new THREE.Quaternion()
@@ -1811,13 +1812,15 @@ export class PlanetRenderer {
   private attachGrassLayer(chunk: TerrainChunk) {
     if (!this.grassSettings.enabled) return
 
-    const variant = chunk.node.lod >= this.grassNearMinLod
-      ? 'near'
-      : chunk.node.lod >= this.grassFarMinLod
-        ? 'far'
-        : null
-    if (!variant) return
+    if (chunk.node.lod >= this.grassNearMinLod) {
+      this.attachGrassVariant(chunk, 'near')
+    }
+    if (chunk.node.lod >= this.grassFarMinLod) {
+      this.attachGrassVariant(chunk, 'far')
+    }
+  }
 
+  private attachGrassVariant(chunk: TerrainChunk, variant: FluffyGrassVariant) {
     const material = variant === 'near' ? this.grassMaterial : this.farGrassMaterial
     if (!material) return
 
@@ -1883,6 +1886,7 @@ export class PlanetRenderer {
       && chunk.mesh.visible
       && this.grassSettings.enabled
       && !this.debugSimpleTerrain
+      && dist >= this.grassSettings.distance - this.grassSettings.height * 8
       && dist < this.grassSettings.distance * GRASS_FAR_DISTANCE_MULTIPLIER
     farGrass?.setVisible(farVisible)
     if (farVisible && farGrass) this.grassVisibleInstances += farGrass.instanceCount

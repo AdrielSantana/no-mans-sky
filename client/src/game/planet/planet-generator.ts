@@ -579,13 +579,13 @@ float cloudShadowMask(vec3 surfaceDir, vec3 sunDir) {
   float offset = clamp(uCloudHeight, 0.0, 0.20) * 2.8 + 0.018;
   vec3 projectedDir = normalize(surfaceDir + sunDir * offset);
   float shadow = pow(cloudShadowPattern(projectedDir), 0.72);
-  float strength = clamp(uCloudShadowStrength * 0.18, 0.0, 1.6);
+  float strength = clamp(uCloudShadowStrength * 0.24, 0.0, 1.6);
   return shadow * daylight * strength;
 }
 
 vec3 applyCloudShadow(vec3 color, vec3 surfaceDir, vec3 sunDir, float strengthMultiplier) {
   float shadow = cloudShadowMask(surfaceDir, sunDir) * strengthMultiplier;
-  vec3 coolShadow = color * vec3(0.30, 0.36, 0.44);
+  vec3 coolShadow = color * vec3(0.20, 0.25, 0.32);
   return mix(color, coolShadow, clamp(shadow, 0.0, 0.92));
 }
 `
