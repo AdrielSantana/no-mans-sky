@@ -183,6 +183,7 @@ export function createFluffyGrassMaterial(settings: FluffyGrassSettings): THREE.
       uAtmosphereLightColor: { value: new THREE.Color(0xc4d5df) },
       uTwilightColor: { value: new THREE.Color(0xff8a3d) },
       uAtmosphereExtinctionStrength: { value: 0.82 },
+      uTerrainAoStrength: { value: 0.45 },
       uCloudCoverage: { value: 0.68 },
       uCloudScale: { value: 2.7 },
       uCloudSoftness: { value: 0.15 },
@@ -204,8 +205,14 @@ export function createFluffyGrassMaterial(settings: FluffyGrassSettings): THREE.
       varying float vTip;
       varying float vSeed;
       varying float vDistance;
+      varying vec3 vTerrainNormal;
+      varying float vTerrainMicroAo;
+      varying float vTerrainMacroAo;
       varying vec3 vWorldPos;
       attribute float instanceSeed;
+      attribute vec3 instanceTerrainNormal;
+      attribute float instanceTerrainMicroAo;
+      attribute float instanceTerrainMacroAo;
       #include <logdepthbuf_pars_vertex>
 
       void main() {
@@ -232,6 +239,9 @@ export function createFluffyGrassMaterial(settings: FluffyGrassSettings): THREE.
 
         vec4 worldPosition = modelMatrix * vec4(transformed, 1.0);
         vWorldPos = worldPosition.xyz;
+        vTerrainNormal = normalize(mat3(modelMatrix) * instanceTerrainNormal);
+        vTerrainMicroAo = instanceTerrainMicroAo;
+        vTerrainMacroAo = instanceTerrainMacroAo;
         vDistance = distance(cameraPosition, worldPosition.xyz);
         gl_Position = projectionMatrix * viewMatrix * worldPosition;
         #include <logdepthbuf_vertex>
@@ -257,17 +267,32 @@ export function createFluffyGrassMaterial(settings: FluffyGrassSettings): THREE.
       uniform vec3 uAtmosphereLightColor;
       uniform vec3 uTwilightColor;
       uniform float uAtmosphereExtinctionStrength;
+      uniform float uTerrainAoStrength;
       varying vec2 vUv;
       varying float vTip;
       varying float vSeed;
       varying float vDistance;
+      varying vec3 vTerrainNormal;
+      varying float vTerrainMicroAo;
+      varying float vTerrainMacroAo;
       varying vec3 vWorldPos;
       #include <logdepthbuf_pars_fragment>
 
-      vec3 applyGrassLighting(vec3 albedo, vec3 up, vec3 worldPos) {
+      float terrainBakedAmbientOcclusion(float bakedAo, float amount, float nearFloor, float farFloor) {
+        float strength = clamp(uTerrainAoStrength, 0.0, 2.0);
+        if (strength <= 0.001) return 1.0;
+
+        float cavity = 1.0 - clamp(bakedAo, 0.0, 1.0);
+        float floorValue = min(nearFloor, farFloor);
+        return clamp(1.0 - cavity * strength * amount, floorValue, 1.0);
+      }
+
+      vec3 applyGrassLighting(vec3 albedo, vec3 terrainNormal, vec3 radialUp, vec3 worldPos, float terrainMicroAo, float terrainMacroAo) {
+        vec3 up = normalize(terrainNormal);
         vec3 lightDir = normalize(uSunPosition - worldPos);
         vec3 viewDir = normalize(cameraPosition - worldPos);
         float nDotL = dot(up, lightDir);
+        float skyVisibility = clamp(dot(up, radialUp) * 0.54 + 0.46, 0.18, 1.0);
         float day = smoothstep(-0.22, 0.62, nDotL);
         float direct = max(nDotL, 0.0);
         float lowSun = pow(1.0 - clamp(nDotL * 0.92 + 0.08, 0.0, 1.0), 1.8)
@@ -285,12 +310,14 @@ export function createFluffyGrassMaterial(settings: FluffyGrassSettings): THREE.
         vec3 twilightFill = mix(uTwilightColor * 0.28, uAtmosphereLightColor * 0.24, atmosphereLightInfluence * 0.22);
         float directTransmission = mix(1.0, 0.58, lowSun * extinctionStrength);
         float rim = pow(1.0 - max(dot(up, viewDir), 0.0), 2.0) * smoothstep(-0.05, 0.50, nDotL);
-        vec3 lit = albedo * skyTint * (0.12 + day * 0.18)
+        vec3 lit = albedo * skyTint * (0.12 + day * 0.18) * skyVisibility
           + albedo * sunTint * (direct * 0.74 + direct * direct * 0.18) * directTransmission;
         lit += albedo * twilightFill * terminator * extinctionStrength * 0.16;
         vec3 nightLit = albedo * nightTint * 0.12;
         lit = mix(nightLit, lit, day);
         lit += mix(vec3(0.22, 0.34, 0.48), uAtmosphereLightColor, atmosphereLightInfluence * 0.46) * rim * 0.045 * day;
+        lit *= terrainBakedAmbientOcclusion(terrainMacroAo, 0.24, 0.54, 0.76);
+        lit *= terrainBakedAmbientOcclusion(terrainMicroAo, 0.36, 0.72, 0.88);
         return lit;
       }
 
@@ -307,9 +334,10 @@ export function createFluffyGrassMaterial(settings: FluffyGrassSettings): THREE.
         float tint = fract(sin(vSeed * 91.731) * 43758.5453);
         vec3 baseColor = mix(uColorA, uColorB, clamp(vTip * 0.86 + tint * 0.18, 0.0, 1.0));
         baseColor = mix(baseColor, uColorB, pow(vTip, 2.0) * 0.08);
-        vec3 up = normalize(vWorldPos - uPlanetCenter);
-        vec3 color = applyGrassLighting(baseColor, up, vWorldPos);
-        color = applyCloudShadow(color, up, normalize(uSunPosition - vWorldPos), 1.0);
+        vec3 radialUp = normalize(vWorldPos - uPlanetCenter);
+        vec3 terrainNormal = normalize(vTerrainNormal);
+        vec3 color = applyGrassLighting(baseColor, terrainNormal, radialUp, vWorldPos, vTerrainMicroAo, vTerrainMacroAo);
+        color = applyCloudShadow(color, radialUp, normalize(uSunPosition - vWorldPos), 1.0);
         gl_FragColor = vec4(color, 1.0);
       }
     `,
@@ -356,6 +384,9 @@ export class FluffyGrassLayer {
     const geometry = buildBladeGeometry()
     const placement = this.buildInstances(params)
     geometry.setAttribute('instanceSeed', new THREE.InstancedBufferAttribute(placement.seeds, 1))
+    geometry.setAttribute('instanceTerrainNormal', new THREE.InstancedBufferAttribute(placement.normals, 3))
+    geometry.setAttribute('instanceTerrainMicroAo', new THREE.InstancedBufferAttribute(placement.microAo, 1))
+    geometry.setAttribute('instanceTerrainMacroAo', new THREE.InstancedBufferAttribute(placement.macroAo, 1))
 
     this.mesh = new THREE.InstancedMesh(geometry, params.material, placement.count)
     this.mesh.count = placement.count
@@ -383,9 +414,19 @@ export class FluffyGrassLayer {
     count: number
     matrices: THREE.Matrix4[]
     seeds: Float32Array
+    normals: Float32Array
+    microAo: Float32Array
+    macroAo: Float32Array
   } {
     if (!params.settings.enabled || params.planetType !== 'rocky' || params.settings.density <= 0) {
-      return { count: 0, matrices: [], seeds: new Float32Array(0) }
+      return {
+        count: 0,
+        matrices: [],
+        seeds: new Float32Array(0),
+        normals: new Float32Array(0),
+        microAo: new Float32Array(0),
+        macroAo: new Float32Array(0),
+      }
     }
 
     const { surface, node, settings } = params
@@ -399,6 +440,9 @@ export class FluffyGrassLayer {
     const rng = mulberry32(hashString(nodeKey(node.face, node.lod, node.x, node.y)) ^ params.seed)
     const matrices: THREE.Matrix4[] = []
     const seeds = new Float32Array(targetCount)
+    const normals = new Float32Array(targetCount * 3)
+    const microAo = new Float32Array(targetCount)
+    const macroAo = new Float32Array(targetCount)
     const position = new THREE.Vector3()
     const normal = new THREE.Vector3()
     const radial = new THREE.Vector3()
@@ -450,14 +494,23 @@ export class FluffyGrassLayer {
       dummy.quaternion.copy(quaternion)
       dummy.scale.copy(scale)
       dummy.updateMatrix()
+      const instanceIndex = matrices.length
       matrices.push(dummy.matrix.clone())
-      seeds[matrices.length - 1] = rng()
+      seeds[instanceIndex] = rng()
+      normals[instanceIndex * 3] = normal.x
+      normals[instanceIndex * 3 + 1] = normal.y
+      normals[instanceIndex * 3 + 2] = normal.z
+      microAo[instanceIndex] = this.sampleScalar(surface.microAo, gridSize, ix, iy, tx, ty)
+      macroAo[instanceIndex] = this.sampleScalar(surface.macroAo, gridSize, ix, iy, tx, ty)
     }
 
     return {
       count: matrices.length,
       matrices,
       seeds: seeds.slice(0, matrices.length),
+      normals: normals.slice(0, matrices.length * 3),
+      microAo: microAo.slice(0, matrices.length),
+      macroAo: macroAo.slice(0, matrices.length),
     }
   }
 
@@ -481,13 +534,23 @@ export class FluffyGrassLayer {
   }
 
   private sampleHeight(surface: TerrainChunkSurfaceData, ix: number, iy: number, tx: number, ty: number): number {
-    const gridSize = surface.gridSize
+    return this.sampleScalar(surface.heights, surface.gridSize, ix, iy, tx, ty)
+  }
+
+  private sampleScalar(
+    values: Float32Array<ArrayBufferLike>,
+    gridSize: number,
+    ix: number,
+    iy: number,
+    tx: number,
+    ty: number,
+  ): number {
     const i00 = iy * gridSize + ix
     const i10 = i00 + 1
     const i01 = i00 + gridSize
     const i11 = i01 + 1
-    const h0 = surface.heights[i00] * (1 - tx) + surface.heights[i10] * tx
-    const h1 = surface.heights[i01] * (1 - tx) + surface.heights[i11] * tx
+    const h0 = values[i00] * (1 - tx) + values[i10] * tx
+    const h1 = values[i01] * (1 - tx) + values[i11] * tx
     return h0 * (1 - ty) + h1 * ty
   }
 

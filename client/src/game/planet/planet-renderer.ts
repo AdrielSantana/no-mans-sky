@@ -737,6 +737,8 @@ export class PlanetRenderer {
       this.material,
       ...this.farLodMaterials,
       this.fallbackMaterial,
+      this.grassMaterial,
+      this.farGrassMaterial,
     ]
     for (const material of materials) {
       this.setFloatUniform(material, 'uTerrainAoStrength', this.terrainAoStrength)
@@ -816,6 +818,8 @@ export class PlanetRenderer {
       this.farGrassMaterial = createFluffyGrassMaterial(this.grassSettings)
     }
     this.updateLightColorUniforms()
+    this.setFloatUniform(this.grassMaterial, 'uTerrainAoStrength', this.terrainAoStrength)
+    this.setFloatUniform(this.farGrassMaterial, 'uTerrainAoStrength', this.terrainAoStrength)
 
     if (rebuild) {
       this.rebuildGrassLayers()

@@ -22,6 +22,8 @@ export interface TerrainChunkSurfaceData {
   positions: Float32Array<ArrayBufferLike>
   normals: Float32Array<ArrayBufferLike>
   heights: Float32Array<ArrayBufferLike>
+  microAo: Float32Array<ArrayBufferLike>
+  macroAo: Float32Array<ArrayBufferLike>
   gridSize: number
 }
 
@@ -44,6 +46,8 @@ export class TerrainChunk {
   private mainPositions: Float32Array<ArrayBufferLike> = new Float32Array(0)
   private mainNormals: Float32Array<ArrayBufferLike> = new Float32Array(0)
   private mainHeights: Float32Array<ArrayBufferLike> = new Float32Array(0)
+  private mainMicroAo: Float32Array<ArrayBufferLike> = new Float32Array(0)
+  private mainMacroAo: Float32Array<ArrayBufferLike> = new Float32Array(0)
   private gridSize: number
 
   constructor(
@@ -84,6 +88,8 @@ export class TerrainChunk {
     this.mainPositions = data.mainPositions
     this.mainNormals = data.normals.slice(0, this.mainPositions.length)
     this.mainHeights = data.heights.slice(0, this.gridSize * this.gridSize)
+    this.mainMicroAo = data.microAo.slice(0, this.gridSize * this.gridSize)
+    this.mainMacroAo = data.macroAo.slice(0, this.gridSize * this.gridSize)
     this.fullIndices = data.indices
     geo.setAttribute('position', new THREE.BufferAttribute(data.positions, 3))
     geo.setAttribute('normal', new THREE.BufferAttribute(data.normals, 3))
@@ -101,6 +107,8 @@ export class TerrainChunk {
       positions: this.mainPositions,
       normals: this.mainNormals,
       heights: this.mainHeights,
+      microAo: this.mainMicroAo,
+      macroAo: this.mainMacroAo,
       gridSize: this.gridSize,
     }
   }
