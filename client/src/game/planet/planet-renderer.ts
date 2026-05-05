@@ -80,9 +80,9 @@ interface PlanetRendererParams {
   terrainAoStrength?: number
   atmosphereColor: string
   atmosphereDensity: number
-  atmosphereHorizonGlow?: number
   atmosphereSunGlare?: number
   atmosphereSunGlareSize?: number
+  atmosphereTwilightColor?: string
   atmosphereTwilightWidth?: number
   atmosphereTwilightStrength?: number
   atmosphereExtinctionStrength?: number
@@ -107,7 +107,6 @@ interface PlanetRendererParams {
   grassColorA?: string
   grassColorB?: string
   sunColor?: string
-  sunTintStrength?: number
   noiseProfile?: {
     octaves: number
     lacunarity: number
@@ -201,10 +200,9 @@ export class PlanetRenderer {
   private sunColor = new THREE.Color(0xfff2c8)
   private atmosphereColor = new THREE.Color(0x6fa8dc)
   private atmosphereLightColor = new THREE.Color(0xc4d5df)
-  private sunTintStrength = 0.85
-  private atmosphereHorizonGlow = 0.90
   private atmosphereSunGlare = 0.56
   private atmosphereSunGlareSize = 0.55
+  private atmosphereTwilightColor = new THREE.Color(0xff8a3d)
   private atmosphereTwilightWidth = 1.12
   private atmosphereTwilightStrength = 1.02
   private atmosphereExtinctionStrength = 0.82
@@ -262,10 +260,9 @@ export class PlanetRenderer {
     this.requestedTerrainWorkers = params.terrainWorkers ?? 0
     this.sunColor.set(params.sunColor ?? '#fff2c8')
     this.atmosphereColor.set(params.atmosphereColor)
-    this.sunTintStrength = params.sunTintStrength ?? 0.85
-    this.atmosphereHorizonGlow = params.atmosphereHorizonGlow ?? 0.90
     this.atmosphereSunGlare = params.atmosphereSunGlare ?? 0.56
     this.atmosphereSunGlareSize = params.atmosphereSunGlareSize ?? 0.55
+    this.atmosphereTwilightColor.set(params.atmosphereTwilightColor ?? '#ff8a3d')
     this.atmosphereTwilightWidth = params.atmosphereTwilightWidth ?? 1.12
     this.atmosphereTwilightStrength = params.atmosphereTwilightStrength ?? 1.02
     this.atmosphereExtinctionStrength = params.atmosphereExtinctionStrength ?? 0.82
@@ -380,7 +377,7 @@ export class PlanetRenderer {
       sunPosition: this.sunPosition,
       sunColor: this.sunColor,
       atmosphereLightColor: this.atmosphereLightColor,
-      sunTintStrength: this.sunTintStrength,
+      twilightColor: this.atmosphereTwilightColor,
       atmosphereExtinctionStrength: this.atmosphereExtinctionStrength,
       cloudCoverage: this.cloudCoverage,
       cloudScale: this.cloudScale,
@@ -415,7 +412,7 @@ export class PlanetRenderer {
       sunPosition: this.sunPosition,
       sunColor: this.sunColor,
       atmosphereLightColor: this.atmosphereLightColor,
-      sunTintStrength: this.sunTintStrength,
+      twilightColor: this.atmosphereTwilightColor,
       atmosphereExtinctionStrength: this.atmosphereExtinctionStrength,
       cloudCoverage: this.cloudCoverage,
       cloudScale: this.cloudScale,
@@ -464,7 +461,7 @@ export class PlanetRenderer {
       sunPosition: this.sunPosition,
       sunColor: this.sunColor,
       atmosphereLightColor: this.atmosphereLightColor,
-      sunTintStrength: this.sunTintStrength,
+      twilightColor: this.atmosphereTwilightColor,
       atmosphereExtinctionStrength: this.atmosphereExtinctionStrength,
       cloudCoverage: this.cloudCoverage,
       cloudScale: this.cloudScale,
@@ -522,7 +519,7 @@ export class PlanetRenderer {
         sunColor: this.sunColor,
         atmosphereColor: params.atmosphereColor,
         atmosphereLightColor: this.atmosphereLightColor,
-        sunTintStrength: this.sunTintStrength,
+        twilightColor: this.atmosphereTwilightColor,
         atmosphereExtinctionStrength: this.atmosphereExtinctionStrength,
         cloudCoverage: this.cloudCoverage,
         cloudScale: this.cloudScale,
@@ -604,8 +601,7 @@ export class PlanetRenderer {
         density: params.atmosphereDensity,
         sunColor: this.sunColor,
         atmosphereLightColor: this.atmosphereLightColor,
-        sunTintStrength: this.sunTintStrength,
-        horizonGlow: this.atmosphereHorizonGlow,
+        twilightColor: this.atmosphereTwilightColor,
         sunGlare: this.atmosphereSunGlare,
         sunGlareSize: this.atmosphereSunGlareSize,
         twilightWidth: this.atmosphereTwilightWidth,
@@ -651,7 +647,7 @@ export class PlanetRenderer {
       sunPosition: this.sunPosition,
       sunColor: this.sunColor,
       atmosphereLightColor: this.atmosphereLightColor,
-      sunTintStrength: this.sunTintStrength,
+      twilightColor: this.atmosphereTwilightColor,
       atmosphereExtinctionStrength: this.atmosphereExtinctionStrength,
       cloudCoverage: this.cloudCoverage,
       cloudScale: this.cloudScale,
@@ -690,7 +686,7 @@ export class PlanetRenderer {
   }
 
   private updateAtmosphereLightColor() {
-    const sunBlend = THREE.MathUtils.clamp(0.44 + this.sunTintStrength * 0.14, 0.35, 0.72)
+    const sunBlend = 0.56
     this.atmosphereLightColor.copy(this.atmosphereColor).lerp(this.sunColor, sunBlend)
   }
 
@@ -721,8 +717,7 @@ export class PlanetRenderer {
       this.copyColorUniform(material, 'uSunColor', this.sunColor)
       this.copyColorUniform(material, 'uAtmosphereColor', this.atmosphereColor)
       this.copyColorUniform(material, 'uAtmosphereLightColor', this.atmosphereLightColor)
-      this.setFloatUniform(material, 'uSunTintStrength', this.sunTintStrength)
-      this.setFloatUniform(material, 'uHorizonGlowStrength', this.atmosphereHorizonGlow)
+      this.copyColorUniform(material, 'uTwilightColor', this.atmosphereTwilightColor)
       this.setFloatUniform(material, 'uSunGlareStrength', this.atmosphereSunGlare)
       this.setFloatUniform(material, 'uSunGlareSize', this.atmosphereSunGlareSize)
       this.setFloatUniform(material, 'uTwilightWidth', this.atmosphereTwilightWidth)
@@ -733,11 +728,6 @@ export class PlanetRenderer {
 
   setSunColor(color: string) {
     this.sunColor.set(color)
-    this.updateLightColorUniforms()
-  }
-
-  setSunTintStrength(strength: number) {
-    this.sunTintStrength = strength
     this.updateLightColorUniforms()
   }
 
@@ -1058,16 +1048,16 @@ export class PlanetRenderer {
   }
 
   setAtmosphereOptics(settings: {
-    horizonGlow: number
     sunGlare: number
     sunGlareSize: number
+    twilightColor: string
     twilightWidth: number
     twilightStrength: number
     extinctionStrength: number
   }) {
-    this.atmosphereHorizonGlow = settings.horizonGlow
     this.atmosphereSunGlare = settings.sunGlare
     this.atmosphereSunGlareSize = settings.sunGlareSize
+    this.atmosphereTwilightColor.set(settings.twilightColor)
     this.atmosphereTwilightWidth = settings.twilightWidth
     this.atmosphereTwilightStrength = settings.twilightStrength
     this.atmosphereExtinctionStrength = settings.extinctionStrength

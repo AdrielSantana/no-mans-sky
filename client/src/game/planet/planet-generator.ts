@@ -361,26 +361,26 @@ vec3 applyPlanetLighting(vec3 albedo, vec3 normal, vec3 radialNormal, vec3 world
   float rim = pow(1.0 - max(dot(n, viewDir), 0.0), 2.3) * smoothstep(-0.05, 0.50, nDotL);
   float highland = smoothstep(0.60, 0.90, heightNorm) * 0.055;
   float cavity = 1.0 - slope * mix(0.12, 0.05, day);
-  float tintStrength = clamp(uSunTintStrength, 0.0, 2.0);
+  const float atmosphereLightInfluence = 0.85;
   float extinctionStrength = clamp(uAtmosphereExtinctionStrength, 0.0, 2.0);
   float lowSun = pow(1.0 - clamp(nDotL * 0.92 + 0.08, 0.0, 1.0), 1.8)
     * smoothstep(-0.24, 0.50, nDotL);
   float terminator = smoothstep(-0.34, 0.18, nDotL) * (1.0 - smoothstep(0.22, 0.72, nDotL));
   vec3 nightTint = vec3(0.010, 0.016, 0.032);
-  nightTint = mix(nightTint, nightTint + uAtmosphereLightColor * 0.055, tintStrength * 0.24);
+  nightTint = mix(nightTint, nightTint + uAtmosphereLightColor * 0.055, atmosphereLightInfluence * 0.24);
   vec3 sunsetTint = mix(vec3(1.0, 0.34, 0.10), uSunColor, 0.36);
   sunsetTint = mix(sunsetTint, uAtmosphereLightColor, 0.18);
-  vec3 sunTint = mix(vec3(1.0), uAtmosphereLightColor, tintStrength * 0.82);
+  vec3 sunTint = mix(vec3(1.0), uAtmosphereLightColor, atmosphereLightInfluence * 0.82);
   sunTint = mix(sunTint, sunsetTint, lowSun * extinctionStrength * 0.72);
-  vec3 ambientTint = mix(vec3(1.0), uAtmosphereLightColor, tintStrength * 0.24 + terminator * extinctionStrength * 0.12);
-  vec3 twilightFill = mix(vec3(0.08, 0.10, 0.18), uAtmosphereLightColor * 0.32, tintStrength * 0.35);
+  vec3 ambientTint = mix(vec3(1.0), uAtmosphereLightColor, atmosphereLightInfluence * 0.24 + terminator * extinctionStrength * 0.12);
+  vec3 twilightFill = mix(uTwilightColor * 0.28, uAtmosphereLightColor * 0.24, atmosphereLightInfluence * 0.22);
   float directTransmission = mix(1.0, 0.58, lowSun * extinctionStrength);
   vec3 lit = albedo * ambientTint * (ambient + highland) * cavity
     + albedo * sunTint * softDirect * directTransmission * 0.92 * cavity;
   lit += albedo * twilightFill * terminator * extinctionStrength * 0.10 * reliefOcclusion;
   vec3 nightLit = albedo * nightTint * 0.18;
   lit = mix(nightLit, lit, day);
-  lit += mix(vec3(0.32, 0.48, 0.68), uAtmosphereLightColor, tintStrength * 0.55) * rim * 0.16;
+  lit += mix(vec3(0.32, 0.48, 0.68), uAtmosphereLightColor, atmosphereLightInfluence * 0.55) * rim * 0.16;
 
   float skyVisibility = clamp(dot(n, r) * 0.54 + 0.46, 0.18, 1.0);
   float wrappedDay = smoothstep(-0.42, 0.58, nDotL);
@@ -389,7 +389,7 @@ vec3 applyPlanetLighting(vec3 albedo, vec3 normal, vec3 radialNormal, vec3 world
   float lowAngleRelief = 1.0 - smoothstep(0.16, 0.72, nDotL);
   float directionalReliefShadow = clamp(1.0 - microCavity * lowAngleRelief * surfaceBlend * 0.34, 0.66, 1.0);
   float cavityOcclusion = clamp(1.0 - microCavity * (0.24 + lowAngleRelief * surfaceBlend * 0.10), 0.68, 1.0);
-  vec3 skyTint = mix(vec3(0.36, 0.48, 0.62), uAtmosphereLightColor, 0.58 + tintStrength * 0.14);
+  vec3 skyTint = mix(vec3(0.36, 0.48, 0.62), uAtmosphereLightColor, 0.58 + atmosphereLightInfluence * 0.14);
   vec3 groundBounceTint = mix(vec3(0.30, 0.27, 0.22), albedo, 0.22);
   vec3 surfaceAmbient = albedo * (
     skyTint * (0.18 + day * 0.18) * skyVisibility +
@@ -399,7 +399,7 @@ vec3 applyPlanetLighting(vec3 albedo, vec3 normal, vec3 radialNormal, vec3 world
     + albedo * sunTint * surfaceDirect * directTransmission * (0.78 + day * 0.16) * cavityOcclusion * directionalReliefShadow;
   surfaceLit += albedo * twilightFill * terminator * extinctionStrength * 0.16;
   surfaceLit = mix(nightLit, surfaceLit, smoothstep(-0.28, 0.52, nDotL));
-  surfaceLit += mix(vec3(0.22, 0.34, 0.48), uAtmosphereLightColor, tintStrength * 0.46) * rim * 0.10;
+  surfaceLit += mix(vec3(0.22, 0.34, 0.48), uAtmosphereLightColor, atmosphereLightInfluence * 0.46) * rim * 0.10;
 
   lit = mix(lit, surfaceLit, surfaceBlend);
   return lit;
@@ -726,7 +726,7 @@ export function createPlanetMaterial(params: {
   sunPosition: THREE.Vector3
   sunColor: THREE.Color | string
   atmosphereLightColor: THREE.Color | string
-  sunTintStrength: number
+  twilightColor: THREE.Color | string
   atmosphereExtinctionStrength: number
   cloudCoverage: number
   cloudScale: number
@@ -747,6 +747,7 @@ export function createPlanetMaterial(params: {
   const atmosphereColor = new THREE.Color(params.atmosphereColor)
   const sunColor = new THREE.Color(params.sunColor)
   const atmosphereLightColor = new THREE.Color(params.atmosphereLightColor)
+  const twilightColor = new THREE.Color(params.twilightColor)
   const planetKind = params.planetType === 'gas'
     ? PlanetKind.Gas
     : params.planetType === 'ice'
@@ -830,7 +831,7 @@ export function createPlanetMaterial(params: {
   uniform vec3 uSunColor;
   uniform vec3 uAtmosphereColor;
   uniform vec3 uAtmosphereLightColor;
-  uniform float uSunTintStrength;
+  uniform vec3 uTwilightColor;
   uniform float uAtmosphereExtinctionStrength;
   uniform float uSeed;
   uniform float uFrequency;
@@ -1006,7 +1007,7 @@ export function createPlanetMaterial(params: {
       uSunColor: { value: sunColor },
       uAtmosphereColor: { value: atmosphereColor },
       uAtmosphereLightColor: { value: atmosphereLightColor },
-      uSunTintStrength: { value: params.sunTintStrength },
+      uTwilightColor: { value: twilightColor },
       uAtmosphereExtinctionStrength: { value: params.atmosphereExtinctionStrength },
       uCloudCoverage: { value: params.cloudCoverage },
       uCloudScale: { value: params.cloudScale },
@@ -1057,7 +1058,7 @@ export function createPlanetFarMaterial(params: {
   sunPosition: THREE.Vector3
   sunColor: THREE.Color | string
   atmosphereLightColor: THREE.Color | string
-  sunTintStrength: number
+  twilightColor: THREE.Color | string
   atmosphereExtinctionStrength: number
   cloudCoverage: number
   cloudScale: number
@@ -1086,6 +1087,7 @@ export function createPlanetFarMaterial(params: {
   const atmosphereColor = new THREE.Color(params.atmosphereColor)
   const sunColor = new THREE.Color(params.sunColor)
   const atmosphereLightColor = new THREE.Color(params.atmosphereLightColor)
+  const twilightColor = new THREE.Color(params.twilightColor)
   const planetKind = params.planetType === 'gas'
     ? PlanetKind.Gas
     : params.planetType === 'ice'
@@ -1160,7 +1162,7 @@ export function createPlanetFarMaterial(params: {
   uniform vec3 uSunColor;
   uniform vec3 uAtmosphereColor;
   uniform vec3 uAtmosphereLightColor;
-  uniform float uSunTintStrength;
+  uniform vec3 uTwilightColor;
   uniform float uAtmosphereExtinctionStrength;
   uniform float uSeaHeight;
   uniform float uPlanetRadius;
@@ -1287,7 +1289,7 @@ export function createPlanetFarMaterial(params: {
       uSunColor: { value: sunColor },
       uAtmosphereColor: { value: atmosphereColor },
       uAtmosphereLightColor: { value: atmosphereLightColor },
-      uSunTintStrength: { value: params.sunTintStrength },
+      uTwilightColor: { value: twilightColor },
       uAtmosphereExtinctionStrength: { value: params.atmosphereExtinctionStrength },
       uCloudCoverage: { value: params.cloudCoverage },
       uCloudScale: { value: params.cloudScale },
@@ -1343,7 +1345,7 @@ export function createOceanMaterial(params: {
   sunColor: THREE.Color | string
   atmosphereColor: string
   atmosphereLightColor: THREE.Color | string
-  sunTintStrength: number
+  twilightColor: THREE.Color | string
   atmosphereExtinctionStrength: number
   cloudCoverage: number
   cloudScale: number
@@ -1360,6 +1362,7 @@ export function createOceanMaterial(params: {
   const atmosphereColor = new THREE.Color(params.atmosphereColor)
   const sunColor = new THREE.Color(params.sunColor)
   const atmosphereLightColor = new THREE.Color(params.atmosphereLightColor)
+  const twilightColor = new THREE.Color(params.twilightColor)
   const oceanColor = new THREE.Color(params.oceanColor)
   const planetKind = params.planetType === 'gas'
     ? PlanetKind.Gas
@@ -1405,8 +1408,8 @@ export function createOceanMaterial(params: {
   uniform vec3 uSunColor;
   uniform vec3 uAtmosphereColor;
   uniform vec3 uAtmosphereLightColor;
+  uniform vec3 uTwilightColor;
   uniform vec3 uOceanColor;
-  uniform float uSunTintStrength;
   uniform float uAtmosphereExtinctionStrength;
   uniform float uSeed;
   uniform float uTime;
@@ -1504,11 +1507,11 @@ export function createOceanMaterial(params: {
     vec3 nightWater = vec3(0.001, 0.004, 0.010);
     color *= mix(0.008, 1.0, day) * mix(1.0, 0.82, lowSun * extinctionStrength);
     color += nightWater * (1.0 - day) * 0.010;
-    float tintStrength = clamp(uSunTintStrength, 0.0, 2.0);
-    vec3 sunsetTint = mix(vec3(0.95, 0.34, 0.10), uSunColor, 0.30);
+    const float atmosphereLightInfluence = 0.85;
+    vec3 sunsetTint = mix(uTwilightColor, uSunColor, 0.24);
     vec3 waterLightColor = mix(uAtmosphereLightColor, uSunColor, 0.18);
     waterLightColor = mix(waterLightColor, sunsetTint, lowSun * extinctionStrength * 0.56);
-    color += diffuse * waterLightColor * vec3(0.018, 0.038, 0.040) * (0.55 + tintStrength * 0.28);
+    color += diffuse * waterLightColor * vec3(0.018, 0.038, 0.040) * (0.55 + atmosphereLightInfluence * 0.28);
     color += surface * vec3(0.004, 0.016, 0.020) * day;
     float sunGlint = pow(max(dot(reflect(-lightDir, waterNormal), viewDir), 0.0), mix(80.0, 520.0, orbitalFade))
       * (0.018 + orbitalFade * 0.09) * day;
@@ -1516,10 +1519,10 @@ export function createOceanMaterial(params: {
     float foamLight = foam * clamp(day * 0.88 + lowSun * 0.20, 0.0, 1.0);
     color = mix(color, vec3(0.76, 0.86, 0.83), clamp(foamLight * 0.58, 0.0, 0.62));
     color += foamLight * vec3(0.035, 0.048, 0.042) * (0.20 + day * 0.62);
-    reflected *= mix(vec3(1.0), uAtmosphereLightColor, tintStrength * 0.40);
+    reflected *= mix(vec3(1.0), uAtmosphereLightColor, atmosphereLightInfluence * 0.40);
     reflected *= mix(vec3(1.0), sunsetTint, lowSun * extinctionStrength * 0.16);
     reflected *= day;
-    color += reflected + (specular + sunGlint) * mix(vec3(1.0, 0.92, 0.78), waterLightColor, tintStrength * 0.90);
+    color += reflected + (specular + sunGlint) * mix(vec3(1.0, 0.92, 0.78), waterLightColor, atmosphereLightInfluence * 0.90);
     float alpha = mix(0.64, 0.90, smoothstep(0.02, 0.52, belowSea));
     alpha = mix(alpha, 0.94, farWater);
     alpha += fresnel * 0.035 * day;
@@ -1557,7 +1560,7 @@ export function createOceanMaterial(params: {
       uSunColor: { value: sunColor },
       uAtmosphereColor: { value: atmosphereColor },
       uAtmosphereLightColor: { value: atmosphereLightColor },
-      uSunTintStrength: { value: params.sunTintStrength },
+      uTwilightColor: { value: twilightColor },
       uAtmosphereExtinctionStrength: { value: params.atmosphereExtinctionStrength },
       uCloudCoverage: { value: params.cloudCoverage },
       uCloudScale: { value: params.cloudScale },
@@ -1606,7 +1609,7 @@ export function createPlanetFallbackMaterial(params: {
   sunPosition: THREE.Vector3
   sunColor: THREE.Color | string
   atmosphereLightColor: THREE.Color | string
-  sunTintStrength: number
+  twilightColor: THREE.Color | string
   atmosphereExtinctionStrength: number
   cloudCoverage: number
   cloudScale: number
@@ -1635,6 +1638,7 @@ export function createPlanetFallbackMaterial(params: {
   const atmosphereColor = new THREE.Color(params.atmosphereColor)
   const sunColor = new THREE.Color(params.sunColor)
   const atmosphereLightColor = new THREE.Color(params.atmosphereLightColor)
+  const twilightColor = new THREE.Color(params.twilightColor)
   const planetKind = params.planetType === 'gas'
     ? PlanetKind.Gas
     : params.planetType === 'ice'
@@ -1681,7 +1685,7 @@ export function createPlanetFallbackMaterial(params: {
   uniform vec3 uSunColor;
   uniform vec3 uAtmosphereColor;
   uniform vec3 uAtmosphereLightColor;
-  uniform float uSunTintStrength;
+  uniform vec3 uTwilightColor;
   uniform float uAtmosphereExtinctionStrength;
   uniform float uSeaHeight;
   uniform float uPlanetKind;
@@ -1807,7 +1811,7 @@ export function createPlanetFallbackMaterial(params: {
       uSunColor: { value: sunColor },
       uAtmosphereColor: { value: atmosphereColor },
       uAtmosphereLightColor: { value: atmosphereLightColor },
-      uSunTintStrength: { value: params.sunTintStrength },
+      uTwilightColor: { value: twilightColor },
       uAtmosphereExtinctionStrength: { value: params.atmosphereExtinctionStrength },
       uCloudCoverage: { value: params.cloudCoverage },
       uCloudScale: { value: params.cloudScale },
@@ -1844,8 +1848,7 @@ export function createAtmosphereMaterial(params: {
   density: number
   sunColor: THREE.Color | string
   atmosphereLightColor: THREE.Color | string
-  sunTintStrength: number
-  horizonGlow: number
+  twilightColor: THREE.Color | string
   sunGlare: number
   sunGlareSize: number
   twilightWidth: number
@@ -1857,6 +1860,7 @@ export function createAtmosphereMaterial(params: {
   const color = new THREE.Color(params.atmosphereColor)
   const sunColor = new THREE.Color(params.sunColor)
   const atmosphereLightColor = new THREE.Color(params.atmosphereLightColor)
+  const twilightColor = new THREE.Color(params.twilightColor)
 
   const vertexShader = /* glsl */ `
   #include <common>
@@ -1880,11 +1884,10 @@ export function createAtmosphereMaterial(params: {
   uniform vec3 uAtmosphereColor;
   uniform vec3 uSunColor;
   uniform vec3 uAtmosphereLightColor;
+  uniform vec3 uTwilightColor;
   uniform vec3 uSunPosition;
   uniform vec3 uPlanetCenter;
   uniform float uDensity;
-  uniform float uSunTintStrength;
-  uniform float uHorizonGlowStrength;
   uniform float uSunGlareStrength;
   uniform float uSunGlareSize;
   uniform float uTwilightWidth;
@@ -1914,22 +1917,22 @@ export function createAtmosphereMaterial(params: {
     float nDotL = dot(shellNormal, sunDir);
     float outsideDay = smoothstep(-0.30, 0.55, nDotL);
     float forwardScatter = pow(max(dot(toCamera, sunDir), 0.0), 7.0);
-    float tintStrength = clamp(uSunTintStrength, 0.0, 2.0);
-    float horizonGlowStrength = clamp(uHorizonGlowStrength, 0.0, 2.0);
+    const float atmosphereLightInfluence = 0.85;
     float sunGlareStrength = clamp(uSunGlareStrength, 0.0, 2.0);
     float sunGlareSize = clamp(uSunGlareSize, 0.1, 2.0);
     float twilightWidth = clamp(uTwilightWidth, 0.2, 2.0);
     float twilightStrength = clamp(uTwilightStrength, 0.0, 2.0);
-    vec3 scatterColor = mix(uAtmosphereColor, uAtmosphereLightColor, clamp(0.50 + tintStrength * 0.22, 0.0, 0.92));
+    vec3 scatterColor = mix(uAtmosphereColor, uAtmosphereLightColor, clamp(0.50 + atmosphereLightInfluence * 0.22, 0.0, 0.92));
     vec3 sunScatterColor = mix(uAtmosphereLightColor, uSunColor, 0.28);
-    vec3 duskColor = mix(vec3(1.0, 0.30, 0.07), uSunColor, 0.38);
-    vec3 violetColor = mix(vec3(0.12, 0.08, 0.28), uAtmosphereColor * 0.42 + vec3(0.035, 0.025, 0.080), 0.52);
+    vec3 warmTwilightColor = mix(uTwilightColor, scatterColor, 0.18);
+    warmTwilightColor = mix(warmTwilightColor, uSunColor, 0.12);
+    vec3 coolTwilightColor = mix(uAtmosphereColor * 0.24, uTwilightColor * 0.18, 0.38);
+    coolTwilightColor = mix(coolTwilightColor, uAtmosphereLightColor * 0.14, 0.30);
     float terminatorWarm = smoothstep(-0.42 * twilightWidth, 0.10 * twilightWidth, nDotL)
       * (1.0 - smoothstep(0.08 * twilightWidth, 0.54 * twilightWidth, nDotL));
     float terminatorBlue = smoothstep(-0.90 * twilightWidth, -0.18 * twilightWidth, nDotL)
       * (1.0 - smoothstep(-0.04 * twilightWidth, 0.30 * twilightWidth, nDotL));
     float terminatorGlow = clamp(terminatorWarm + terminatorBlue * 0.62, 0.0, 1.0);
-    float outsideHorizonGlow = outerFade * (0.22 + outsideDay * 0.50 + terminatorGlow * 0.72) * horizonGlowStrength;
     float outsideGlarePower = mix(34.0, 5.0, smoothstep(0.1, 2.0, sunGlareSize));
     float outsideSunGlare = pow(max(dot(toCamera, sunDir), 0.0), outsideGlarePower)
       * smoothstep(-0.22, 0.46, nDotL)
@@ -1938,11 +1941,10 @@ export function createAtmosphereMaterial(params: {
     vec3 outsideBase = mix(outsideNightBase, uAtmosphereColor * (0.16 + outsideDay * 0.86), outsideDay);
     vec3 outsideColor = outsideBase
       + scatterColor * outsideDay * 0.20
-      + mix(violetColor, duskColor, terminatorWarm) * outerFade * terminatorGlow * twilightStrength * 0.20
-      + scatterColor * outsideHorizonGlow * (0.20 + tintStrength * 0.08)
-      + sunScatterColor * (forwardScatter * (0.22 + outsideDay * 0.24) + outsideSunGlare * 0.58) * (0.72 + tintStrength * 0.55);
-    float outsideAlpha = outerFade * uDensity * (0.055 + outsideDay * 0.36 + forwardScatter * (0.15 + tintStrength * 0.07));
-    outsideAlpha += uDensity * (outsideHorizonGlow * 0.16 + outsideSunGlare * 0.24 + terminatorGlow * twilightStrength * 0.06);
+      + mix(coolTwilightColor, warmTwilightColor, terminatorWarm) * outerFade * terminatorGlow * twilightStrength * 0.28
+      + sunScatterColor * (forwardScatter * (0.22 + outsideDay * 0.24) + outsideSunGlare * 0.58) * (0.72 + atmosphereLightInfluence * 0.55);
+    float outsideAlpha = outerFade * uDensity * (0.055 + outsideDay * 0.36 + forwardScatter * (0.15 + atmosphereLightInfluence * 0.07));
+    outsideAlpha += uDensity * (outsideSunGlare * 0.24 + terminatorGlow * twilightStrength * 0.08);
 
     vec3 skyDir = normalize(vWorldPos - cameraPosition);
     float skyUp = dot(skyDir, localUp);
@@ -1961,19 +1963,17 @@ export function createAtmosphereMaterial(params: {
 
     float atmosphereLum = clamp(atmosphereLuminance(uAtmosphereColor), 0.08, 1.0);
     vec3 zenithColor = mix(uAtmosphereColor * 0.42, uAtmosphereColor * 1.18, day);
-    vec3 horizonColor = mix(uAtmosphereColor * 0.70, scatterColor * (0.72 + atmosphereLum * 0.35), (0.38 + twilight * 0.52) * (0.72 + tintStrength * 0.36));
-    float localHorizonGlow = horizon * (0.26 + day * 0.20 + twilight * 0.42) * horizonGlowStrength;
-    vec3 dayColor = mix(zenithColor, horizonColor, clamp(horizon * (0.44 + twilight * 0.26) + localHorizonGlow * 0.28, 0.0, 1.0));
-    vec3 sunsetColor = mix(mix(vec3(1.0, 0.33, 0.08), uSunColor, 0.42), scatterColor, 0.38) * mix(vec3(1.0), uAtmosphereColor, 0.18);
-    vec3 blueHourColor = mix(violetColor, uAtmosphereColor * 0.24 + vec3(0.012, 0.020, 0.060), 0.50);
+    vec3 horizonColor = mix(uAtmosphereColor * 0.70, scatterColor * (0.72 + atmosphereLum * 0.35), (0.38 + twilight * 0.52) * (0.72 + atmosphereLightInfluence * 0.36));
+    vec3 dayColor = mix(zenithColor, horizonColor, clamp(horizon * (0.44 + twilight * 0.36), 0.0, 1.0));
+    vec3 sunsetColor = mix(warmTwilightColor, scatterColor, 0.20);
+    vec3 blueHourColor = mix(coolTwilightColor, uAtmosphereColor * 0.22, 0.42);
     vec3 nightSky = mix(vec3(0.010, 0.016, 0.032) * 0.46, uAtmosphereColor * 0.035 + vec3(0.003, 0.007, 0.020), 0.32);
     vec3 twilightColor = mix(blueHourColor, sunsetColor, clamp(smoothstep(-0.18 * twilightWidth, 0.16 * twilightWidth, sunHeight) + sunsetForward * 0.55, 0.0, 1.0));
     vec3 insideColor = mix(dayColor, twilightColor, clamp((horizon * 0.72 + sunsetForward) * twilight * twilightStrength, 0.0, 1.0));
     insideColor = mix(insideColor, blueHourColor, clamp(blueHour * (0.20 + twilightStrength * 0.34), 0.0, 0.70));
     insideColor = mix(insideColor, nightSky, night * 0.92);
-    insideColor += horizonColor * localHorizonGlow * (0.12 + twilight * 0.18);
-    insideColor += sunScatterColor * sunGlow * (0.30 + day * 0.44) * (0.75 + tintStrength * 0.50);
-    float insideAlpha = uDensity * (0.28 + day * 0.72 + horizon * 0.20 + twilight * horizon * (0.25 + twilightStrength * 0.12) + blueHour * 0.05 + localHorizonGlow * 0.16 + sunGlow * 0.10);
+    insideColor += sunScatterColor * sunGlow * (0.30 + day * 0.44) * (0.75 + atmosphereLightInfluence * 0.50);
+    float insideAlpha = uDensity * (0.28 + day * 0.72 + horizon * 0.20 + twilight * horizon * (0.30 + twilightStrength * 0.16) + blueHour * 0.05 + sunGlow * 0.10);
     insideAlpha = mix(insideAlpha, uDensity * (0.014 + horizon * 0.030), night);
 
     vec3 color = mix(outsideColor, insideColor, inside);
@@ -1994,11 +1994,10 @@ export function createAtmosphereMaterial(params: {
       uAtmosphereColor: { value: color },
       uSunColor: { value: sunColor },
       uAtmosphereLightColor: { value: atmosphereLightColor },
+      uTwilightColor: { value: twilightColor },
       uSunPosition: { value: params.sunPosition.clone() },
       uPlanetCenter: { value: new THREE.Vector3() },
       uDensity: { value: params.density },
-      uSunTintStrength: { value: params.sunTintStrength },
-      uHorizonGlowStrength: { value: params.horizonGlow },
       uSunGlareStrength: { value: params.sunGlare },
       uSunGlareSize: { value: params.sunGlareSize },
       uTwilightWidth: { value: params.twilightWidth },

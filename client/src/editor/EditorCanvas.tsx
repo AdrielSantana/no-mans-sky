@@ -37,9 +37,9 @@ function createPlanet(scene: THREE.Scene, params: EditorParams): PlanetRenderer 
     terrainAoStrength: params.terrainAoStrength,
     atmosphereColor: params.atmosphereColor,
     atmosphereDensity: params.atmosphereDensity,
-    atmosphereHorizonGlow: params.atmosphereHorizonGlow,
     atmosphereSunGlare: params.atmosphereSunGlare,
     atmosphereSunGlareSize: params.atmosphereSunGlareSize,
+    atmosphereTwilightColor: params.atmosphereTwilightColor,
     atmosphereTwilightWidth: params.atmosphereTwilightWidth,
     atmosphereTwilightStrength: params.atmosphereTwilightStrength,
     atmosphereExtinctionStrength: params.atmosphereExtinctionStrength,
@@ -64,7 +64,6 @@ function createPlanet(scene: THREE.Scene, params: EditorParams): PlanetRenderer 
     grassColorA: params.grassColorA,
     grassColorB: params.grassColorB,
     sunColor: params.sunColor,
-    sunTintStrength: params.sunTintStrength,
     noiseProfile: {
       octaves: params.octaves,
       lacunarity: params.lacunarity,
@@ -357,7 +356,6 @@ export function EditorCanvas({ params }: Props) {
     planetRef.current?.setSunPosition(sunPosition)
     engineRef.current?.setSunPosition(sunPosition)
     planetRef.current?.setSunColor(params.sunColor)
-    planetRef.current?.setSunTintStrength(params.sunTintStrength)
     planetRef.current?.setTerrainAoStrength(params.terrainAoStrength)
     planetRef.current?.setClouds({
       coverage: params.cloudCoverage,
@@ -384,9 +382,9 @@ export function EditorCanvas({ params }: Props) {
       colorB: params.grassColorB,
     })
     planetRef.current?.setAtmosphereOptics({
-      horizonGlow: params.atmosphereHorizonGlow,
       sunGlare: params.atmosphereSunGlare,
       sunGlareSize: params.atmosphereSunGlareSize,
+      twilightColor: params.atmosphereTwilightColor,
       twilightWidth: params.atmosphereTwilightWidth,
       twilightStrength: params.atmosphereTwilightStrength,
       extinctionStrength: params.atmosphereExtinctionStrength,
@@ -412,7 +410,6 @@ export function EditorCanvas({ params }: Props) {
       newPlanet.setSunPosition(latestSunPosition)
       engine.setSunPosition(latestSunPosition)
       newPlanet.setSunColor(paramsRef.current.sunColor)
-      newPlanet.setSunTintStrength(paramsRef.current.sunTintStrength)
       newPlanet.setTerrainAoStrength(paramsRef.current.terrainAoStrength)
       newPlanet.setClouds({
         coverage: paramsRef.current.cloudCoverage,
@@ -430,9 +427,9 @@ export function EditorCanvas({ params }: Props) {
         billboardCount: paramsRef.current.cloudBillboardCount,
       })
       newPlanet.setAtmosphereOptics({
-        horizonGlow: paramsRef.current.atmosphereHorizonGlow,
         sunGlare: paramsRef.current.atmosphereSunGlare,
         sunGlareSize: paramsRef.current.atmosphereSunGlareSize,
+        twilightColor: paramsRef.current.atmosphereTwilightColor,
         twilightWidth: paramsRef.current.atmosphereTwilightWidth,
         twilightStrength: paramsRef.current.atmosphereTwilightStrength,
         extinctionStrength: paramsRef.current.atmosphereExtinctionStrength,

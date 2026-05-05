@@ -648,20 +648,6 @@ export function EditorPanel({ params, onChange }: Props) {
           <span className="editor-value">{params.atmosphereDensity.toFixed(2)}</span>
         </div>
         <div className="editor-row">
-          <span className="editor-label">Horizon Glow</span>
-          <input
-            className="editor-slider"
-            type="range"
-            min={RANGES.atmosphereHorizonGlow.min}
-            max={RANGES.atmosphereHorizonGlow.max}
-            step={RANGES.atmosphereHorizonGlow.step}
-            value={params.atmosphereHorizonGlow}
-            onInput={e => set('atmosphereHorizonGlow', Number(e.currentTarget.value))}
-            onChange={e => set('atmosphereHorizonGlow', Number(e.target.value))}
-          />
-          <span className="editor-value">{params.atmosphereHorizonGlow.toFixed(2)}</span>
-        </div>
-        <div className="editor-row">
           <span className="editor-label">Sun Glare</span>
           <input
             className="editor-slider"
@@ -688,6 +674,16 @@ export function EditorPanel({ params, onChange }: Props) {
             onChange={e => set('atmosphereSunGlareSize', Number(e.target.value))}
           />
           <span className="editor-value">{params.atmosphereSunGlareSize.toFixed(2)}</span>
+        </div>
+        <div className="editor-row">
+          <span className="editor-label">Twilight Color</span>
+          <input
+            className="editor-color"
+            type="color"
+            value={params.atmosphereTwilightColor}
+            onChange={e => set('atmosphereTwilightColor', e.target.value)}
+          />
+          <span className="editor-value">{params.atmosphereTwilightColor}</span>
         </div>
         <div className="editor-row">
           <span className="editor-label">Twilight Width</span>
@@ -927,19 +923,6 @@ export function EditorPanel({ params, onChange }: Props) {
             onChange={e => set('sunColor', e.target.value)}
           />
           <span className="editor-value">{params.sunColor}</span>
-        </div>
-        <div className="editor-row">
-          <span className="editor-label">Sun Tint</span>
-          <input
-            className="editor-slider"
-            type="range"
-            min={RANGES.sunTintStrength.min}
-            max={RANGES.sunTintStrength.max}
-            step={RANGES.sunTintStrength.step}
-            value={params.sunTintStrength}
-            onChange={e => set('sunTintStrength', Number(e.target.value))}
-          />
-          <span className="editor-value">{params.sunTintStrength.toFixed(2)}</span>
         </div>
         <div className="editor-row">
           <span className="editor-label">Sun Azimuth</span>

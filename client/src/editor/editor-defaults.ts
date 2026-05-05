@@ -14,9 +14,9 @@ export interface EditorParams {
   terrainAoStrength: number
   atmosphereColor: string
   atmosphereDensity: number
-  atmosphereHorizonGlow: number
   atmosphereSunGlare: number
   atmosphereSunGlareSize: number
+  atmosphereTwilightColor: string
   atmosphereTwilightWidth: number
   atmosphereTwilightStrength: number
   atmosphereExtinctionStrength: number
@@ -41,7 +41,6 @@ export interface EditorParams {
   grassColorA: string
   grassColorB: string
   sunColor: string
-  sunTintStrength: number
   sunAzimuth: number
   sunElevation: number
   // Noise profile overrides
@@ -130,9 +129,9 @@ export const DEFAULT_PARAMS: EditorParams = {
   terrainAoStrength: 0.45,
   atmosphereColor: '#6fa8dc',
   atmosphereDensity: 0.75,
-  atmosphereHorizonGlow: 0.90,
   atmosphereSunGlare: 0.56,
   atmosphereSunGlareSize: 0.55,
+  atmosphereTwilightColor: '#ff8a3d',
   atmosphereTwilightWidth: 1.12,
   atmosphereTwilightStrength: 1.02,
   atmosphereExtinctionStrength: 0.82,
@@ -157,7 +156,6 @@ export const DEFAULT_PARAMS: EditorParams = {
   grassColorA: '#1f6f2e',
   grassColorB: '#64b94a',
   sunColor: '#fff2c8',
-  sunTintStrength: 0.85,
   sunAzimuth: 315,
   sunElevation: 28,
   octaves: 6,
@@ -207,7 +205,6 @@ export const RANGES = {
   textureFadeDistance: { min: 10, max: 10000, step: 10 },
   terrainAoStrength: { min: 0, max: 2, step: 0.01 },
   atmosphereDensity: { min: 0, max: 1, step: 0.01 },
-  atmosphereHorizonGlow: { min: 0, max: 2, step: 0.01 },
   atmosphereSunGlare: { min: 0, max: 2, step: 0.01 },
   atmosphereSunGlareSize: { min: 0.1, max: 2, step: 0.01 },
   atmosphereTwilightWidth: { min: 0.2, max: 2, step: 0.01 },
@@ -229,7 +226,6 @@ export const RANGES = {
   grassHeight: { min: 0.15, max: 8, step: 0.05 },
   grassWindStrength: { min: 0, max: 2, step: 0.01 },
   grassDistance: { min: 20, max: 2500, step: 10 },
-  sunTintStrength: { min: 0, max: 2, step: 0.01 },
   sunAzimuth: { min: 0, max: 360, step: 1 },
   sunElevation: { min: -20, max: 80, step: 1 },
   octaves: { min: 1, max: 8, step: 1 },

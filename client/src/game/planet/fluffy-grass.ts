@@ -181,7 +181,7 @@ export function createFluffyGrassMaterial(settings: FluffyGrassSettings): THREE.
       uSunColor: { value: new THREE.Color(0xfff2c8) },
       uAtmosphereColor: { value: new THREE.Color(0x6fa8dc) },
       uAtmosphereLightColor: { value: new THREE.Color(0xc4d5df) },
-      uSunTintStrength: { value: 0.85 },
+      uTwilightColor: { value: new THREE.Color(0xff8a3d) },
       uAtmosphereExtinctionStrength: { value: 0.82 },
       uCloudCoverage: { value: 0.68 },
       uCloudScale: { value: 2.7 },
@@ -255,7 +255,7 @@ export function createFluffyGrassMaterial(settings: FluffyGrassSettings): THREE.
       uniform vec3 uSunColor;
       uniform vec3 uAtmosphereColor;
       uniform vec3 uAtmosphereLightColor;
-      uniform float uSunTintStrength;
+      uniform vec3 uTwilightColor;
       uniform float uAtmosphereExtinctionStrength;
       varying vec2 vUv;
       varying float vTip;
@@ -273,16 +273,16 @@ export function createFluffyGrassMaterial(settings: FluffyGrassSettings): THREE.
         float lowSun = pow(1.0 - clamp(nDotL * 0.92 + 0.08, 0.0, 1.0), 1.8)
           * smoothstep(-0.24, 0.50, nDotL);
         float terminator = smoothstep(-0.34, 0.18, nDotL) * (1.0 - smoothstep(0.22, 0.72, nDotL));
-        float tintStrength = clamp(uSunTintStrength, 0.0, 2.0);
+        const float atmosphereLightInfluence = 0.85;
         float extinctionStrength = clamp(uAtmosphereExtinctionStrength, 0.0, 2.0);
         vec3 nightTint = vec3(0.010, 0.016, 0.032);
-        nightTint = mix(nightTint, nightTint + uAtmosphereLightColor * 0.055, tintStrength * 0.24);
+        nightTint = mix(nightTint, nightTint + uAtmosphereLightColor * 0.055, atmosphereLightInfluence * 0.24);
         vec3 sunsetTint = mix(vec3(1.0, 0.34, 0.10), uSunColor, 0.36);
         sunsetTint = mix(sunsetTint, uAtmosphereLightColor, 0.18);
-        vec3 sunTint = mix(vec3(1.0), uAtmosphereLightColor, tintStrength * 0.82);
+        vec3 sunTint = mix(vec3(1.0), uAtmosphereLightColor, atmosphereLightInfluence * 0.82);
         sunTint = mix(sunTint, sunsetTint, lowSun * extinctionStrength * 0.72);
-        vec3 skyTint = mix(vec3(0.36, 0.48, 0.62), uAtmosphereLightColor, 0.58 + tintStrength * 0.14);
-        vec3 twilightFill = mix(vec3(0.08, 0.10, 0.18), uAtmosphereLightColor * 0.32, tintStrength * 0.35);
+        vec3 skyTint = mix(vec3(0.36, 0.48, 0.62), uAtmosphereLightColor, 0.58 + atmosphereLightInfluence * 0.14);
+        vec3 twilightFill = mix(uTwilightColor * 0.28, uAtmosphereLightColor * 0.24, atmosphereLightInfluence * 0.22);
         float directTransmission = mix(1.0, 0.58, lowSun * extinctionStrength);
         float rim = pow(1.0 - max(dot(up, viewDir), 0.0), 2.0) * smoothstep(-0.05, 0.50, nDotL);
         vec3 lit = albedo * skyTint * (0.12 + day * 0.18)
@@ -290,7 +290,7 @@ export function createFluffyGrassMaterial(settings: FluffyGrassSettings): THREE.
         lit += albedo * twilightFill * terminator * extinctionStrength * 0.16;
         vec3 nightLit = albedo * nightTint * 0.12;
         lit = mix(nightLit, lit, day);
-        lit += mix(vec3(0.22, 0.34, 0.48), uAtmosphereLightColor, tintStrength * 0.46) * rim * 0.045 * day;
+        lit += mix(vec3(0.22, 0.34, 0.48), uAtmosphereLightColor, atmosphereLightInfluence * 0.46) * rim * 0.045 * day;
         return lit;
       }
 
