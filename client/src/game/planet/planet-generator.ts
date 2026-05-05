@@ -1914,6 +1914,9 @@ export function createAtmosphereMaterial(params: {
     float nDotV = max(dot(toCamera, shellNormal), 0.0);
     float rim = pow(1.0 - nDotV, 2.55);
     float outerFade = smoothstep(0.03, 0.78, rim) * (1.0 - smoothstep(0.90, 1.0, rim) * 0.22);
+    float shellThicknessRatio = clamp((uAtmosphereRadius - uPlanetRadius) / max(uAtmosphereRadius, 0.001), 0.001, 0.25);
+    float shellFadeStart = clamp(1.0 - shellThicknessRatio * 6.5, 0.46, 0.86);
+    float shellEdgeFade = 1.0 - smoothstep(shellFadeStart, 1.0, rim);
     float nDotL = dot(shellNormal, sunDir);
     float outsideDay = smoothstep(-0.30, 0.55, nDotL);
     float forwardScatter = pow(max(dot(toCamera, sunDir), 0.0), 7.0);
@@ -1977,7 +1980,7 @@ export function createAtmosphereMaterial(params: {
     insideAlpha = mix(insideAlpha, uDensity * (0.014 + horizon * 0.030), night);
 
     vec3 color = mix(outsideColor, insideColor, inside);
-    float alpha = mix(outsideAlpha, insideAlpha, inside);
+    float alpha = mix(outsideAlpha * shellEdgeFade, insideAlpha, inside);
     #include <logdepthbuf_fragment>
     gl_FragColor = vec4(color, clamp(alpha, 0.0, 0.86));
   }
