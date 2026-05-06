@@ -38,6 +38,7 @@ import {
   type FluffyGrassSettings,
 } from './fluffy-grass'
 import { createOceanMaterial } from './ocean'
+import { OceanChunkLayer, createOceanChunkMaterial } from './ocean-chunk'
 
 const SYNC_CHUNK_BUILD_BUDGET_MS = 4
 const WORKER_DISPATCH_BUDGET_MS = 0.8
@@ -50,6 +51,8 @@ const CLOUD_BILLBOARD_MAX_INSTANCES = 1600
 const GRASS_NEAR_LOD_BACKOFF = 3
 const GRASS_FAR_LOD_BACKOFF = 7
 const GRASS_FAR_DISTANCE_MULTIPLIER = 3.0
+const OCEAN_CHUNK_LOD_BACKOFF = 6
+const OCEAN_CHUNK_LOCAL_DISTANCE = WORLD_SCALE.localDetailFar * 36
 const FAR_TEXTURE_LOD_BANDS = [
   { maxLod: 2, detailScale: 0.060, farScale: 0.035, farStrength: 0.62 },
   { maxLod: 4, detailScale: 0.120, farScale: 0.050, farStrength: 0.58 },
@@ -166,9 +169,21 @@ export class PlanetRenderer {
   private farLodMaterials: THREE.ShaderMaterial[] = []
   private fallbackMaterial: THREE.ShaderMaterial
   private simpleTerrainMaterial = new THREE.MeshBasicMaterial({ color: 0x8f927f })
+  private oceanChunkDebugMaterial = new THREE.MeshBasicMaterial({
+    color: 0x62f4ff,
+    wireframe: true,
+    transparent: true,
+    opacity: 0.92,
+    depthTest: false,
+  })
   private oceanMaterial: THREE.ShaderMaterial | null = null
+  private oceanChunkMaterial: THREE.ShaderMaterial | null = null
   private oceanMesh: THREE.Mesh | null = null
   private oceanSeaRadius = 0
+  private oceanChunkMinLod = 0
+  private oceanLayers = new Map<string, OceanChunkLayer>()
+  private oceanVisibleChunks = 0
+  private oceanDebugWireframe = false
   private atmosphereMaterial: THREE.ShaderMaterial | null = null
   private cloudMaterial: THREE.ShaderMaterial | null = null
   private quadtrees: QuadtreeNode[] = []
@@ -312,6 +327,7 @@ export class PlanetRenderer {
     this.maxLod = multipliers.length - 1
     this.grassNearMinLod = Math.max(0, this.maxLod - GRASS_NEAR_LOD_BACKOFF)
     this.grassFarMinLod = Math.max(0, this.maxLod - GRASS_FAR_LOD_BACKOFF)
+    this.oceanChunkMinLod = Math.max(0, this.maxLod - OCEAN_CHUNK_LOD_BACKOFF)
     const ABSOLUTE_BASE = 50   // finest LOD covers 50 units near camera
     const ABSOLUTE_RATIO = 2.5 // each coarser level is 2.5x further
     this.lodDistances = multipliers.map((m, i) => {
@@ -684,6 +700,7 @@ export class PlanetRenderer {
       ...this.farLodMaterials,
       this.fallbackMaterial,
       this.oceanMaterial,
+      this.oceanChunkMaterial,
       this.cloudMaterial,
       this.cloudBillboardMaterial,
       this.atmosphereMaterial,
@@ -1060,8 +1077,12 @@ export class PlanetRenderer {
       material.wireframe = enabled
     }
     this.fallbackMaterial.wireframe = enabled
+    if (this.oceanMaterial) this.oceanMaterial.wireframe = enabled
+    if (this.oceanChunkMaterial) this.oceanChunkMaterial.wireframe = enabled
     if (this.cloudMaterial) this.cloudMaterial.wireframe = enabled
     if (this.cloudBillboardMaterial) this.cloudBillboardMaterial.wireframe = enabled
+    this.oceanDebugWireframe = enabled
+    this.updateOceanLayerDebugMaterials()
   }
 
   setDebugRendering(options: {
@@ -1199,6 +1220,8 @@ export class PlanetRenderer {
       cloudBillboards: this.cloudBillboardVisibleCount,
       ocean: this.oceanMesh?.visible ?? false,
       oceanQuality: this.oceanMaterial?.uniforms.uOceanQuality?.value ?? -1,
+      oceanChunkLayers: this.oceanLayers.size,
+      oceanChunks: this.oceanVisibleChunks,
       seaHeight: this.seaHeight,
       seaRadius: this.oceanSeaRadius,
       grassInstances: this.grassVisibleInstances,
@@ -1216,6 +1239,7 @@ export class PlanetRenderer {
     this.chunkGenerationMsLastFrame = 0
     this.chunkIntegrationMsLastFrame = 0
     this.grassVisibleInstances = 0
+    this.oceanVisibleChunks = 0
 
     const camPos = new THREE.Vector3()
     camera.getWorldPosition(camPos)
@@ -1269,6 +1293,7 @@ export class PlanetRenderer {
     this.cloudMaterial?.uniforms.uSunPosition.value.copy(this.sunPosition)
     this.cloudBillboardMaterial?.uniforms.uSunPosition.value.copy(this.sunPosition)
     this.oceanMaterial?.uniforms.uSunPosition.value.copy(this.sunPosition)
+    this.oceanChunkMaterial?.uniforms.uSunPosition.value.copy(this.sunPosition)
     this.atmosphereMaterial?.uniforms.uSunPosition.value.copy(this.sunPosition)
     this.updateLightColorUniforms()
     this.setFloatUniform(this.material, 'uTime', this.time)
@@ -1277,6 +1302,7 @@ export class PlanetRenderer {
     }
     this.setFloatUniform(this.fallbackMaterial, 'uTime', this.time)
     this.setFloatUniform(this.oceanMaterial, 'uTime', this.time)
+    this.setFloatUniform(this.oceanChunkMaterial, 'uTime', this.time)
     if (this.cloudMaterial) {
       this.group.getWorldPosition(this.cloudMaterial.uniforms.uPlanetCenter.value)
       this.cloudMaterial.uniforms.uTime.value = this.time
@@ -1374,6 +1400,7 @@ export class PlanetRenderer {
           }
         }
         this.updateChunkGrassVisibility(chunk, localCamPos)
+        this.updateChunkOceanVisibility(chunk, localCamPos)
       }
     }
 
@@ -1766,6 +1793,7 @@ export class PlanetRenderer {
       geometryData,
     )
     this.attachGrassLayer(chunk)
+    this.attachOceanLayer(chunk)
     return chunk
   }
 
@@ -1828,6 +1856,40 @@ export class PlanetRenderer {
     this.grassVisibleInstances = 0
   }
 
+  private attachOceanLayer(chunk: TerrainChunk) {
+    if (!this.oceanChunkMaterial || this.seaHeight < -1 || this.terrainParams.planetType === 'gas') return
+    if (chunk.node.lod < this.oceanChunkMinLod) return
+
+    const layer = new OceanChunkLayer({
+      surface: chunk.getSurfaceData(),
+      material: this.oceanChunkMaterial,
+      seaHeight: this.seaHeight,
+      seaRadius: this.oceanSeaRadius,
+      planetRadius: this.planetRadius,
+    })
+    if (layer.waterCoverage <= 0.001) {
+      layer.dispose()
+      return
+    }
+
+    chunk.mesh.add(layer.mesh)
+    this.oceanLayers.set(chunk.key, layer)
+    this.applyOceanLayerDebugMaterial(layer)
+  }
+
+  private updateOceanLayerDebugMaterials() {
+    for (const [, layer] of this.oceanLayers) {
+      this.applyOceanLayerDebugMaterial(layer)
+    }
+  }
+
+  private applyOceanLayerDebugMaterial(layer: OceanChunkLayer) {
+    if (!this.oceanChunkMaterial) return
+    layer.mesh.material = this.oceanDebugWireframe
+      ? this.oceanChunkDebugMaterial
+      : this.oceanChunkMaterial
+  }
+
   private createOceanLayer(params: PlanetRendererParams, waterLevel: number) {
     if (this.seaHeight < -1 || params.planetType === 'gas') return
 
@@ -1841,6 +1903,18 @@ export class PlanetRenderer {
     this.oceanMaterial = createOceanMaterial({
       seed: Number(params.seed),
       planetType: params.planetType,
+      seaHeight: this.seaHeight,
+      seaRadius,
+      planetRadius: this.planetRadius,
+      terrainScale: params.terrainScale,
+      waterLevel,
+      sunPosition: this.sunPosition,
+      sunColor: this.sunColor,
+      atmosphereColor: this.atmosphereColor,
+      atmosphereLightColor: this.atmosphereLightColor,
+    })
+    this.oceanChunkMaterial = createOceanChunkMaterial({
+      seed: Number(params.seed),
       seaHeight: this.seaHeight,
       seaRadius,
       planetRadius: this.planetRadius,
@@ -1874,9 +1948,10 @@ export class PlanetRenderer {
   private updateOceanRenderState(useTerrain: boolean, surfaceDistance: number) {
     if (!this.oceanMesh || !this.oceanMaterial) return
 
-    this.oceanMesh.visible = this.seaHeight >= -1
-    this.oceanMaterial.depthTest = useTerrain
     const normalizedDistance = Math.max(0, surfaceDistance) / Math.max(this.planetRadius, 1)
+    const debugLocalInspection = this.oceanDebugWireframe && useTerrain && normalizedDistance < 3.0
+    this.oceanMesh.visible = this.seaHeight >= -1 && !debugLocalInspection
+    this.oceanMaterial.depthTest = useTerrain
     const quality = normalizedDistance < 1.25
       ? 0
       : normalizedDistance < 3.00
@@ -1909,7 +1984,25 @@ export class PlanetRenderer {
     if (farVisible && farGrass) this.grassVisibleInstances += farGrass.instanceCount
   }
 
+  private updateChunkOceanVisibility(chunk: TerrainChunk, localCamPos: THREE.Vector3) {
+    const ocean = this.oceanLayers.get(chunk.key)
+    if (!ocean) return
+
+    const dist = this.getLocalChunkDistToCamera(chunk.node, localCamPos)
+    const visible = chunk.mesh.visible
+      && (!this.debugSimpleTerrain || this.oceanDebugWireframe)
+      && chunk.node.lod >= this.oceanChunkMinLod
+      && dist < OCEAN_CHUNK_LOCAL_DISTANCE
+    ocean.setVisible(visible)
+    if (visible) this.oceanVisibleChunks++
+  }
+
   private disposeChunk(chunk: TerrainChunk) {
+    const ocean = this.oceanLayers.get(chunk.key)
+    if (ocean) {
+      ocean.dispose()
+      this.oceanLayers.delete(chunk.key)
+    }
     const grass = this.grassLayers.get(chunk.key)
     if (grass) {
       grass.dispose()
@@ -2079,9 +2172,11 @@ export class PlanetRenderer {
     this.farLodMaterials.length = 0
     this.fallbackMaterial.dispose()
     this.simpleTerrainMaterial.dispose()
+    this.oceanChunkDebugMaterial.dispose()
     this.cloudMaterial?.dispose()
     this.cloudBillboardMaterial?.dispose()
     this.oceanMaterial?.dispose()
+    this.oceanChunkMaterial?.dispose()
     this.grassMaterial?.dispose()
     this.farGrassMaterial?.dispose()
     this.atmosphereMaterial?.dispose()

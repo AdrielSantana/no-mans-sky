@@ -229,6 +229,7 @@ export function EditorCanvas({ params }: Props) {
     planet.setSunColor(params.sunColor)
     engine.setSunColor(params.sunColor)
     applyDebugSettings(engine, planet, params)
+    planet.setDebugWireframe(wireframeRef.current)
     planetRef.current = planet
     initializedRef.current = true
 
@@ -438,6 +439,7 @@ export function EditorCanvas({ params }: Props) {
       })
       engine.setSunColor(paramsRef.current.sunColor)
       applyDebugSettings(engine, newPlanet, paramsRef.current)
+      newPlanet.setDebugWireframe(wireframeRef.current)
       planetRef.current = newPlanet
       planetKeyRef.current = buildPlanetKey(paramsRef.current)
       if (import.meta.env.DEV && window.__nmsEditorDebug?.engine === engine && walker) {
