@@ -80,6 +80,7 @@ export const init = spacetimedb.init(ctx => {
       bodyId,
       seed: BigInt(pp.seed),
       planetType: pp.planetType,
+      waterLevel: pp.waterLevel,
       terrainScale: pp.terrainScale,
       colorA: pp.colorA,
       colorB: pp.colorB,

@@ -15,6 +15,7 @@ export default __t.row({
   bodyId: __t.u64().name("body_id"),
   seed: __t.u64(),
   planetType: __t.string().name("planet_type"),
+  waterLevel: __t.f32().name("water_level"),
   terrainScale: __t.f32().name("terrain_scale"),
   colorA: __t.string().name("color_a"),
   colorB: __t.string().name("color_b"),

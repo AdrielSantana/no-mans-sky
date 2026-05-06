@@ -10,6 +10,7 @@ interface PlanetParamsRow {
   bodyId: bigint
   seed: bigint
   planetType: string
+  waterLevel: number
   terrainScale: number
   colorA: string
   colorB: string
@@ -96,6 +97,7 @@ export class CelestialSystem {
             seed: params.seed,
             planetType: params.planetType,
             terrainScale: params.terrainScale,
+            waterLevel: params.waterLevel,
             colorA: params.colorA,
             colorB: params.colorB,
             atmosphereColor: params.atmosphereColor,

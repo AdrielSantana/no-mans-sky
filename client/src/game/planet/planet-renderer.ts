@@ -17,6 +17,7 @@ import {
   createPlanetFarMaterial,
   createPlanetMaterial,
   createPlanetFallbackMaterial,
+  getSeaHeight,
   PlanetGenerator,
 } from './planet-generator'
 import { WORLD_SCALE } from '../world-scale'
@@ -68,6 +69,7 @@ interface PlanetRendererParams {
   seed: bigint
   planetType: string
   terrainScale: number
+  waterLevel?: number
   colorA: string
   colorB: string
   textureScale?: number
@@ -220,6 +222,7 @@ export class PlanetRenderer {
   private cloudBillboardsEnabled = true
   private cloudBillboardCount = 640
   private terrainParams: PlanetTerrainParams
+  private seaHeight = -10
   private lodDistances: number[]
   private requestedTerrainWorkers: number
   private nodeSurfaceRadiusCache = new Map<string, number>()
@@ -345,6 +348,8 @@ export class PlanetRenderer {
       microDetailScale: this.noiseProfile.microDetailScale,
       microReliefMeters: this.noiseProfile.microReliefMeters,
     }
+    const waterLevel = params.waterLevel ?? 0
+    this.seaHeight = getSeaHeight(waterLevel, params.planetType)
     if (this.grassSettings.enabled && params.planetType === 'rocky') {
       this.grassMaterial = createFluffyGrassMaterial(this.grassSettings, 'near')
       this.farGrassMaterial = createFluffyGrassMaterial(this.grassSettings, 'far')
@@ -354,6 +359,7 @@ export class PlanetRenderer {
     this.material = createPlanetMaterial({
       seed: Number(params.seed),
       planetType: params.planetType,
+      waterLevel,
       terrainScale: params.terrainScale,
       localDetailNear: WORLD_SCALE.localDetailNear,
       localDetailFar: WORLD_SCALE.localDetailFar,
@@ -390,6 +396,7 @@ export class PlanetRenderer {
     this.farMaterial = createPlanetFarMaterial({
       seed: Number(params.seed),
       planetType: params.planetType,
+      waterLevel,
       terrainScale: params.terrainScale,
       colorA: params.colorA,
       colorB: params.colorB,
@@ -439,6 +446,7 @@ export class PlanetRenderer {
     this.fallbackMaterial = createPlanetFallbackMaterial({
       seed: Number(params.seed),
       planetType: params.planetType,
+      waterLevel,
       colorA: params.colorA,
       colorB: params.colorB,
       textureScale: params.textureScale ?? 92,
@@ -577,6 +585,7 @@ export class PlanetRenderer {
     return createPlanetFarMaterial({
       seed: Number(params.seed),
       planetType: params.planetType,
+      waterLevel: params.waterLevel ?? 0,
       terrainScale: params.terrainScale,
       colorA: params.colorA,
       colorB: params.colorB,
@@ -1767,6 +1776,7 @@ export class PlanetRenderer {
       material,
       settings: this.grassSettings,
       seed: this.noiseProfile.seed,
+      seaHeight: this.seaHeight,
       planetType: this.terrainParams.planetType,
       variant,
     })

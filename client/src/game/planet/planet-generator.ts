@@ -32,6 +32,17 @@ export const PlanetKind = {
   Ice: 2,
 } as const
 
+export function getSeaHeight(waterLevel: number, planetType: string): number {
+  if (waterLevel <= 0.02 || planetType === 'gas') return -10
+
+  const coverage = THREE.MathUtils.clamp(waterLevel, 0, 1)
+  if (planetType === 'ice') {
+    return -0.16 + coverage * 0.22
+  }
+
+  return -0.18 + coverage * 0.28
+}
+
 export class PlanetGenerator {
   static fromParams(params: {
     seed: bigint
@@ -401,7 +412,7 @@ uniform float uGrassGroundAoStrength;
 float terrainGrassGroundMask(float grassPatch, float heightNorm, float moisture, float slope, float coast, float rockMask, float snowMask) {
   if (uPlanetKind > 0.5) return 0.0;
 
-  float surfaceMask = 1.0;
+  float aboveSeaMask = smoothstep(uSeaHeight + 0.018, uSeaHeight + 0.075, vHeight);
   float slopeDot = clamp(1.0 - slope, 0.0, 1.0);
   float slopeMask = smoothstep(0.62, 0.88, slopeDot);
   float grassBiomeMask = smoothstep(0.34, 0.62, moisture)
@@ -410,7 +421,7 @@ float terrainGrassGroundMask(float grassPatch, float heightNorm, float moisture,
     * (1.0 - clamp(snowMask, 0.0, 1.0))
     * (1.0 - smoothstep(0.58, 0.70, heightNorm));
 
-  return clamp(grassPatch, 0.0, 1.0) * surfaceMask * slopeMask * grassBiomeMask;
+  return clamp(grassPatch, 0.0, 1.0) * aboveSeaMask * slopeMask * grassBiomeMask;
 }
 
 vec3 applyGrassGroundAo(vec3 color, float grassPatch, float heightNorm, float moisture, float slope, float coast, float rockMask, float snowMask) {
@@ -591,6 +602,7 @@ vec3 applyTerrainCloudShadow(vec3 color, vec3 surfaceDir, float strengthMultipli
 export function createPlanetMaterial(params: {
   seed: number
   planetType: string
+  waterLevel: number
   terrainScale: number
   localDetailNear: number
   localDetailFar: number
@@ -723,6 +735,7 @@ export function createPlanetMaterial(params: {
   uniform float uPlanetRadius;
   uniform float uLocalDetailNear;
   uniform float uLocalDetailFar;
+  uniform float uSeaHeight;
 
   varying vec3 vNormal;
   varying vec3 vRadialNormal;
@@ -752,7 +765,7 @@ export function createPlanetMaterial(params: {
     vec3 beach = vec3(0.68, 0.60, 0.44);
 
     vec3 color = mix(deepRock, mix(dryland, lowland, moisture), smoothstep(0.36, 0.50, heightNorm));
-    float coast = 0.0;
+    float coast = smoothstep(uSeaHeight - 0.014, uSeaHeight + 0.014, vHeight) * (1.0 - smoothstep(uSeaHeight + 0.026, uSeaHeight + 0.060, vHeight));
     color = mix(color, beach, coast);
     color = mix(color, highRock, smoothstep(0.58, 0.70, heightNorm));
     color = mix(color, snow, smoothstep(0.74, 0.84, heightNorm + latitude * 0.18) * smoothstep(0.54, 0.78, latitude));
@@ -801,6 +814,18 @@ export function createPlanetMaterial(params: {
     return mix(color, clamp(color, 0.0, 1.0), vNearDetail);
   }
 
+  vec3 applyOceanFloor(vec3 color, float height, float slope) {
+    if (uPlanetKind > 0.5 && uPlanetKind < 1.5 || uSeaHeight < -1.0) return color;
+
+    float underwater = smoothstep(uSeaHeight + 0.018, uSeaHeight - 0.018, height);
+    float shelf = smoothstep(uSeaHeight - 0.18, uSeaHeight + 0.02, height);
+    vec3 deepFloor = vec3(0.012, 0.045, 0.070);
+    vec3 shallowFloor = vec3(0.045, 0.115, 0.125);
+    vec3 oceanFloor = mix(deepFloor, shallowFloor, shelf);
+    oceanFloor = mix(oceanFloor, oceanFloor * 0.72, clamp(slope * 1.5, 0.0, 1.0));
+    return mix(color, oceanFloor, underwater);
+  }
+
   vec3 detailNormal(vec3 baseNormal, float latitude, float moisture, float slope, float coast) {
     if (uPlanetKind > 0.5 && uPlanetKind < 1.5) return baseNormal;
 
@@ -832,7 +857,7 @@ export function createPlanetMaterial(params: {
     float latitude = abs(vSphereDir.y);
     float moisture = saturate(vHeight * 0.75 + 0.5);
     float slope = saturate(1.0 - dot(normalize(vNormal), normalize(vRadialNormal)));
-    float coast = 0.0;
+    float coast = smoothstep(uSeaHeight - 0.014, uSeaHeight + 0.014, vHeight) * (1.0 - smoothstep(uSeaHeight + 0.026, uSeaHeight + 0.060, vHeight));
 
     vec3 terrainColor;
     if (uPlanetKind > 0.5 && uPlanetKind < 1.5) {
@@ -845,6 +870,7 @@ export function createPlanetMaterial(params: {
       terrainColor = rockyBiome(heightNorm, latitude, moisture, slope);
     }
 
+    terrainColor = applyOceanFloor(terrainColor, vHeight, slope);
     float rockMask = saturate(slope * 0.75 + smoothstep(0.60, 0.72, heightNorm));
     float snowMask = smoothstep(0.74, 0.84, heightNorm + latitude * 0.18) * smoothstep(0.54, 0.78, latitude);
     terrainColor = applyTerrainTexture(terrainColor, vSphereDir, uPlanetKind, heightNorm, coast, rockMask, snowMask, moisture, distance(cameraPosition, vWorldPos));
@@ -874,6 +900,7 @@ export function createPlanetMaterial(params: {
       uPlanetKind: { value: planetKind },
       uLocalDetailNear: { value: params.localDetailNear },
       uLocalDetailFar: { value: params.localDetailFar },
+      uSeaHeight: { value: getSeaHeight(params.waterLevel, params.planetType) },
       uColorA: { value: colorA },
       uColorB: { value: colorB },
       uSunPosition: { value: params.sunPosition.clone() },
@@ -916,6 +943,7 @@ export function createPlanetMaterial(params: {
 export function createPlanetFarMaterial(params: {
   seed: number
   planetType: string
+  waterLevel: number
   terrainScale: number
   colorA: string
   colorB: string
@@ -1041,6 +1069,7 @@ export function createPlanetFarMaterial(params: {
   uniform vec3 uTwilightColor;
   uniform float uAtmosphereExtinctionStrength;
   uniform float uPlanetRadius;
+  uniform float uSeaHeight;
 
   varying vec3 vWorldPos;
   varying vec3 vNormal;
@@ -1068,7 +1097,7 @@ export function createPlanetFarMaterial(params: {
     vec3 beach = vec3(0.68, 0.60, 0.44);
 
     vec3 color = mix(deepRock, mix(dryland, lowland, moisture), smoothstep(0.36, 0.50, heightNorm));
-    float coast = 0.0;
+    float coast = smoothstep(uSeaHeight - 0.014, uSeaHeight + 0.014, vHeight) * (1.0 - smoothstep(uSeaHeight + 0.026, uSeaHeight + 0.060, vHeight));
     color = mix(color, beach, coast);
     color = mix(color, highRock, smoothstep(0.58, 0.70, heightNorm));
     color = mix(color, snow, smoothstep(0.74, 0.84, heightNorm + latitude * 0.18) * smoothstep(0.54, 0.78, latitude));
@@ -1095,6 +1124,18 @@ export function createPlanetFarMaterial(params: {
     return color;
   }
 
+  vec3 applyOceanFloor(vec3 color, float height, float slope) {
+    if (uPlanetKind > 0.5 && uPlanetKind < 1.5 || uSeaHeight < -1.0) return color;
+
+    float underwater = smoothstep(uSeaHeight + 0.018, uSeaHeight - 0.018, height);
+    float shelf = smoothstep(uSeaHeight - 0.18, uSeaHeight + 0.02, height);
+    vec3 deepFloor = vec3(0.012, 0.045, 0.070);
+    vec3 shallowFloor = vec3(0.045, 0.115, 0.125);
+    vec3 oceanFloor = mix(deepFloor, shallowFloor, shelf);
+    oceanFloor = mix(oceanFloor, oceanFloor * 0.72, clamp(slope * 1.5, 0.0, 1.0));
+    return mix(color, oceanFloor, underwater);
+  }
+
   void main() {
     float visualHeight = vHeight;
     float heightNorm = smoothstep(-1.0, 1.0, visualHeight);
@@ -1102,7 +1143,7 @@ export function createPlanetFarMaterial(params: {
     float moisture = saturate(visualHeight * 0.75 + 0.5);
     vec3 shadingNormal = normalize(vNormal);
     float slope = saturate(1.0 - dot(shadingNormal, normalize(vRadialNormal)));
-    float coast = 0.0;
+    float coast = smoothstep(uSeaHeight - 0.014, uSeaHeight + 0.014, visualHeight) * (1.0 - smoothstep(uSeaHeight + 0.026, uSeaHeight + 0.060, visualHeight));
 
     vec3 terrain;
     if (uPlanetKind > 0.5 && uPlanetKind < 1.5) {
@@ -1114,6 +1155,7 @@ export function createPlanetFarMaterial(params: {
       terrain = rockyBiome(heightNorm, latitude, moisture, slope);
     }
 
+    terrain = applyOceanFloor(terrain, visualHeight, slope);
     float rockMask = saturate(slope * 0.75 + smoothstep(0.60, 0.72, heightNorm));
     float snowMask = smoothstep(0.74, 0.84, heightNorm + latitude * 0.18) * smoothstep(0.54, 0.78, latitude);
     terrain = applyTerrainTexture(terrain, vSphereDir, uPlanetKind, heightNorm, coast, rockMask, snowMask, moisture, distance(cameraPosition, vWorldPos));
@@ -1147,6 +1189,7 @@ export function createPlanetFarMaterial(params: {
       uErosionStrength: { value: params.erosionStrength },
       uThermalStrength: { value: params.thermalStrength },
       uDetailStrength: { value: params.detailStrength },
+      uSeaHeight: { value: getSeaHeight(params.waterLevel, params.planetType) },
       uColorA: { value: colorA },
       uColorB: { value: colorB },
       uSunPosition: { value: params.sunPosition.clone() },
@@ -1189,6 +1232,7 @@ export function createPlanetFarMaterial(params: {
 export function createPlanetFallbackMaterial(params: {
   seed: number
   planetType: string
+  waterLevel: number
   colorA: string
   colorB: string
   textureScale: number
@@ -1283,6 +1327,7 @@ export function createPlanetFallbackMaterial(params: {
   uniform float uAtmosphereExtinctionStrength;
   uniform float uPlanetKind;
   uniform float uPlanetRadius;
+  uniform float uSeaHeight;
 
   varying vec3 vWorldPos;
   varying vec3 vNormal;
@@ -1307,7 +1352,7 @@ export function createPlanetFallbackMaterial(params: {
     vec3 beach = vec3(0.68, 0.60, 0.44);
 
     vec3 color = mix(deepRock, mix(dryland, lowland, moisture), smoothstep(0.36, 0.50, heightNorm));
-    float coast = 0.0;
+    float coast = smoothstep(uSeaHeight - 0.014, uSeaHeight + 0.014, vHeight) * (1.0 - smoothstep(uSeaHeight + 0.026, uSeaHeight + 0.060, vHeight));
     color = mix(color, beach, coast);
     color = mix(color, highRock, smoothstep(0.58, 0.70, heightNorm));
     color = mix(color, snow, smoothstep(0.74, 0.84, heightNorm + latitude * 0.18) * smoothstep(0.54, 0.78, latitude));
@@ -1334,6 +1379,18 @@ export function createPlanetFallbackMaterial(params: {
     return color;
   }
 
+  vec3 applyOceanFloor(vec3 color, float height, float slope) {
+    if (uPlanetKind > 0.5 && uPlanetKind < 1.5 || uSeaHeight < -1.0) return color;
+
+    float underwater = smoothstep(uSeaHeight + 0.018, uSeaHeight - 0.018, height);
+    float shelf = smoothstep(uSeaHeight - 0.18, uSeaHeight + 0.02, height);
+    vec3 deepFloor = vec3(0.012, 0.045, 0.070);
+    vec3 shallowFloor = vec3(0.045, 0.115, 0.125);
+    vec3 oceanFloor = mix(deepFloor, shallowFloor, shelf);
+    oceanFloor = mix(oceanFloor, oceanFloor * 0.72, clamp(slope * 1.5, 0.0, 1.0));
+    return mix(color, oceanFloor, underwater);
+  }
+
   void main() {
     float visualHeight = vHeight;
     float heightNorm = smoothstep(-1.0, 1.0, visualHeight);
@@ -1341,7 +1398,7 @@ export function createPlanetFallbackMaterial(params: {
     float moisture = saturate(visualHeight * 0.75 + 0.5);
     vec3 shadingNormal = normalize(vNormal);
     float slope = saturate(1.0 - dot(shadingNormal, normalize(vRadialNormal)));
-    float coast = 0.0;
+    float coast = smoothstep(uSeaHeight - 0.014, uSeaHeight + 0.014, visualHeight) * (1.0 - smoothstep(uSeaHeight + 0.026, uSeaHeight + 0.060, visualHeight));
 
     vec3 terrain;
     if (uPlanetKind > 0.5 && uPlanetKind < 1.5) {
@@ -1353,6 +1410,7 @@ export function createPlanetFallbackMaterial(params: {
       terrain = rockyBiome(heightNorm, latitude, moisture, slope);
     }
 
+    terrain = applyOceanFloor(terrain, visualHeight, slope);
     float rockMask = saturate(slope * 0.75 + smoothstep(0.60, 0.72, heightNorm));
     float snowMask = smoothstep(0.74, 0.84, heightNorm + latitude * 0.18) * smoothstep(0.54, 0.78, latitude);
     terrain = applyTerrainTexture(terrain, vSphereDir, uPlanetKind, heightNorm, coast, rockMask, snowMask, moisture, distance(cameraPosition, vWorldPos));
@@ -1383,6 +1441,7 @@ export function createPlanetFallbackMaterial(params: {
       uThermalStrength: { value: params.thermalStrength },
       uDetailStrength: { value: params.detailStrength },
       uPlanetRadius: { value: params.planetRadius },
+      uSeaHeight: { value: getSeaHeight(params.waterLevel, params.planetType) },
       uPlanetKind: { value: planetKind },
       uColorA: { value: colorA },
       uColorB: { value: colorB },
