@@ -37,6 +37,7 @@ import {
   type FluffyGrassVariant,
   type FluffyGrassSettings,
 } from './fluffy-grass'
+import { createOceanMaterial } from './ocean'
 
 const SYNC_CHUNK_BUILD_BUDGET_MS = 4
 const WORKER_DISPATCH_BUDGET_MS = 0.8
@@ -165,6 +166,9 @@ export class PlanetRenderer {
   private farLodMaterials: THREE.ShaderMaterial[] = []
   private fallbackMaterial: THREE.ShaderMaterial
   private simpleTerrainMaterial = new THREE.MeshBasicMaterial({ color: 0x8f927f })
+  private oceanMaterial: THREE.ShaderMaterial | null = null
+  private oceanMesh: THREE.Mesh | null = null
+  private oceanSeaRadius = 0
   private atmosphereMaterial: THREE.ShaderMaterial | null = null
   private cloudMaterial: THREE.ShaderMaterial | null = null
   private quadtrees: QuadtreeNode[] = []
@@ -489,6 +493,8 @@ export class PlanetRenderer {
     this.fallbackSphere.frustumCulled = false
     this.group.add(this.fallbackSphere)
 
+    this.createOceanLayer(params, waterLevel)
+
     if (params.planetType !== 'gas' && this.cloudOpacity > 0.001) {
       const cloudRadius = planetRadius * (1 + THREE.MathUtils.clamp(this.cloudHeight, 0.001, 0.20))
       this.cloudMeshBaseRadius = cloudRadius
@@ -677,6 +683,7 @@ export class PlanetRenderer {
       this.material,
       ...this.farLodMaterials,
       this.fallbackMaterial,
+      this.oceanMaterial,
       this.cloudMaterial,
       this.cloudBillboardMaterial,
       this.atmosphereMaterial,
@@ -1190,6 +1197,10 @@ export class PlanetRenderer {
       stitchEdges,
       cloudQuality: this.cloudQuality,
       cloudBillboards: this.cloudBillboardVisibleCount,
+      ocean: this.oceanMesh?.visible ?? false,
+      oceanQuality: this.oceanMaterial?.uniforms.uOceanQuality?.value ?? -1,
+      seaHeight: this.seaHeight,
+      seaRadius: this.oceanSeaRadius,
       grassInstances: this.grassVisibleInstances,
       generated: this.generatedChunksLastFrame,
       chunkGenerationMs: this.chunkGenerationMsLastFrame,
@@ -1257,6 +1268,7 @@ export class PlanetRenderer {
     this.fallbackMaterial.uniforms.uSunPosition.value.copy(this.sunPosition)
     this.cloudMaterial?.uniforms.uSunPosition.value.copy(this.sunPosition)
     this.cloudBillboardMaterial?.uniforms.uSunPosition.value.copy(this.sunPosition)
+    this.oceanMaterial?.uniforms.uSunPosition.value.copy(this.sunPosition)
     this.atmosphereMaterial?.uniforms.uSunPosition.value.copy(this.sunPosition)
     this.updateLightColorUniforms()
     this.setFloatUniform(this.material, 'uTime', this.time)
@@ -1264,6 +1276,7 @@ export class PlanetRenderer {
       this.setFloatUniform(material, 'uTime', this.time)
     }
     this.setFloatUniform(this.fallbackMaterial, 'uTime', this.time)
+    this.setFloatUniform(this.oceanMaterial, 'uTime', this.time)
     if (this.cloudMaterial) {
       this.group.getWorldPosition(this.cloudMaterial.uniforms.uPlanetCenter.value)
       this.cloudMaterial.uniforms.uTime.value = this.time
@@ -1278,6 +1291,7 @@ export class PlanetRenderer {
     this.updateCloudBillboards(localCamPos)
     // Decide: show fallback sphere or quadtree terrain
     const useTerrain = surfaceDist < this.lodDistances[1]
+    this.updateOceanRenderState(useTerrain, surfaceDist)
 
     if (!useTerrain) {
       this.fallbackSphere.visible = true
@@ -1814,6 +1828,63 @@ export class PlanetRenderer {
     this.grassVisibleInstances = 0
   }
 
+  private createOceanLayer(params: PlanetRendererParams, waterLevel: number) {
+    if (this.seaHeight < -1 || params.planetType === 'gas') return
+
+    const seaRadius = this.planetRadius + this.seaHeight * params.terrainScale * this.planetRadius
+    if (!Number.isFinite(seaRadius) || seaRadius <= 0) return
+
+    this.oceanSeaRadius = seaRadius
+    const oceanGeo = new THREE.SphereGeometry(seaRadius, 128, 64)
+    this.addOceanTerrainHeightAttribute(oceanGeo)
+
+    this.oceanMaterial = createOceanMaterial({
+      seed: Number(params.seed),
+      planetType: params.planetType,
+      seaHeight: this.seaHeight,
+      seaRadius,
+      planetRadius: this.planetRadius,
+      terrainScale: params.terrainScale,
+      waterLevel,
+      sunPosition: this.sunPosition,
+      sunColor: this.sunColor,
+      atmosphereColor: this.atmosphereColor,
+      atmosphereLightColor: this.atmosphereLightColor,
+    })
+
+    this.oceanMesh = new THREE.Mesh(oceanGeo, this.oceanMaterial)
+    this.oceanMesh.frustumCulled = false
+    this.oceanMesh.renderOrder = 2
+    this.group.add(this.oceanMesh)
+  }
+
+  private addOceanTerrainHeightAttribute(geometry: THREE.BufferGeometry) {
+    const positions = geometry.getAttribute('position')
+    const heights = new Float32Array(positions.count)
+    const dir = new THREE.Vector3()
+
+    for (let i = 0; i < positions.count; i++) {
+      dir.fromBufferAttribute(positions, i).normalize()
+      heights[i] = samplePlanetHeight(dir, this.terrainParams)
+    }
+
+    geometry.setAttribute('terrainHeight', new THREE.BufferAttribute(heights, 1))
+  }
+
+  private updateOceanRenderState(useTerrain: boolean, surfaceDistance: number) {
+    if (!this.oceanMesh || !this.oceanMaterial) return
+
+    this.oceanMesh.visible = this.seaHeight >= -1
+    this.oceanMaterial.depthTest = useTerrain
+    const normalizedDistance = Math.max(0, surfaceDistance) / Math.max(this.planetRadius, 1)
+    const quality = normalizedDistance < 1.25
+      ? 0
+      : normalizedDistance < 3.00
+        ? 1
+        : 2
+    this.setFloatUniform(this.oceanMaterial, 'uOceanQuality', quality)
+  }
+
   private updateChunkGrassVisibility(chunk: TerrainChunk, localCamPos: THREE.Vector3) {
     const grass = this.grassLayers.get(chunk.key)
     const farGrass = this.farGrassLayers.get(chunk.key)
@@ -2010,11 +2081,13 @@ export class PlanetRenderer {
     this.simpleTerrainMaterial.dispose()
     this.cloudMaterial?.dispose()
     this.cloudBillboardMaterial?.dispose()
+    this.oceanMaterial?.dispose()
     this.grassMaterial?.dispose()
     this.farGrassMaterial?.dispose()
     this.atmosphereMaterial?.dispose()
     this.cloudMesh?.geometry.dispose()
     this.cloudBillboardMesh?.geometry.dispose()
+    this.oceanMesh?.geometry.dispose()
     this.atmosphereMesh?.geometry.dispose()
     if (this.fallbackSphere.material instanceof THREE.ShaderMaterial) {
       this.fallbackSphere.material.dispose()
