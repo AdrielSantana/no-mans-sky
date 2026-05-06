@@ -3,8 +3,6 @@ export interface EditorParams {
   planetType: string
   planetRadius: number
   terrainScale: number
-  waterLevel: number
-  oceanColor: string
   colorA: string
   colorB: string
   textureScale: number
@@ -80,7 +78,6 @@ export interface EditorParams {
   bloomThreshold: number
   toneMappingExposure: number
   debugBloom: boolean
-  debugOcean: boolean
   debugAtmosphere: boolean
   debugClouds: boolean
   debugSimpleTerrain: boolean
@@ -120,8 +117,6 @@ export const DEFAULT_PARAMS: EditorParams = {
   planetType: 'rocky',
   planetRadius: 50000,
   terrainScale: 0.065,
-  waterLevel: 0.45,
-  oceanColor: '#123d55',
   colorA: '#26a269',
   colorB: '#63452c',
   textureScale: 92,
@@ -190,7 +185,6 @@ export const DEFAULT_PARAMS: EditorParams = {
   bloomThreshold: 1.50,
   toneMappingExposure: 1.0,
   debugBloom: true,
-  debugOcean: true,
   debugAtmosphere: true,
   debugClouds: true,
   debugSimpleTerrain: false,
@@ -202,7 +196,6 @@ export const DEFAULT_PARAMS: EditorParams = {
 export const RANGES = {
   planetRadius: { min: 100, max: 100000, step: 10 },
   terrainScale: { min: 0.01, max: 1.0, step: 0.01 },
-  waterLevel: { min: 0, max: 1, step: 0.01 },
   textureScale: { min: 8, max: 240, step: 1 },
   textureBlend: { min: 0, max: 1, step: 0.01 },
   textureNearDistance: { min: 10, max: 5000, step: 10 },

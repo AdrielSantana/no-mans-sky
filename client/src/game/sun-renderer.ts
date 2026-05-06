@@ -133,7 +133,7 @@ uniform float uBase;
 uniform float uBrightnessOffset;
 uniform float uBrightness;
 
-float ocean(){
+float plasma(){
   float s = 0.0;
   s += textureCube(uPerlinCube, vLayer0).r;
   s += textureCube(uPerlinCube, vLayer1).r;
@@ -145,7 +145,7 @@ void main(){
   vec3 Vview = normalize((viewMatrix * vec4(vWorld - cameraPosition, 0.0)).xyz);
   float nDotV = dot(vNormalView, -Vview);
   float fresnel = pow(1.0 - nDotV, uFresnelPower) * uFresnelInfluence;
-  float brightness = ocean() * uBase + uBrightnessOffset + fresnel;
+  float brightness = plasma() * uBase + uBrightnessOffset + fresnel;
   vec3 col = clamp(brightnessToColor(brightness, uTint, uBrightness), 0.0, 1.0);
   float a = getAlpha(normalize(vNormalWorld));
   #include <logdepthbuf_fragment>

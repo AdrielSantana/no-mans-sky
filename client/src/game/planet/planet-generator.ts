@@ -32,17 +32,6 @@ export const PlanetKind = {
   Ice: 2,
 } as const
 
-export function getSeaHeight(waterLevel: number, planetType: string): number {
-  if (waterLevel <= 0.02 || planetType === 'gas') return -10
-
-  const coverage = THREE.MathUtils.clamp(waterLevel, 0, 1)
-  if (planetType === 'ice') {
-    return -0.16 + coverage * 0.22
-  }
-
-  return -0.18 + coverage * 0.28
-}
-
 export class PlanetGenerator {
   static fromParams(params: {
     seed: bigint
@@ -412,7 +401,7 @@ uniform float uGrassGroundAoStrength;
 float terrainGrassGroundMask(float grassPatch, float heightNorm, float moisture, float slope, float coast, float rockMask, float snowMask) {
   if (uPlanetKind > 0.5) return 0.0;
 
-  float aboveSeaMask = smoothstep(uSeaHeight + 0.018, uSeaHeight + 0.075, vHeight);
+  float surfaceMask = 1.0;
   float slopeDot = clamp(1.0 - slope, 0.0, 1.0);
   float slopeMask = smoothstep(0.62, 0.88, slopeDot);
   float grassBiomeMask = smoothstep(0.34, 0.62, moisture)
@@ -421,7 +410,7 @@ float terrainGrassGroundMask(float grassPatch, float heightNorm, float moisture,
     * (1.0 - clamp(snowMask, 0.0, 1.0))
     * (1.0 - smoothstep(0.58, 0.70, heightNorm));
 
-  return clamp(grassPatch, 0.0, 1.0) * aboveSeaMask * slopeMask * grassBiomeMask;
+  return clamp(grassPatch, 0.0, 1.0) * surfaceMask * slopeMask * grassBiomeMask;
 }
 
 vec3 applyGrassGroundAo(vec3 color, float grassPatch, float heightNorm, float moisture, float slope, float coast, float rockMask, float snowMask) {
@@ -598,143 +587,10 @@ vec3 applyTerrainCloudShadow(vec3 color, vec3 surfaceDir, float strengthMultipli
 }
 `
 
-const OCEAN_TERRAIN_HEIGHT_GLSL = /* glsl */ `
-uniform float uOceanLacunarity;
-uniform float uOceanGain;
-uniform float uOceanWarpStrength;
-uniform float uOceanContinentalScale;
-uniform float uOceanMountainScale;
-uniform float uOceanPlainsScale;
-uniform float uOceanHillsScale;
-uniform float uOceanMountainBeltScale;
-uniform float uOceanReliefVariety;
-uniform float uOceanErosionStrength;
-uniform float uOceanThermalStrength;
-uniform float uOceanDetailStrength;
-
-vec3 oceanWarpedDirection(vec3 dir) {
-  if (uOceanWarpStrength <= 0.0) return normalize(dir);
-
-  vec3 p = dir * 1.35;
-  vec3 offset = vec3(
-    terrainFbm(p + vec3(11.3, -4.8, 7.1), uSeed + 101.7, 3, uOceanLacunarity, uOceanGain),
-    terrainFbm(p + vec3(-8.2, 16.5, 2.4), uSeed + 211.3, 3, uOceanLacunarity, uOceanGain),
-    terrainFbm(p + vec3(5.6, 9.7, -13.8), uSeed + 307.9, 3, uOceanLacunarity, uOceanGain)
-  );
-  return normalize(dir + offset * uOceanWarpStrength * 0.36);
-}
-
-float oceanTerrainHeight(vec3 sphereDir) {
-  vec3 baseDir = normalize(sphereDir);
-  if (uPlanetKind > 0.5 && uPlanetKind < 1.5) {
-    return terrainFbm(baseDir * uFrequency, uSeed, int(uOctaves), uOceanLacunarity, uOceanGain) * 0.05;
-  }
-
-  vec3 warped = oceanWarpedDirection(baseDir);
-  int octaveCount = min(int(uOctaves), 8);
-  float continentalRaw = terrainFbm(warped * uFrequency * 0.48, uSeed, min(octaveCount, 4), uOceanLacunarity, uOceanGain);
-  float basinRaw = terrainFbm(warped * uFrequency * 0.22 + vec3(19.1, -5.4, 12.6), uSeed + 43.1, 3, 2.05, 0.48);
-  float continentMask = smoothstep(-0.28, 0.46, continentalRaw + basinRaw * 0.18);
-  float continentHeight = (continentMask * 2.0 - 1.0) * 0.34 * uOceanContinentalScale;
-
-  float reliefVariety = clamp(uOceanReliefVariety, 0.0, 2.0);
-  float plainsScale = clamp(uOceanPlainsScale, 0.0, 2.0);
-  float hillsScale = clamp(uOceanHillsScale, 0.0, 2.0);
-  float mountainBeltScale = clamp(uOceanMountainBeltScale, 0.0, 2.0);
-
-  float reliefRaw = terrainFbm(warped * uFrequency * 0.34 + vec3(51.2, -19.8, 7.4), uSeed + 351.6, 3, 2.0, 0.5);
-  float plainsMask = clamp(
-    smoothstep(-0.12, 0.58, reliefRaw + basinRaw * 0.32)
-      * smoothstep(0.10, 0.62, continentMask)
-      * plainsScale,
-    0.0,
-    1.0
-  );
-
-  float hillsRaw = terrainFbm(warped * uFrequency * 0.92 + vec3(-14.7, 33.3, -6.1), uSeed + 419.2, 3, 2.05, 0.48);
-  float hillsMask = clamp(
-    smoothstep(-0.34, 0.48, hillsRaw + reliefRaw * 0.18)
-      * smoothstep(0.18, 0.72, continentMask)
-      * (1.0 - plainsMask * 0.55)
-      * hillsScale,
-    0.0,
-    1.0
-  );
-
-  float plainFlatten = plainsMask * reliefVariety * 0.46;
-  continentHeight = mix(continentHeight, continentHeight * 0.68 + basinRaw * 0.030, clamp(plainFlatten, 0.0, 0.78));
-
-  float lowlandUndulation = terrainFbm(warped * uFrequency * 1.18 + vec3(3.7, -8.1, 4.2), uSeed + 17.5, min(octaveCount, 5), uOceanLacunarity, uOceanGain) * 0.105;
-  float plateNoise = abs(terrainFbm(warped * uFrequency * 0.82 + vec3(-23.5, 6.2, 14.8), uSeed + 83.4, 4, 2.1, 0.52));
-  float plateBoundary = pow(1.0 - clamp(plateNoise, 0.0, 1.0), 3.15);
-
-  float ridgeNoise = abs(terrainFbm(warped * uFrequency * 2.75 + 17.0, uSeed + 9.7, min(4, max(2, octaveCount - 2)), uOceanLacunarity, uOceanGain * 0.92));
-  float mountainSharpness = mix(2.65, 1.85, clamp(uOceanThermalStrength, 0.0, 1.0) * 0.45);
-  float ridges = pow(1.0 - clamp(ridgeNoise, 0.0, 1.0), mountainSharpness);
-
-  float beltNoise = terrainFbm(warped * uFrequency * 0.58 + vec3(71.0, 11.0, -47.0), uSeed + 503.5, 3, 2.0, 0.5);
-  float mountainBeltMask = clamp(
-    smoothstep(0.18, 0.82, plateBoundary + (1.0 - abs(beltNoise)) * 0.36)
-      * smoothstep(0.30, 0.88, continentMask)
-      * (1.0 - plainsMask * 0.84)
-      * mountainBeltScale,
-    0.0,
-    1.0
-  );
-
-  float baseMountainMask = smoothstep(0.36, 0.95, continentMask + plateBoundary * 0.62);
-  float regionalMountainMask = baseMountainMask
-    * clamp(0.24 + mountainBeltMask * 1.18 + hillsMask * 0.24 - plainsMask * 0.72, 0.0, 1.35);
-  float mountainMask = mix(baseMountainMask, regionalMountainMask, clamp(reliefVariety, 0.0, 1.0));
-  float mountains = ridges * mountainMask * (0.12 + plateBoundary * 0.21) * uOceanMountainScale;
-  lowlandUndulation *= mix(
-    1.0,
-    clamp(0.38 + hillsMask * 0.70 + mountainBeltMask * 0.18 - plainsMask * 0.20, 0.25, 1.12),
-    clamp(reliefVariety, 0.0, 1.0)
-  );
-
-  float hills = terrainFbm(warped * uFrequency * 1.85 + vec3(23.0, -13.0, 39.0), uSeed + 557.8, min(octaveCount, 4), 2.12, 0.48)
-    * 0.052 * hillsMask * reliefVariety;
-
-  float drainageNoise = abs(terrainFbm(warped * uFrequency * 5.8 + vec3(-31.0, 27.0, 4.0), uSeed + 131.9, 4, 2.22, 0.46));
-  float channels = pow(1.0 - clamp(drainageNoise, 0.0, 1.0), 6.5)
-    * smoothstep(0.08, 0.82, continentMask)
-    * (1.0 - smoothstep(0.20, 0.44, mountains));
-  float hydraulicCut = channels * uOceanErosionStrength * (0.055 + continentMask * 0.045);
-  float sedimentFill = channels * uOceanErosionStrength * smoothstep(-0.18, 0.10, continentHeight) * 0.018;
-
-  float thermalTalus = max(0.0, mountains - 0.10) * uOceanThermalStrength * 0.23;
-  float fineNoise = terrainFbm(warped * uFrequency * 10.5 + vec3(41.0, -11.0, 29.0), uSeed + 251.7, min(octaveCount, 5), 2.28, 0.42);
-  float badlands = pow(1.0 - abs(fineNoise), 4.2)
-    * smoothstep(0.22, 0.76, continentMask)
-    * (1.0 - smoothstep(0.05, 0.22, mountains));
-  float detailRegion = mix(
-    1.0,
-    clamp(0.34 + hillsMask * 0.42 + mountainBeltMask * 0.52 - plainsMask * 0.30, 0.22, 1.15),
-    clamp(reliefVariety, 0.0, 1.0)
-  );
-  float detail = (fineNoise * 0.026 + badlands * 0.032) * uOceanDetailStrength * (1.0 - uOceanThermalStrength * 0.35) * detailRegion;
-
-  if (uPlanetKind > 1.5) {
-    return continentHeight * 0.72
-      + lowlandUndulation * 0.55
-      + hills * 0.42
-      + mountains * 0.58
-      - hydraulicCut * 0.38
-      - thermalTalus * 0.45
-      + detail * 0.42
-      + smoothstep(0.50, 0.95, abs(baseDir.y)) * 0.045;
-  }
-
-  return continentHeight + lowlandUndulation + hills + mountains - hydraulicCut + sedimentFill - thermalTalus + detail;
-}
-`
-
 // Terrain chunks are displaced on the CPU so physics, wireframe, and rendering share one surface.
 export function createPlanetMaterial(params: {
   seed: number
   planetType: string
-  waterLevel: number
   terrainScale: number
   localDetailNear: number
   localDetailFar: number
@@ -855,7 +711,6 @@ export function createPlanetMaterial(params: {
 
   uniform vec3 uColorA;
   uniform vec3 uColorB;
-  uniform float uSeaHeight;
   uniform vec3 uSunPosition;
   uniform vec3 uSunColor;
   uniform vec3 uAtmosphereColor;
@@ -897,7 +752,7 @@ export function createPlanetMaterial(params: {
     vec3 beach = vec3(0.68, 0.60, 0.44);
 
     vec3 color = mix(deepRock, mix(dryland, lowland, moisture), smoothstep(0.36, 0.50, heightNorm));
-    float coast = smoothstep(uSeaHeight - 0.014, uSeaHeight + 0.014, vHeight) * (1.0 - smoothstep(uSeaHeight + 0.026, uSeaHeight + 0.060, vHeight));
+    float coast = 0.0;
     color = mix(color, beach, coast);
     color = mix(color, highRock, smoothstep(0.58, 0.70, heightNorm));
     color = mix(color, snow, smoothstep(0.74, 0.84, heightNorm + latitude * 0.18) * smoothstep(0.54, 0.78, latitude));
@@ -946,18 +801,6 @@ export function createPlanetMaterial(params: {
     return mix(color, clamp(color, 0.0, 1.0), vNearDetail);
   }
 
-  vec3 applyOceanFloor(vec3 color, float height, float slope) {
-    if (uPlanetKind > 0.5 && uPlanetKind < 1.5 || uSeaHeight < -1.0) return color;
-
-    float underwater = smoothstep(uSeaHeight + 0.018, uSeaHeight - 0.018, height);
-    float shelf = smoothstep(uSeaHeight - 0.18, uSeaHeight + 0.02, height);
-    vec3 deepFloor = vec3(0.012, 0.045, 0.070);
-    vec3 shallowFloor = vec3(0.045, 0.115, 0.125);
-    vec3 oceanFloor = mix(deepFloor, shallowFloor, shelf);
-    oceanFloor = mix(oceanFloor, oceanFloor * 0.72, clamp(slope * 1.5, 0.0, 1.0));
-    return mix(color, oceanFloor, underwater);
-  }
-
   vec3 detailNormal(vec3 baseNormal, float latitude, float moisture, float slope, float coast) {
     if (uPlanetKind > 0.5 && uPlanetKind < 1.5) return baseNormal;
 
@@ -989,7 +832,7 @@ export function createPlanetMaterial(params: {
     float latitude = abs(vSphereDir.y);
     float moisture = saturate(vHeight * 0.75 + 0.5);
     float slope = saturate(1.0 - dot(normalize(vNormal), normalize(vRadialNormal)));
-    float coast = smoothstep(uSeaHeight - 0.014, uSeaHeight + 0.014, vHeight) * (1.0 - smoothstep(uSeaHeight + 0.026, uSeaHeight + 0.060, vHeight));
+    float coast = 0.0;
 
     vec3 terrainColor;
     if (uPlanetKind > 0.5 && uPlanetKind < 1.5) {
@@ -1002,7 +845,6 @@ export function createPlanetMaterial(params: {
       terrainColor = rockyBiome(heightNorm, latitude, moisture, slope);
     }
 
-    terrainColor = applyOceanFloor(terrainColor, vHeight, slope);
     float rockMask = saturate(slope * 0.75 + smoothstep(0.60, 0.72, heightNorm));
     float snowMask = smoothstep(0.74, 0.84, heightNorm + latitude * 0.18) * smoothstep(0.54, 0.78, latitude);
     terrainColor = applyTerrainTexture(terrainColor, vSphereDir, uPlanetKind, heightNorm, coast, rockMask, snowMask, moisture, distance(cameraPosition, vWorldPos));
@@ -1032,7 +874,6 @@ export function createPlanetMaterial(params: {
       uPlanetKind: { value: planetKind },
       uLocalDetailNear: { value: params.localDetailNear },
       uLocalDetailFar: { value: params.localDetailFar },
-      uSeaHeight: { value: getSeaHeight(params.waterLevel, params.planetType) },
       uColorA: { value: colorA },
       uColorB: { value: colorB },
       uSunPosition: { value: params.sunPosition.clone() },
@@ -1075,7 +916,6 @@ export function createPlanetMaterial(params: {
 export function createPlanetFarMaterial(params: {
   seed: number
   planetType: string
-  waterLevel: number
   terrainScale: number
   colorA: string
   colorB: string
@@ -1200,7 +1040,6 @@ export function createPlanetFarMaterial(params: {
   uniform vec3 uAtmosphereLightColor;
   uniform vec3 uTwilightColor;
   uniform float uAtmosphereExtinctionStrength;
-  uniform float uSeaHeight;
   uniform float uPlanetRadius;
 
   varying vec3 vWorldPos;
@@ -1229,7 +1068,7 @@ export function createPlanetFarMaterial(params: {
     vec3 beach = vec3(0.68, 0.60, 0.44);
 
     vec3 color = mix(deepRock, mix(dryland, lowland, moisture), smoothstep(0.36, 0.50, heightNorm));
-    float coast = smoothstep(uSeaHeight - 0.014, uSeaHeight + 0.014, vHeight) * (1.0 - smoothstep(uSeaHeight + 0.026, uSeaHeight + 0.060, vHeight));
+    float coast = 0.0;
     color = mix(color, beach, coast);
     color = mix(color, highRock, smoothstep(0.58, 0.70, heightNorm));
     color = mix(color, snow, smoothstep(0.74, 0.84, heightNorm + latitude * 0.18) * smoothstep(0.54, 0.78, latitude));
@@ -1256,18 +1095,6 @@ export function createPlanetFarMaterial(params: {
     return color;
   }
 
-  vec3 applyOceanFloor(vec3 color, float height, float slope) {
-    if (uPlanetKind > 0.5 && uPlanetKind < 1.5 || uSeaHeight < -1.0) return color;
-
-    float underwater = smoothstep(uSeaHeight + 0.018, uSeaHeight - 0.018, height);
-    float shelf = smoothstep(uSeaHeight - 0.18, uSeaHeight + 0.02, height);
-    vec3 deepFloor = vec3(0.012, 0.045, 0.070);
-    vec3 shallowFloor = vec3(0.045, 0.115, 0.125);
-    vec3 oceanFloor = mix(deepFloor, shallowFloor, shelf);
-    oceanFloor = mix(oceanFloor, oceanFloor * 0.72, clamp(slope * 1.5, 0.0, 1.0));
-    return mix(color, oceanFloor, underwater);
-  }
-
   void main() {
     float visualHeight = vHeight;
     float heightNorm = smoothstep(-1.0, 1.0, visualHeight);
@@ -1275,7 +1102,7 @@ export function createPlanetFarMaterial(params: {
     float moisture = saturate(visualHeight * 0.75 + 0.5);
     vec3 shadingNormal = normalize(vNormal);
     float slope = saturate(1.0 - dot(shadingNormal, normalize(vRadialNormal)));
-    float coast = smoothstep(uSeaHeight - 0.014, uSeaHeight + 0.014, visualHeight) * (1.0 - smoothstep(uSeaHeight + 0.026, uSeaHeight + 0.060, visualHeight));
+    float coast = 0.0;
 
     vec3 terrain;
     if (uPlanetKind > 0.5 && uPlanetKind < 1.5) {
@@ -1287,7 +1114,6 @@ export function createPlanetFarMaterial(params: {
       terrain = rockyBiome(heightNorm, latitude, moisture, slope);
     }
 
-    terrain = applyOceanFloor(terrain, visualHeight, slope);
     float rockMask = saturate(slope * 0.75 + smoothstep(0.60, 0.72, heightNorm));
     float snowMask = smoothstep(0.74, 0.84, heightNorm + latitude * 0.18) * smoothstep(0.54, 0.78, latitude);
     terrain = applyTerrainTexture(terrain, vSphereDir, uPlanetKind, heightNorm, coast, rockMask, snowMask, moisture, distance(cameraPosition, vWorldPos));
@@ -1321,7 +1147,6 @@ export function createPlanetFarMaterial(params: {
       uErosionStrength: { value: params.erosionStrength },
       uThermalStrength: { value: params.thermalStrength },
       uDetailStrength: { value: params.detailStrength },
-      uSeaHeight: { value: getSeaHeight(params.waterLevel, params.planetType) },
       uColorA: { value: colorA },
       uColorB: { value: colorB },
       uSunPosition: { value: params.sunPosition.clone() },
@@ -1361,291 +1186,9 @@ export function createPlanetFarMaterial(params: {
   })
 }
 
-export function createOceanMaterial(params: {
-  seed: number
-  planetType: string
-  waterLevel: number
-  planetRadius: number
-  octaves: number
-  frequency: number
-  lacunarity: number
-  gain: number
-  warpStrength: number
-  continentalScale: number
-  mountainScale: number
-  plainsScale: number
-  hillsScale: number
-  mountainBeltScale: number
-  reliefVariety: number
-  erosionStrength: number
-  thermalStrength: number
-  detailStrength: number
-  oceanColor: string
-  sunPosition: THREE.Vector3
-  sunColor: THREE.Color | string
-  atmosphereColor: string
-  atmosphereLightColor: THREE.Color | string
-  twilightColor: THREE.Color | string
-  atmosphereExtinctionStrength: number
-  cloudCoverage: number
-  cloudScale: number
-  cloudSoftness: number
-  cloudHeight: number
-  cloudSpeed: number
-  cloudShadow: number
-  cloudVolume: number
-  cloudStorms: number
-  cloudBands: number
-  cloudDetail: number
-  oceanFineDistance: number
-  oceanMidDistance: number
-  useTerrainAttribute?: boolean
-}): THREE.ShaderMaterial {
-  const atmosphereColor = new THREE.Color(params.atmosphereColor)
-  const sunColor = new THREE.Color(params.sunColor)
-  const atmosphereLightColor = new THREE.Color(params.atmosphereLightColor)
-  const twilightColor = new THREE.Color(params.twilightColor)
-  const oceanColor = new THREE.Color(params.oceanColor)
-  const planetKind = params.planetType === 'gas'
-    ? PlanetKind.Gas
-    : params.planetType === 'ice'
-      ? PlanetKind.Ice
-      : PlanetKind.Rocky
-
-  const vertexShader = /* glsl */ `
-  #include <common>
-  #include <logdepthbuf_pars_vertex>
-
-  uniform float uOceanLift;
-  attribute float terrainHeight;
-
-  varying vec3 vWorldPos;
-  varying vec3 vNormal;
-  varying vec3 vSphereDir;
-  varying float vTerrainHeight;
-
-  void main() {
-    vSphereDir = normalize(position);
-    vTerrainHeight = terrainHeight;
-    vNormal = normalize((modelMatrix * vec4(normal, 0.0)).xyz);
-    vec3 liftedPosition = position + vSphereDir * uOceanLift;
-    vec4 worldPos = modelMatrix * vec4(liftedPosition, 1.0);
-    vWorldPos = worldPos.xyz;
-    gl_Position = projectionMatrix * viewMatrix * worldPos;
-    #include <logdepthbuf_vertex>
-  }
-  `
-
-  const fragmentShader = /* glsl */ `
-  ${TERRAIN_NOISE}
-  #include <logdepthbuf_pars_fragment>
-
-  uniform float uPlanetRadius;
-  uniform float uSeaHeight;
-  uniform float uUseTerrainAttribute;
-  uniform float uFrequency;
-  uniform float uOctaves;
-  uniform float uPlanetKind;
-  uniform vec3 uSunPosition;
-  uniform vec3 uSunColor;
-  uniform vec3 uAtmosphereColor;
-  uniform vec3 uAtmosphereLightColor;
-  uniform vec3 uTwilightColor;
-  uniform vec3 uOceanColor;
-  uniform float uAtmosphereExtinctionStrength;
-  uniform float uOceanFineDistance;
-  uniform float uOceanMidDistance;
-  uniform float uSeed;
-  uniform float uTime;
-
-  varying vec3 vWorldPos;
-  varying vec3 vNormal;
-  varying vec3 vSphereDir;
-  varying float vTerrainHeight;
-
-  ${OCEAN_TERRAIN_HEIGHT_GLSL}
-
-  void main() {
-    float terrainHeight = vTerrainHeight;
-    float belowSea = max(uSeaHeight - terrainHeight, 0.0);
-    float waterMask = smoothstep(uSeaHeight + 0.010, uSeaHeight - 0.018, terrainHeight);
-    if (waterMask <= 0.025) discard;
-
-    vec3 baseNormal = normalize(vNormal);
-    vec3 viewDir = normalize(cameraPosition - vWorldPos);
-    vec3 lightDir = normalize(uSunPosition - vWorldPos);
-    float extinctionStrength = clamp(uAtmosphereExtinctionStrength, 0.0, 2.0);
-    float innerSurface = gl_FrontFacing ? 0.0 : 1.0;
-
-    float cameraDist = distance(cameraPosition, vWorldPos);
-    float farWater = smoothstep(0.75, 2.65, cameraDist / uPlanetRadius);
-    float fineLod = 1.0 - smoothstep(uOceanFineDistance * 0.42, uOceanFineDistance, cameraDist);
-    float midLod = 1.0 - smoothstep(uOceanMidDistance * 0.48, uOceanMidDistance, cameraDist);
-    float detailFade = max(midLod, fineLod);
-    float orbitalFade = smoothstep(0.85, 2.9, cameraDist / uPlanetRadius);
-
-    vec3 flowC = vec3(uTime * 0.038, -uTime * 0.020, uTime * 0.026);
-    float seedPhase = uSeed * 0.013;
-    float waveA = sin(dot(vSphereDir, vec3(0.82, 0.18, -0.54)) * 11.0 + uTime * 0.34 + seedPhase);
-    float waveB = sin(dot(vSphereDir, vec3(-0.30, 0.22, 0.94)) * 17.0 - uTime * 0.48 + seedPhase * 1.7);
-    float waveC = sin(dot(vSphereDir, vec3(0.48, -0.16, 0.86)) * 36.0 + uTime * 1.05 + seedPhase * 2.3);
-    float waveD = sin(dot(vSphereDir, vec3(-0.72, 0.08, 0.62)) * 68.0 - uTime * 1.74 + seedPhase * 3.1);
-    float waveE = sin(dot(vSphereDir, vec3(0.24, 0.38, -0.89)) * 132.0 + uTime * 2.35 + seedPhase * 4.7);
-    float swellLong = waveA * 0.62 + waveB * 0.38;
-    float swell = (waveB * 0.45 + waveC * 0.55) * midLod;
-    float chop = (waveC * 0.62 + waveD * 0.38) * midLod;
-    float rippleA = (waveD * 0.72 + waveE * 0.28) * fineLod;
-    float rippleB = waveE * fineLod;
-    vec3 sphereDir = normalize(vSphereDir);
-    vec3 tangent = normalize(cross(abs(sphereDir.y) < 0.94 ? vec3(0.0, 1.0, 0.0) : vec3(1.0, 0.0, 0.0), sphereDir));
-    vec3 bitangent = normalize(cross(sphereDir, tangent));
-    vec3 waterNormal = normalize(baseNormal
-      + tangent * (swellLong * 0.026 + swell * 0.040 + rippleA * 0.028)
-      + bitangent * (chop * 0.034 + rippleB * 0.022));
-
-    vec3 halfDir = normalize(lightDir + viewDir);
-    float nDotL = dot(waterNormal, lightDir);
-    float outerDay = smoothstep(-0.04, 0.64, nDotL);
-    float innerDay = smoothstep(-0.12, 0.56, dot(sphereDir, lightDir));
-    float day = max(outerDay, innerDay * innerSurface * 0.92);
-    float diffuse = max(max(nDotL, 0.0), innerDay * innerSurface * 0.38);
-    float lowSun = pow(1.0 - clamp(nDotL * 0.90 + 0.10, 0.0, 1.0), 1.7)
-      * smoothstep(-0.10, 0.46, nDotL);
-    float fresnel = pow(1.0 - max(dot(viewDir, waterNormal), 0.0), 4.6);
-    float shallowDepth = smoothstep(0.010, 0.16, belowSea);
-    float shelfDepth = smoothstep(0.08, 0.42, belowSea);
-    float abyssDepth = smoothstep(0.36, 1.20, belowSea);
-    float latitude = abs(vSphereDir.y);
-    float polarCool = smoothstep(0.54, 0.94, latitude);
-    float depthVariation = (swellLong * 0.65 + swell * 0.35) * 0.050 * (1.0 - abyssDepth);
-
-    vec3 baseOcean = clamp(uOceanColor, vec3(0.0), vec3(1.0));
-    vec3 lagoon = mix(baseOcean * 0.62, vec3(0.026, 0.155, 0.180), 0.30);
-    vec3 shelfColor = mix(baseOcean * 0.70, vec3(0.016, 0.120, 0.185), 0.36);
-    vec3 openColor = mix(baseOcean * 0.64, vec3(0.004, 0.044, 0.110), 0.36);
-    vec3 abyssColor = mix(baseOcean * 0.24, vec3(0.001, 0.007, 0.028), 0.56);
-    vec3 color = mix(lagoon, shelfColor, clamp(shallowDepth + depthVariation, 0.0, 1.0));
-    color = mix(color, openColor, shelfDepth);
-    color = mix(color, abyssColor, abyssDepth);
-    color = mix(color, mix(baseOcean * 0.72, vec3(0.030, 0.090, 0.130), 0.45), polarCool * 0.22);
-    float shallowContrast = (1.0 - smoothstep(0.020, 0.26, belowSea)) * smoothstep(0.030, 0.28, waterMask);
-    color *= 1.0 - shallowContrast * 0.22;
-
-    float wavePattern = swellLong * 0.38 + swell * 0.36 + chop * 0.26;
-    float waveBright = smoothstep(0.40, 0.82, wavePattern) * (0.18 + midLod * 0.52 + fineLod * 0.30);
-    float waveDark = smoothstep(0.35, 0.85, -wavePattern) * (0.12 + midLod * 0.42 + fineLod * 0.28);
-    color *= 1.0 - waveDark * 0.075 * day;
-    color += waveBright * vec3(0.018, 0.036, 0.044) * day;
-
-    float surfLine = (1.0 - smoothstep(0.004, 0.060, belowSea)) * smoothstep(0.040, 0.30, waterMask);
-    float coastBand = (1.0 - smoothstep(0.014, 0.34, belowSea)) * smoothstep(0.025, 0.34, waterMask);
-    float foamNoise = 0.5;
-    if (midLod > 0.01 || coastBand > 0.01 || surfLine > 0.01) {
-      foamNoise = terrainFbm(vSphereDir * mix(46.0, 92.0, fineLod) + flowC * 4.2, uSeed + 1217.0, 2, 2.1, 0.48);
-    }
-    float breakerPhase = belowSea * 34.0 + uTime * 1.45 + foamNoise * 1.65 + swell * 0.70;
-    float breaker = pow(0.5 + 0.5 * sin(breakerPhase), 2.8);
-    breaker *= smoothstep(0.010, 0.060, belowSea) * (1.0 - smoothstep(0.11, 0.34, belowSea)) * (0.35 + midLod * 0.40 + fineLod * 0.25);
-    float washPhase = belowSea * 18.0 + uTime * 0.75 + foamNoise * 1.10;
-    float wash = (0.5 + 0.5 * sin(washPhase)) * (1.0 - smoothstep(0.04, 0.42, belowSea)) * (0.45 + fineLod * 0.55);
-    float lace = smoothstep(0.18, 0.82, foamNoise * 0.68 + rippleA * 0.18 + swell * 0.24 + breaker * 0.42) * (0.55 + fineLod * 0.45);
-    float waveCaps = smoothstep(0.52, 0.90, swellLong * 0.34 + swell * 0.42 + chop * 0.34) * fineLod;
-    float coastFoam = coastBand * (0.14 + lace * 0.38 + breaker * 0.44 + wash * 0.12) * (0.26 + midLod * 0.30 + fineLod * 0.24);
-    float foam = (surfLine * (0.16 + breaker * 0.30) + coastFoam * 0.58 + waveCaps * 0.16) * (0.22 + day * 0.56);
-    float surface = clamp(swellLong * 0.24 + swell * 0.24 + chop * 0.13 + 0.45, 0.0, 1.0);
-    float specular = pow(max(dot(waterNormal, halfDir), 0.0), mix(118.0, 280.0, orbitalFade)) * (0.035 + surface * 0.16) * day;
-    vec3 nightWater = vec3(0.001, 0.004, 0.010);
-    color *= mix(0.008, 1.0, day) * mix(1.0, 0.82, lowSun * extinctionStrength);
-    color += nightWater * (1.0 - day) * 0.010;
-    color += baseOcean * innerDay * innerSurface * 0.18;
-    const float atmosphereLightInfluence = 0.85;
-    vec3 sunsetTint = mix(uTwilightColor, uSunColor, 0.24);
-    vec3 waterLightColor = mix(uAtmosphereLightColor, uSunColor, 0.18);
-    waterLightColor = mix(waterLightColor, sunsetTint, lowSun * extinctionStrength * 0.56);
-    color += diffuse * waterLightColor * vec3(0.018, 0.038, 0.040) * (0.55 + atmosphereLightInfluence * 0.28);
-    color += surface * vec3(0.004, 0.016, 0.020) * day;
-    float sunGlint = pow(max(dot(reflect(-lightDir, waterNormal), viewDir), 0.0), mix(80.0, 520.0, orbitalFade))
-      * (0.018 + orbitalFade * 0.09) * day;
-    vec3 reflected = vec3(0.34, 0.48, 0.60) * fresnel * (0.045 + day * 0.36);
-    float foamLight = foam * clamp(day * 0.88 + lowSun * 0.20, 0.0, 1.0);
-    color = mix(color, vec3(0.86, 0.94, 0.90), clamp(foamLight * 0.46, 0.0, 0.46));
-    color += foamLight * vec3(0.035, 0.044, 0.038) * (0.18 + day * 0.48);
-    reflected *= mix(vec3(1.0), uAtmosphereLightColor, atmosphereLightInfluence * 0.40);
-    reflected *= mix(vec3(1.0), sunsetTint, lowSun * extinctionStrength * 0.16);
-    reflected *= day;
-    color += reflected + (specular + sunGlint) * mix(vec3(1.0, 0.92, 0.78), waterLightColor, atmosphereLightInfluence * 0.90);
-    float alpha = mix(0.64, 0.90, smoothstep(0.02, 0.52, belowSea));
-    alpha = 1.0;
-    #include <logdepthbuf_fragment>
-    gl_FragColor = vec4(color, alpha);
-  }
-  `
-
-  return new THREE.ShaderMaterial({
-    vertexShader,
-    fragmentShader,
-    transparent: false,
-    depthWrite: true,
-    side: THREE.DoubleSide,
-    uniforms: {
-      uSeed: { value: params.seed },
-      uPlanetRadius: { value: params.planetRadius },
-      uSeaHeight: { value: getSeaHeight(params.waterLevel, params.planetType) },
-      uUseTerrainAttribute: { value: params.useTerrainAttribute ? 1 : 0 },
-      uFrequency: { value: params.frequency },
-      uOctaves: { value: params.octaves },
-      uLacunarity: { value: params.lacunarity },
-      uGain: { value: params.gain },
-      uWarpStrength: { value: params.warpStrength },
-      uContinentalScale: { value: params.continentalScale },
-      uMountainScale: { value: params.mountainScale },
-      uErosionStrength: { value: params.erosionStrength },
-      uThermalStrength: { value: params.thermalStrength },
-      uDetailStrength: { value: params.detailStrength },
-      uPlanetKind: { value: planetKind },
-      uOceanLift: { value: 0 },
-      uOceanColor: { value: oceanColor },
-      uSunPosition: { value: params.sunPosition.clone() },
-      uSunColor: { value: sunColor },
-      uAtmosphereColor: { value: atmosphereColor },
-      uAtmosphereLightColor: { value: atmosphereLightColor },
-      uTwilightColor: { value: twilightColor },
-      uAtmosphereExtinctionStrength: { value: params.atmosphereExtinctionStrength },
-      uOceanFineDistance: { value: params.oceanFineDistance },
-      uOceanMidDistance: { value: params.oceanMidDistance },
-      uCloudCoverage: { value: params.cloudCoverage },
-      uCloudScale: { value: params.cloudScale },
-      uCloudSoftness: { value: params.cloudSoftness },
-      uCloudHeight: { value: params.cloudHeight },
-      uCloudSpeed: { value: params.cloudSpeed },
-      uCloudShadowStrength: { value: params.cloudShadow },
-      uCloudVolumeStrength: { value: params.cloudVolume },
-      uCloudStormStrength: { value: params.cloudStorms },
-      uCloudBandStrength: { value: params.cloudBands },
-      uCloudDetailStrength: { value: params.cloudDetail },
-      uCloudQuality: { value: 2 },
-      uCloudSeed: { value: params.seed },
-      uTime: { value: 0 },
-      uOceanLacunarity: { value: params.lacunarity },
-      uOceanGain: { value: params.gain },
-      uOceanWarpStrength: { value: params.warpStrength },
-      uOceanContinentalScale: { value: params.continentalScale },
-      uOceanMountainScale: { value: params.mountainScale },
-      uOceanPlainsScale: { value: params.plainsScale },
-      uOceanHillsScale: { value: params.hillsScale },
-      uOceanMountainBeltScale: { value: params.mountainBeltScale },
-      uOceanReliefVariety: { value: params.reliefVariety },
-      uOceanErosionStrength: { value: params.erosionStrength },
-      uOceanThermalStrength: { value: params.thermalStrength },
-      uOceanDetailStrength: { value: params.detailStrength },
-    },
-  })
-}
-
 export function createPlanetFallbackMaterial(params: {
   seed: number
   planetType: string
-  waterLevel: number
   colorA: string
   colorB: string
   textureScale: number
@@ -1738,7 +1281,6 @@ export function createPlanetFallbackMaterial(params: {
   uniform vec3 uAtmosphereLightColor;
   uniform vec3 uTwilightColor;
   uniform float uAtmosphereExtinctionStrength;
-  uniform float uSeaHeight;
   uniform float uPlanetKind;
   uniform float uPlanetRadius;
 
@@ -1765,7 +1307,7 @@ export function createPlanetFallbackMaterial(params: {
     vec3 beach = vec3(0.68, 0.60, 0.44);
 
     vec3 color = mix(deepRock, mix(dryland, lowland, moisture), smoothstep(0.36, 0.50, heightNorm));
-    float coast = smoothstep(uSeaHeight - 0.014, uSeaHeight + 0.014, vHeight) * (1.0 - smoothstep(uSeaHeight + 0.026, uSeaHeight + 0.060, vHeight));
+    float coast = 0.0;
     color = mix(color, beach, coast);
     color = mix(color, highRock, smoothstep(0.58, 0.70, heightNorm));
     color = mix(color, snow, smoothstep(0.74, 0.84, heightNorm + latitude * 0.18) * smoothstep(0.54, 0.78, latitude));
@@ -1792,18 +1334,6 @@ export function createPlanetFallbackMaterial(params: {
     return color;
   }
 
-  vec3 applyOceanFloor(vec3 color, float height, float slope) {
-    if (uPlanetKind > 0.5 && uPlanetKind < 1.5 || uSeaHeight < -1.0) return color;
-
-    float underwater = smoothstep(uSeaHeight + 0.018, uSeaHeight - 0.018, height);
-    float shelf = smoothstep(uSeaHeight - 0.18, uSeaHeight + 0.02, height);
-    vec3 deepFloor = vec3(0.012, 0.045, 0.070);
-    vec3 shallowFloor = vec3(0.045, 0.115, 0.125);
-    vec3 oceanFloor = mix(deepFloor, shallowFloor, shelf);
-    oceanFloor = mix(oceanFloor, oceanFloor * 0.72, clamp(slope * 1.5, 0.0, 1.0));
-    return mix(color, oceanFloor, underwater);
-  }
-
   void main() {
     float visualHeight = vHeight;
     float heightNorm = smoothstep(-1.0, 1.0, visualHeight);
@@ -1811,7 +1341,7 @@ export function createPlanetFallbackMaterial(params: {
     float moisture = saturate(visualHeight * 0.75 + 0.5);
     vec3 shadingNormal = normalize(vNormal);
     float slope = saturate(1.0 - dot(shadingNormal, normalize(vRadialNormal)));
-    float coast = smoothstep(uSeaHeight - 0.014, uSeaHeight + 0.014, visualHeight) * (1.0 - smoothstep(uSeaHeight + 0.026, uSeaHeight + 0.060, visualHeight));
+    float coast = 0.0;
 
     vec3 terrain;
     if (uPlanetKind > 0.5 && uPlanetKind < 1.5) {
@@ -1823,7 +1353,6 @@ export function createPlanetFallbackMaterial(params: {
       terrain = rockyBiome(heightNorm, latitude, moisture, slope);
     }
 
-    terrain = applyOceanFloor(terrain, visualHeight, slope);
     float rockMask = saturate(slope * 0.75 + smoothstep(0.60, 0.72, heightNorm));
     float snowMask = smoothstep(0.74, 0.84, heightNorm + latitude * 0.18) * smoothstep(0.54, 0.78, latitude);
     terrain = applyTerrainTexture(terrain, vSphereDir, uPlanetKind, heightNorm, coast, rockMask, snowMask, moisture, distance(cameraPosition, vWorldPos));
@@ -1854,7 +1383,6 @@ export function createPlanetFallbackMaterial(params: {
       uThermalStrength: { value: params.thermalStrength },
       uDetailStrength: { value: params.detailStrength },
       uPlanetRadius: { value: params.planetRadius },
-      uSeaHeight: { value: getSeaHeight(params.waterLevel, params.planetType) },
       uPlanetKind: { value: planetKind },
       uColorA: { value: colorA },
       uColorB: { value: colorB },

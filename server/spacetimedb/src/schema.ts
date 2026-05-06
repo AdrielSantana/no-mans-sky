@@ -42,7 +42,6 @@ export const planetParams = table(
     bodyId: t.u64(),
     seed: t.u64(),
     planetType: t.string(),
-    waterLevel: t.f32(),
     terrainScale: t.f32(),
     colorA: t.string(),
     colorB: t.string(),

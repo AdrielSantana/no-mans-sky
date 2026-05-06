@@ -40,7 +40,6 @@ export const PlanetParams = __t.object("PlanetParams", {
   bodyId: __t.u64(),
   seed: __t.u64(),
   planetType: __t.string(),
-  waterLevel: __t.f32(),
   terrainScale: __t.f32(),
   colorA: __t.string(),
   colorB: __t.string(),
@@ -57,4 +56,3 @@ export const Player = __t.object("Player", {
   lastSeen: __t.timestamp(),
 });
 export type Player = __Infer<typeof Player>;
-

@@ -32,7 +32,6 @@ export interface PlanetParamsConfig {
   name: string
   seed: number
   planetType: string
-  waterLevel: number
   terrainScale: number
   colorA: string
   colorB: string
@@ -41,9 +40,9 @@ export interface PlanetParamsConfig {
 }
 
 export const PLANET_PARAMS: PlanetParamsConfig[] = [
-  { name: 'Mercurio', seed: 12345, planetType: 'rocky', waterLevel: 0, terrainScale: 0.07, colorA: '#888888', colorB: '#aaaaaa', atmosphereColor: '#000000', atmosphereDensity: 0 },
-  { name: 'Venus', seed: 23456, planetType: 'rocky', waterLevel: 0, terrainScale: 0.055, colorA: '#c08020', colorB: '#e8a040', atmosphereColor: '#e8c060', atmosphereDensity: 0.8 },
-  { name: 'Terra', seed: 34567, planetType: 'rocky', waterLevel: 0.4, terrainScale: 0.06, colorA: '#225588', colorB: '#88aa44', atmosphereColor: '#88aaff', atmosphereDensity: 0.5 },
-  { name: 'Marte', seed: 45678, planetType: 'rocky', waterLevel: 0.05, terrainScale: 0.085, colorA: '#993311', colorB: '#cc6633', atmosphereColor: '#cc8866', atmosphereDensity: 0.15 },
-  { name: 'Jupiter', seed: 56789, planetType: 'gas', waterLevel: 0, terrainScale: 0.02, colorA: '#c49050', colorB: '#d4a060', atmosphereColor: '#ddbb88', atmosphereDensity: 1.0 },
+  { name: 'Mercurio', seed: 12345, planetType: 'rocky', terrainScale: 0.07, colorA: '#888888', colorB: '#aaaaaa', atmosphereColor: '#000000', atmosphereDensity: 0 },
+  { name: 'Venus', seed: 23456, planetType: 'rocky', terrainScale: 0.055, colorA: '#c08020', colorB: '#e8a040', atmosphereColor: '#e8c060', atmosphereDensity: 0.8 },
+  { name: 'Terra', seed: 34567, planetType: 'rocky', terrainScale: 0.06, colorA: '#225588', colorB: '#88aa44', atmosphereColor: '#88aaff', atmosphereDensity: 0.5 },
+  { name: 'Marte', seed: 45678, planetType: 'rocky', terrainScale: 0.085, colorA: '#993311', colorB: '#cc6633', atmosphereColor: '#cc8866', atmosphereDensity: 0.15 },
+  { name: 'Jupiter', seed: 56789, planetType: 'gas', terrainScale: 0.02, colorA: '#c49050', colorB: '#d4a060', atmosphereColor: '#ddbb88', atmosphereDensity: 1.0 },
 ]

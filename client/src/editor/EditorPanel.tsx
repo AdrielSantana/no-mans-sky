@@ -435,29 +435,6 @@ export function EditorPanel({ params, onChange }: Props) {
       <div className="editor-section">
         <div className="editor-section-title">Surface</div>
         <div className="editor-row">
-          <span className="editor-label">Water Level</span>
-          <input
-            className="editor-slider"
-            type="range"
-            min={RANGES.waterLevel.min}
-            max={RANGES.waterLevel.max}
-            step={RANGES.waterLevel.step}
-            value={params.waterLevel}
-            onChange={e => set('waterLevel', Number(e.target.value))}
-          />
-          <span className="editor-value">{params.waterLevel.toFixed(2)}</span>
-        </div>
-        <div className="editor-row">
-          <span className="editor-label">Ocean Color</span>
-          <input
-            className="editor-color"
-            type="color"
-            value={params.oceanColor}
-            onChange={e => set('oceanColor', e.target.value)}
-          />
-          <span className="editor-value">{params.oceanColor}</span>
-        </div>
-        <div className="editor-row">
           <span className="editor-label">Color A</span>
           <input
             className="editor-color"
@@ -1039,17 +1016,6 @@ export function EditorPanel({ params, onChange }: Props) {
             onChange={e => set('toneMappingExposure', Number(e.target.value))}
           />
           <span className="editor-value">{params.toneMappingExposure.toFixed(2)}</span>
-        </div>
-        <div className="editor-row">
-          <label style={{ display: 'flex', alignItems: 'center', gap: 6, cursor: 'pointer' }}>
-            <input
-              type="checkbox"
-              checked={params.debugOcean}
-              onChange={e => set('debugOcean', e.target.checked)}
-              style={{ accentColor: '#2dd4a7' }}
-            />
-            <span className="editor-label" style={{ width: 'auto' }}>Ocean</span>
-          </label>
         </div>
         <div className="editor-row">
           <label style={{ display: 'flex', alignItems: 'center', gap: 6, cursor: 'pointer' }}>

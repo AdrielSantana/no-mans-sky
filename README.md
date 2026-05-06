@@ -44,12 +44,6 @@ VITE_SPACETIMEDB_DATABASE=no-mans-sky
 
 Selecionar cor da neve e areia
 
-Shader dágua/Malha dágua
-
-Shader em baixo dágua
-
-Melhorar Shader do oceano
-
 "Lua" durante a noite
 
 Texture e color mixing no terreno (e grama também)

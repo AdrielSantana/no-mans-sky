@@ -26,8 +26,6 @@ function createPlanet(scene: THREE.Scene, params: EditorParams): PlanetRenderer 
     seed: BigInt(params.seed),
     planetType: params.planetType,
     terrainScale: params.terrainScale,
-    waterLevel: params.waterLevel,
-    oceanColor: params.oceanColor,
     colorA: params.colorA,
     colorB: params.colorB,
     textureScale: params.textureScale,
@@ -101,7 +99,6 @@ function applyDebugSettings(engine: GameEngine, planet: PlanetRenderer, params: 
   })
   engine.setToneMappingExposure(params.toneMappingExposure)
   planet.setDebugRendering({
-    showOcean: params.debugOcean,
     showAtmosphere: params.debugAtmosphere,
     showClouds: params.debugClouds,
     simpleTerrain: params.debugSimpleTerrain,
@@ -130,8 +127,6 @@ function buildPlanetKey(params: EditorParams): string {
     planetType: params.planetType,
     planetRadius: params.planetRadius,
     terrainScale: params.terrainScale,
-    waterLevel: params.waterLevel,
-    oceanColor: params.oceanColor,
     colorA: params.colorA,
     colorB: params.colorB,
     textureScale: params.textureScale,
@@ -287,7 +282,7 @@ export function EditorCanvas({ params }: Props) {
           `update=${avg(updateSamples).toFixed(2)}ms p95=${pct(sortedUpdates, 0.95).toFixed(2)}ms`,
           `draw=${engine.renderer.info.render.calls} tri=${engine.renderer.info.render.triangles}`,
           `geo=${engine.renderer.info.memory.geometries} tex=${engine.renderer.info.memory.textures}`,
-          `diag bloom=${paramsRef.current.debugBloom ? 'on' : 'off'} ocean=${paramsRef.current.debugOcean ? 'on' : 'off'} atmosphere=${paramsRef.current.debugAtmosphere ? 'on' : 'off'} clouds=${paramsRef.current.debugClouds ? 'on' : 'off'} simpleTerrain=${paramsRef.current.debugSimpleTerrain ? 'on' : 'off'}`,
+          `diag bloom=${paramsRef.current.debugBloom ? 'on' : 'off'} atmosphere=${paramsRef.current.debugAtmosphere ? 'on' : 'off'} clouds=${paramsRef.current.debugClouds ? 'on' : 'off'} simpleTerrain=${paramsRef.current.debugSimpleTerrain ? 'on' : 'off'}`,
           bloom
             ? `bloom strength=${bloom.strength.toFixed(2)} radius=${bloom.radius.toFixed(2)} threshold=${bloom.threshold.toFixed(2)} enabled=${bloom.enabled ? 'on' : 'off'}`
             : 'bloom unavailable',
@@ -322,7 +317,6 @@ export function EditorCanvas({ params }: Props) {
       const updateStart = showPerf ? performance.now() : 0
       walker.update(dt)
       planetRef.current?.update(engine.camera, dt)
-      engine.setUnderwaterEffect(planetRef.current?.getUnderwaterViewInfo(engine.camera) ?? null)
       if (showPerf) {
         updateSamples.push(performance.now() - updateStart)
         if (updateSamples.length > 240) updateSamples.shift()

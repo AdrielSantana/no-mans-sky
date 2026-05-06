@@ -24,7 +24,6 @@ interface FluffyGrassLayerParams {
   material: THREE.ShaderMaterial
   settings: FluffyGrassSettings
   seed: number
-  seaHeight: number
   planetType: string
   variant: FluffyGrassVariant
 }
@@ -475,8 +474,7 @@ export class FluffyGrassLayer {
       const latitude = Math.abs(radial.y)
       const moisture = saturate(height * 0.75 + 0.5)
       const slope = saturate(1 - slopeDot)
-      const coast = smoothstep(params.seaHeight - 0.014, params.seaHeight + 0.014, height)
-        * (1 - smoothstep(params.seaHeight + 0.026, params.seaHeight + 0.060, height))
+      const coast = 0
       const rockMask = saturate(slope * 0.75 + smoothstep(0.60, 0.72, heightNorm))
       const snowMask = smoothstep(0.74, 0.84, heightNorm + latitude * 0.18) * smoothstep(0.54, 0.78, latitude)
       const grassBiomeMask = smoothstep(0.34, 0.62, moisture)
@@ -484,11 +482,11 @@ export class FluffyGrassLayer {
         * (1 - rockMask)
         * (1 - snowMask)
         * (1 - smoothstep(0.58, 0.70, heightNorm))
-      const aboveSeaMask = smoothstep(params.seaHeight + 0.018, params.seaHeight + 0.075, height)
+      const surfaceMask = 1
       const slopeMask = smoothstep(MIN_SURFACE_SLOPE_DOT, 0.88, slopeDot)
       const patchMask = smoothstep(far ? 0.43 : 0.46, far ? 0.57 : 0.60, patchNoise(position, params.seed))
       const patchEdgeJitter = smoothstep(0.12, 0.72, rng() * 0.34 + patchMask * 0.82)
-      const mask = aboveSeaMask * grassBiomeMask * slopeMask * patchMask
+      const mask = surfaceMask * grassBiomeMask * slopeMask * patchMask
       if (rng() > mask * patchEdgeJitter) continue
 
       const width = settings.height * (far ? 2.6 + rng() * 2.2 : 0.52 + rng() * 0.42)
