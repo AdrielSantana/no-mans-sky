@@ -4,6 +4,15 @@ export interface EditorParams {
   planetRadius: number
   terrainScale: number
   waterLevel: number
+  oceanDeepColor: string
+  oceanShallowColor: string
+  oceanFoamColor: string
+  oceanWaveHeight: number
+  oceanWindSpeed: number
+  oceanDetail: number
+  oceanChoppiness: number
+  oceanFoamStrength: number
+  oceanSpecularStrength: number
   colorA: string
   colorB: string
   textureScale: number
@@ -119,6 +128,15 @@ export const DEFAULT_PARAMS: EditorParams = {
   planetRadius: 50000,
   terrainScale: 0.065,
   waterLevel: 0.45,
+  oceanDeepColor: '#063869',
+  oceanShallowColor: '#12a6b8',
+  oceanFoamColor: '#d8f6ff',
+  oceanWaveHeight: 1.0,
+  oceanWindSpeed: 26,
+  oceanDetail: 1.45,
+  oceanChoppiness: 1.1,
+  oceanFoamStrength: 0.38,
+  oceanSpecularStrength: 1.05,
   colorA: '#26a269',
   colorB: '#63452c',
   textureScale: 92,
@@ -199,6 +217,12 @@ export const RANGES = {
   planetRadius: { min: 100, max: 100000, step: 10 },
   terrainScale: { min: 0.01, max: 1.0, step: 0.01 },
   waterLevel: { min: 0, max: 1, step: 0.01 },
+  oceanWaveHeight: { min: 0.1, max: 3.0, step: 0.01 },
+  oceanWindSpeed: { min: 4, max: 60, step: 0.5 },
+  oceanDetail: { min: 0.35, max: 3.0, step: 0.01 },
+  oceanChoppiness: { min: 0, max: 2.5, step: 0.01 },
+  oceanFoamStrength: { min: 0, max: 2, step: 0.01 },
+  oceanSpecularStrength: { min: 0, max: 2, step: 0.01 },
   textureScale: { min: 8, max: 240, step: 1 },
   textureBlend: { min: 0, max: 1, step: 0.01 },
   textureNearDistance: { min: 10, max: 5000, step: 10 },
@@ -275,6 +299,15 @@ export const TYPE_PRESETS: Record<string, Pick<EditorParams,
   | 'microDetailStrength'
   | 'microDetailScale'
   | 'microReliefMeters'
+  | 'oceanDeepColor'
+  | 'oceanShallowColor'
+  | 'oceanFoamColor'
+  | 'oceanWaveHeight'
+  | 'oceanWindSpeed'
+  | 'oceanDetail'
+  | 'oceanChoppiness'
+  | 'oceanFoamStrength'
+  | 'oceanSpecularStrength'
 >> = {
   rocky: {
     octaves: 6,
@@ -294,6 +327,15 @@ export const TYPE_PRESETS: Record<string, Pick<EditorParams,
     microDetailStrength: 0.5,
     microDetailScale: 2.5,
     microReliefMeters: 1.5,
+    oceanDeepColor: '#063869',
+    oceanShallowColor: '#12a6b8',
+    oceanFoamColor: '#d8f6ff',
+    oceanWaveHeight: 1.0,
+    oceanWindSpeed: 26,
+    oceanDetail: 1.45,
+    oceanChoppiness: 1.1,
+    oceanFoamStrength: 0.38,
+    oceanSpecularStrength: 1.05,
   },
   gas: {
     octaves: 4,
@@ -313,6 +355,15 @@ export const TYPE_PRESETS: Record<string, Pick<EditorParams,
     microDetailStrength: 0,
     microDetailScale: 1.0,
     microReliefMeters: 0,
+    oceanDeepColor: '#063869',
+    oceanShallowColor: '#12a6b8',
+    oceanFoamColor: '#d8f6ff',
+    oceanWaveHeight: 0.7,
+    oceanWindSpeed: 18,
+    oceanDetail: 0.85,
+    oceanChoppiness: 0.7,
+    oceanFoamStrength: 0.22,
+    oceanSpecularStrength: 0.8,
   },
   ice: {
     octaves: 5,
@@ -332,5 +383,14 @@ export const TYPE_PRESETS: Record<string, Pick<EditorParams,
     microDetailStrength: 0.48,
     microDetailScale: 1.15,
     microReliefMeters: 1.35,
+    oceanDeepColor: '#0c4f72',
+    oceanShallowColor: '#8bd5e8',
+    oceanFoamColor: '#effcff',
+    oceanWaveHeight: 0.58,
+    oceanWindSpeed: 16,
+    oceanDetail: 1.15,
+    oceanChoppiness: 0.55,
+    oceanFoamStrength: 0.30,
+    oceanSpecularStrength: 1.25,
   },
 }

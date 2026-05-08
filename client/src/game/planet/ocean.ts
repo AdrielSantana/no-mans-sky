@@ -13,6 +13,25 @@ export interface OceanMaterialParams {
   sunColor: THREE.Color | string
   atmosphereColor: THREE.Color | string
   atmosphereLightColor: THREE.Color | string
+  ifftTexture: THREE.Texture
+  ifftWorldSize: number
+  ifftHeightScale: number
+  ifftNormalStrength: number
+  ifftFoamStrength: number
+  ifftChoppiness: number
+  waveDetail?: number
+  ifftDetailTexture?: THREE.Texture
+  ifftDetailWorldSize?: number
+  ifftDetailHeightScale?: number
+  ifftDetailNormalStrength?: number
+  ifftDetailFoamStrength?: number
+  ifftDetailChoppiness?: number
+  ifftDetailNearDistance?: number
+  ifftDetailFarDistance?: number
+  deepColor?: THREE.Color | string
+  shallowColor?: THREE.Color | string
+  foamColor?: THREE.Color | string
+  specularStrength?: number
 }
 
 const OCEAN_WAVE_GLSL = /* glsl */ `
@@ -20,6 +39,42 @@ vec3 oceanTangentFor(vec3 n) {
   vec3 t = cross(n, vec3(0.0, 1.0, 0.0));
   if (dot(t, t) < 0.0001) t = cross(n, vec3(1.0, 0.0, 0.0));
   return normalize(t);
+}
+
+struct OceanIfftSampleData {
+  float height;
+  vec3 slope;
+  float foam;
+};
+
+vec4 oceanIfftPlaneSample(vec2 meters) {
+  return texture2D(uIfftMap, meters / max(uIfftWorldSize, 0.001));
+}
+
+vec3 oceanIfftBlendWeights(vec3 n) {
+  vec3 weights = pow(abs(n), vec3(5.0));
+  return weights / max(weights.x + weights.y + weights.z, 0.0001);
+}
+
+OceanIfftSampleData oceanIfftSampleData(vec3 dir) {
+  vec3 n = normalize(dir);
+  vec3 surface = n * uSeaRadius;
+  vec3 weights = oceanIfftBlendWeights(n);
+
+  vec4 sampleX = oceanIfftPlaneSample(vec2(surface.z, surface.y));
+  vec4 sampleY = oceanIfftPlaneSample(vec2(surface.x, surface.z));
+  vec4 sampleZ = oceanIfftPlaneSample(vec2(surface.x, surface.y));
+
+  vec3 slopeX = vec3(0.0, sampleX.b, sampleX.g);
+  vec3 slopeY = vec3(sampleY.g, 0.0, sampleY.b);
+  vec3 slopeZ = vec3(sampleZ.g, sampleZ.b, 0.0);
+
+  OceanIfftSampleData data;
+  data.height = sampleX.r * weights.x + sampleY.r * weights.y + sampleZ.r * weights.z;
+  data.slope = slopeX * weights.x + slopeY * weights.y + slopeZ * weights.z;
+  data.slope -= n * dot(data.slope, n);
+  data.foam = sampleX.a * weights.x + sampleY.a * weights.y + sampleZ.a * weights.z;
+  return data;
 }
 
 vec3 oceanWarpedDirection(vec3 dir, float time) {
@@ -108,6 +163,9 @@ export function createOceanMaterial(params: OceanMaterialParams): THREE.ShaderMa
   const sunColor = new THREE.Color(params.sunColor)
   const atmosphereColor = new THREE.Color(params.atmosphereColor)
   const atmosphereLightColor = new THREE.Color(params.atmosphereLightColor)
+  const deepOceanColor = new THREE.Color(params.deepColor ?? '#063869')
+  const shallowOceanColor = new THREE.Color(params.shallowColor ?? '#12a6b8')
+  const foamOceanColor = new THREE.Color(params.foamColor ?? '#d8f6ff')
   const isIce = params.planetType === 'ice' ? 1 : 0
   const terrainMeters = Math.max(params.terrainScale * params.planetRadius, 1)
   const waveHeight = THREE.MathUtils.clamp(terrainMeters * 0.006, 0.08, params.planetRadius * 0.0008)
@@ -120,9 +178,15 @@ export function createOceanMaterial(params: OceanMaterialParams): THREE.ShaderMa
   uniform float uTime;
   uniform float uSeed;
   uniform float uSeaHeight;
+  uniform float uSeaRadius;
   uniform float uWaveHeight;
   uniform float uWaveScale;
   uniform float uOceanQuality;
+  uniform float uIfftEnabled;
+  uniform float uIfftWorldSize;
+  uniform float uIfftHeightScale;
+  uniform float uIfftChoppiness;
+  uniform sampler2D uIfftMap;
   attribute float terrainHeight;
 
   varying vec3 vWorldPos;
@@ -130,6 +194,8 @@ export function createOceanMaterial(params: OceanMaterialParams): THREE.ShaderMa
   varying vec3 vRadialNormal;
   varying float vTerrainHeight;
   varying float vWave;
+  varying float vIfftFoam;
+  varying float vIfftSlope;
 
   ${OCEAN_WAVE_GLSL}
 
@@ -140,8 +206,14 @@ export function createOceanMaterial(params: OceanMaterialParams): THREE.ShaderMa
 
     float waterDepth = max(uSeaHeight - terrainHeight, 0.0);
     float shoreCalm = smoothstep(0.005, 0.055, waterDepth);
-    vWave = oceanWaveField(sphereDir, uTime);
-    vec3 displaced = position + sphereDir * vWave * uWaveHeight * (0.35 + shoreCalm * 0.65);
+    OceanIfftSampleData ifft = oceanIfftSampleData(sphereDir);
+    float legacyWave = oceanWaveField(sphereDir, uTime);
+    vWave = mix(legacyWave, ifft.height, uIfftEnabled);
+    vIfftFoam = ifft.foam * uIfftEnabled;
+    vIfftSlope = length(ifft.slope) * uIfftEnabled;
+    float waveDisplacement = mix(legacyWave * uWaveHeight, ifft.height * uIfftHeightScale, uIfftEnabled);
+    vec3 displaced = position + sphereDir * waveDisplacement * (0.35 + shoreCalm * 0.65);
+    displaced -= ifft.slope * uIfftHeightScale * uIfftChoppiness * shoreCalm * uIfftEnabled;
 
     vec4 worldPos = modelMatrix * vec4(displaced, 1.0);
     vWorldPos = worldPos.xyz;
@@ -159,22 +231,37 @@ export function createOceanMaterial(params: OceanMaterialParams): THREE.ShaderMa
   uniform float uTime;
   uniform float uSeed;
   uniform float uSeaHeight;
+  uniform float uSeaRadius;
   uniform float uWaveScale;
   uniform float uNormalStrength;
   uniform float uDepthRange;
   uniform float uWaterLevel;
   uniform float uIceBlend;
   uniform float uOceanQuality;
+  uniform float uOceanAlpha;
+  uniform float uOceanWaveDetail;
+  uniform float uIfftEnabled;
+  uniform float uIfftWorldSize;
+  uniform float uIfftNormalStrength;
+  uniform float uIfftFoamStrength;
+  uniform float uIfftChoppiness;
+  uniform float uOceanSpecularStrength;
+  uniform sampler2D uIfftMap;
   uniform vec3 uSunPosition;
   uniform vec3 uSunColor;
   uniform vec3 uAtmosphereColor;
   uniform vec3 uAtmosphereLightColor;
+  uniform vec3 uOceanDeepColor;
+  uniform vec3 uOceanShallowColor;
+  uniform vec3 uOceanFoamColor;
 
   varying vec3 vWorldPos;
   varying vec3 vSphereDir;
   varying vec3 vRadialNormal;
   varying float vTerrainHeight;
   varying float vWave;
+  varying float vIfftFoam;
+  varying float vIfftSlope;
 
   float oceanSaturate(float value) {
     return clamp(value, 0.0, 1.0);
@@ -182,7 +269,17 @@ export function createOceanMaterial(params: OceanMaterialParams): THREE.ShaderMa
 
   ${OCEAN_WAVE_GLSL}
 
+  vec3 oceanIfftNormal(vec3 dir, vec3 radialNormal) {
+    OceanIfftSampleData ifft = oceanIfftSampleData(dir);
+    vec3 slope = ifft.slope - radialNormal * dot(ifft.slope, radialNormal);
+    return normalize(radialNormal - slope * uIfftNormalStrength);
+  }
+
   vec3 oceanNormal(vec3 dir, vec3 radialNormal) {
+    if (uIfftEnabled > 0.5) {
+      return oceanIfftNormal(dir, radialNormal);
+    }
+
     if (uOceanQuality < 0.5) {
       return radialNormal;
     }
@@ -207,6 +304,25 @@ export function createOceanMaterial(params: OceanMaterialParams): THREE.ShaderMa
 
     vec3 radial = normalize(vRadialNormal);
     vec3 normal = oceanNormal(normalize(vSphereDir), radial);
+    OceanIfftSampleData fragmentIfft = oceanIfftSampleData(normalize(vSphereDir));
+    float fragmentIfftSlope = length(fragmentIfft.slope) * uIfftEnabled;
+    float fragmentIfftFoam = fragmentIfft.foam * uIfftEnabled;
+    float detailAmount = smoothstep(0.75, 2.70, uOceanWaveDetail);
+    float closeDetail = 1.0 - smoothstep(140.0, 2200.0, distance(cameraPosition, vWorldPos));
+    float microWeight = detailAmount * closeDetail * uIfftEnabled;
+    float microSlope = 0.0;
+    if (microWeight > 0.001) {
+      vec3 tangent = oceanTangentFor(radial);
+      vec3 bitangent = normalize(cross(radial, tangent));
+      vec3 detailDir = normalize(vSphereDir);
+      float detailScale = uWaveScale * mix(1.85, 4.85, detailAmount);
+      float microA = terrainFbm(detailDir * detailScale + vec3(uTime * 0.24, -uTime * 0.10, uTime * 0.07), uSeed + 7711.0, 2, 2.24, 0.43);
+      float microB = terrainFbm(detailDir * detailScale * 1.43 + vec3(-uTime * 0.18, uTime * 0.16, -uTime * 0.05), uSeed + 7727.0, 2, 2.31, 0.40);
+      float microNormalStrength = microWeight * 0.18;
+      normal = normalize(normal - tangent * microA * microNormalStrength - bitangent * microB * microNormalStrength);
+      microSlope = (abs(microA) + abs(microB)) * microWeight * 0.42;
+      fragmentIfftSlope += microSlope;
+    }
     vec3 lightDir = normalize(uSunPosition - vWorldPos);
     vec3 viewDir = normalize(cameraPosition - vWorldPos);
     float sunFacing = dot(radial, lightDir);
@@ -219,8 +335,8 @@ export function createOceanMaterial(params: OceanMaterialParams): THREE.ShaderMa
 
     float depth = oceanSaturate(waterDepthRaw / max(uDepthRange, 0.001));
     float shallow = 1.0 - smoothstep(0.025, 0.16, waterDepthRaw);
-    vec3 deepColor = mix(vec3(0.006, 0.052, 0.105), vec3(0.030, 0.105, 0.145), uIceBlend * 0.45);
-    vec3 shelfColor = mix(vec3(0.030, 0.210, 0.255), vec3(0.245, 0.515, 0.610), uIceBlend * 0.72);
+    vec3 deepColor = mix(uOceanDeepColor, vec3(0.030, 0.105, 0.145), uIceBlend * 0.22);
+    vec3 shelfColor = mix(uOceanShallowColor, vec3(0.245, 0.515, 0.610), uIceBlend * 0.32);
     vec3 waterColor = mix(shelfColor, deepColor, depth);
     waterColor = mix(waterColor, uAtmosphereColor * 0.42 + uAtmosphereLightColor * 0.08, litFresnel * (0.34 + day * 0.20));
 
@@ -231,19 +347,27 @@ export function createOceanMaterial(params: OceanMaterialParams): THREE.ShaderMa
       float glintNoise = uOceanQuality > 1.5
         ? terrainFbm(normalize(vSphereDir) * (uWaveScale * 0.9) + vec3(uTime * 0.08), uSeed + 2211.0, 2, 2.4, 0.42) * 0.5 + 0.5
         : terrainFbm(normalize(vSphereDir) * (uWaveScale * 0.42) + vec3(uTime * 0.045), uSeed + 2211.0, 1, 2.2, 0.42) * 0.5 + 0.5;
-      glitter = smoothstep(0.70, 0.98, glintNoise + vWave * 0.22) * pow(direct, 2.0);
+      glitter = smoothstep(0.68, 1.14, glintNoise + fragmentIfftSlope * 0.92 + max(vWave, 0.0) * 0.16) * pow(direct, 2.0);
     }
-    vec3 specular = uSunColor * day * (halfSpec * 1.10 + broadSpec * 0.28 + glitter * 0.16);
+    vec3 specular = uSunColor * day * (halfSpec * 1.10 + broadSpec * 0.28 + glitter * 0.16) * uOceanSpecularStrength;
 
-    float shoreBand = smoothstep(0.002, 0.020, waterDepthRaw) * (1.0 - smoothstep(0.025, 0.085, waterDepthRaw));
+    float shoreBand = smoothstep(0.003, 0.014, waterDepthRaw) * (1.0 - smoothstep(0.018, 0.050, waterDepthRaw));
     float foamNoise = uOceanQuality > 0.5
       ? terrainFbm(normalize(vSphereDir) * (uWaveScale * 0.34) + vec3(-uTime * 0.035, uTime * 0.018, uTime * 0.011), uSeed + 3019.0, uOceanQuality > 1.5 ? 3 : 1, 2.1, 0.5) * 0.5 + 0.5
       : 0.62;
+    float foamDetail = uOceanQuality > 0.5
+      ? terrainFbm(normalize(vSphereDir) * (uWaveScale * 1.16) + vec3(uTime * 0.070, -uTime * 0.038, uTime * 0.026), uSeed + 4049.0, uOceanQuality > 1.5 ? 2 : 1, 2.32, 0.44) * 0.5 + 0.5
+      : 0.62;
     float foamLight = smoothstep(-0.08, 0.46, sunFacing);
     float foamVisibility = smoothstep(0.02, 0.54, sunFacing);
-    float foamMask = shoreBand * smoothstep(0.44, 0.80, foamNoise + abs(vWave) * 0.24) * (0.72 + uWaterLevel * 0.28) * smoothstep(0.15, 0.70, uOceanQuality);
-    foamMask *= 0.04 + foamVisibility * 0.96;
-    vec3 foam = vec3(0.74, 0.90, 0.95) * (0.030 + foamLight * 0.970);
+    float shoreFoam = shoreBand * smoothstep(0.70, 1.08, foamNoise * 0.54 + foamDetail * 0.46 + abs(vWave) * 0.18) * (0.70 + uWaterLevel * 0.22) * 0.36;
+    float crestBreakup = smoothstep(0.56, 0.90, foamDetail + fragmentIfftFoam * 0.22);
+    float crestFoam = smoothstep(0.36, 0.86, fragmentIfftFoam) * smoothstep(0.18, 0.58, fragmentIfftSlope + max(vWave, 0.0) * 0.12) * crestBreakup;
+    crestFoam = max(crestFoam, smoothstep(0.34, 0.82, microSlope + fragmentIfftFoam * 0.35) * microWeight * 0.16);
+    crestFoam *= smoothstep(0.045, 0.24, waterDepthRaw) * uIfftFoamStrength * 0.62;
+    crestFoam *= mix(0.54, 0.96, clamp(uIfftChoppiness / 2.5, 0.0, 1.0));
+    float foamMask = pow(max(shoreFoam, crestFoam), 1.35) * (0.04 + foamVisibility * 0.96);
+    vec3 foam = uOceanFoamColor * (0.030 + foamLight * 0.970);
 
     vec3 nightColor = deepColor * vec3(0.035, 0.046, 0.078);
     vec3 litColor = waterColor * (0.12 + day * 0.88) + specular;
@@ -251,11 +375,13 @@ export function createOceanMaterial(params: OceanMaterialParams): THREE.ShaderMa
     finalColor = mix(finalColor, foam, foamMask);
     finalColor += uAtmosphereLightColor * litFresnel * (0.018 + day * 0.065);
 
-    float alpha = mix(0.42, 0.76, depth);
-    alpha += litFresnel * 0.18 + foamMask * (0.05 + foamVisibility * 0.13) + shallow * 0.05;
+    float alpha = mix(0.84, 0.975, depth);
+    alpha += litFresnel * 0.065 + foamMask * (0.08 + foamVisibility * 0.14);
+    alpha -= shallow * 0.020;
     alpha *= waterMask;
-    alpha *= mix(0.42, 1.0, reflectionLight);
-    alpha = clamp(alpha, 0.0, 0.92);
+    alpha *= mix(0.90, 1.0, reflectionLight);
+    alpha *= uOceanAlpha;
+    alpha = clamp(alpha, 0.0, 0.995);
 
     #include <logdepthbuf_fragment>
     gl_FragColor = vec4(finalColor, alpha);
@@ -267,7 +393,7 @@ export function createOceanMaterial(params: OceanMaterialParams): THREE.ShaderMa
     fragmentShader,
     side: THREE.FrontSide,
     transparent: true,
-    depthWrite: false,
+    depthWrite: true,
     depthTest: true,
     uniforms: {
       uTime: { value: 0 },
@@ -278,6 +404,19 @@ export function createOceanMaterial(params: OceanMaterialParams): THREE.ShaderMa
       uWaveScale: { value: THREE.MathUtils.lerp(42, 88, THREE.MathUtils.clamp(params.waterLevel, 0, 1)) },
       uNormalStrength: { value: 18 },
       uOceanQuality: { value: 2 },
+      uOceanAlpha: { value: 1 },
+      uOceanWaveDetail: { value: params.waveDetail ?? 1.45 },
+      uIfftEnabled: { value: 1 },
+      uIfftMap: { value: params.ifftTexture },
+      uIfftWorldSize: { value: params.ifftWorldSize },
+      uIfftHeightScale: { value: params.ifftHeightScale },
+      uIfftNormalStrength: { value: params.ifftNormalStrength },
+      uIfftFoamStrength: { value: params.ifftFoamStrength },
+      uIfftChoppiness: { value: params.ifftChoppiness },
+      uOceanSpecularStrength: { value: params.specularStrength ?? 1 },
+      uOceanDeepColor: { value: deepOceanColor },
+      uOceanShallowColor: { value: shallowOceanColor },
+      uOceanFoamColor: { value: foamOceanColor },
       uDepthRange: { value: params.planetType === 'ice' ? 0.12 : 0.20 },
       uWaterLevel: { value: params.waterLevel },
       uIceBlend: { value: isIce },

@@ -37,6 +37,15 @@ GRASS_ALPHA_TEXTURE.wrapT = THREE.ClampToEdgeWrapping
 GRASS_ALPHA_TEXTURE.minFilter = THREE.LinearMipmapLinearFilter
 GRASS_ALPHA_TEXTURE.magFilter = THREE.LinearFilter
 
+const DEFAULT_CLOUD_MASK_TEXTURE = new THREE.DataTexture(
+  new Uint8Array([255, 255, 255, 255]),
+  1,
+  1,
+  THREE.RGBAFormat,
+)
+DEFAULT_CLOUD_MASK_TEXTURE.name = 'default-cloud-mask'
+DEFAULT_CLOUD_MASK_TEXTURE.needsUpdate = true
+
 const MAX_INSTANCES_PER_CHUNK = 2400
 const MIN_SURFACE_SLOPE_DOT = 0.62
 const MIN_GRASS_ALPHA = 0.12
@@ -202,6 +211,8 @@ export function createFluffyGrassMaterial(
       uCloudDetailStrength: { value: 0.82 },
       uCloudQuality: { value: 2 },
       uCloudSeed: { value: 0 },
+      uCloudMask: { value: DEFAULT_CLOUD_MASK_TEXTURE },
+      uCloudMaskOffset: { value: 0 },
     },
     vertexShader: /* glsl */ `
       #include <common>

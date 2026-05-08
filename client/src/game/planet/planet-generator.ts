@@ -446,6 +446,8 @@ uniform float uCloudDetailStrength;
 uniform float uCloudQuality;
 uniform float uCloudSeed;
 uniform float uTime;
+uniform sampler2D uCloudMask;
+uniform float uCloudMaskOffset;
 
 vec3 cloudCurvedDirection(vec3 dir) {
   vec3 n = normalize(dir);
@@ -527,6 +529,17 @@ float cloudFieldLod(vec3 dir) {
   return cloudField(dir);
 }
 
+vec2 cloudMaskUv(vec3 dir) {
+  vec3 n = normalize(dir);
+  float lon = atan(n.x, n.z);
+  float lat = asin(clamp(n.y, -1.0, 1.0));
+  return vec2(fract(lon / 6.28318530718 + 0.5 + uCloudMaskOffset), clamp(0.5 - lat / 3.14159265359, 0.0, 1.0));
+}
+
+float sharedCloudMask(vec3 dir) {
+  return texture2D(uCloudMask, cloudMaskUv(dir)).r;
+}
+
 float cloudMaskFromDensity(float density) {
   float coverage = clamp(uCloudCoverage, 0.0, 1.0);
   float threshold = mix(0.78, 0.24, coverage);
@@ -567,10 +580,10 @@ float cloudShadowField(vec3 dir) {
 }
 
 float cloudShadowPattern(vec3 dir) {
-  float coverage = clamp(uCloudCoverage, 0.0, 1.0);
-  float threshold = mix(0.79, 0.25, coverage);
-  float softness = max(uCloudSoftness * 1.12, 0.026);
-  return smoothstep(threshold, threshold + softness, cloudShadowField(dir));
+  float macroMask = sharedCloudMask(dir);
+  float procedural = cloudShadowField(dir);
+  float detail = cloudMaskFromDensity(procedural);
+  return clamp(macroMask * 0.82 + detail * macroMask * 0.28, 0.0, 1.0);
 }
 
 float cloudShadowMask(vec3 surfaceDir, vec3 sunDir) {
@@ -578,15 +591,15 @@ float cloudShadowMask(vec3 surfaceDir, vec3 sunDir) {
   float daylight = smoothstep(-0.08, 0.62, dot(surfaceDir, sunDir));
   float offset = clamp(uCloudHeight, 0.0, 0.20) * 2.8 + 0.018;
   vec3 projectedDir = normalize(surfaceDir + sunDir * offset);
-  float shadow = pow(cloudShadowPattern(projectedDir), 0.72);
-  float strength = clamp(uCloudShadowStrength * 0.24, 0.0, 1.6);
+  float shadow = pow(cloudShadowPattern(projectedDir), 0.58);
+  float strength = clamp(uCloudShadowStrength * 0.42, 0.0, 2.2);
   return shadow * daylight * strength;
 }
 
 vec3 applyCloudShadow(vec3 color, vec3 surfaceDir, vec3 sunDir, float strengthMultiplier) {
   float shadow = cloudShadowMask(surfaceDir, sunDir) * strengthMultiplier;
-  vec3 coolShadow = color * vec3(0.20, 0.25, 0.32);
-  return mix(color, coolShadow, clamp(shadow, 0.0, 0.92));
+  vec3 coolShadow = color * vec3(0.11, 0.14, 0.19);
+  return mix(color, coolShadow, clamp(shadow, 0.0, 0.96));
 }
 `
 
@@ -601,6 +614,7 @@ vec3 applyTerrainCloudShadow(vec3 color, vec3 surfaceDir, float strengthMultipli
 // Terrain chunks are displaced on the CPU so physics, wireframe, and rendering share one surface.
 export function createPlanetMaterial(params: {
   seed: number
+  cloudMask: THREE.Texture
   planetType: string
   waterLevel: number
   terrainScale: number
@@ -921,6 +935,8 @@ export function createPlanetMaterial(params: {
       uCloudDetailStrength: { value: params.cloudDetail },
       uCloudQuality: { value: 2 },
       uCloudSeed: { value: params.seed },
+      uCloudMask: { value: params.cloudMask },
+      uCloudMaskOffset: { value: 0 },
       uTime: { value: 0 },
       uGrassTexture: { value: TERRAIN_TEXTURES.grass },
       uRockTexture: { value: TERRAIN_TEXTURES.rock },
@@ -942,6 +958,7 @@ export function createPlanetMaterial(params: {
 
 export function createPlanetFarMaterial(params: {
   seed: number
+  cloudMask: THREE.Texture
   planetType: string
   waterLevel: number
   terrainScale: number
@@ -1210,6 +1227,8 @@ export function createPlanetFarMaterial(params: {
       uCloudDetailStrength: { value: params.cloudDetail },
       uCloudQuality: { value: 2 },
       uCloudSeed: { value: params.seed },
+      uCloudMask: { value: params.cloudMask },
+      uCloudMaskOffset: { value: 0 },
       uTime: { value: 0 },
       uGrassTexture: { value: TERRAIN_TEXTURES.grass },
       uRockTexture: { value: TERRAIN_TEXTURES.rock },
@@ -1231,6 +1250,7 @@ export function createPlanetFarMaterial(params: {
 
 export function createPlanetFallbackMaterial(params: {
   seed: number
+  cloudMask: THREE.Texture
   planetType: string
   waterLevel: number
   colorA: string
@@ -1463,6 +1483,8 @@ export function createPlanetFallbackMaterial(params: {
       uCloudDetailStrength: { value: params.cloudDetail },
       uCloudQuality: { value: 2 },
       uCloudSeed: { value: params.seed },
+      uCloudMask: { value: params.cloudMask },
+      uCloudMaskOffset: { value: 0 },
       uTime: { value: 0 },
       uGrassTexture: { value: TERRAIN_TEXTURES.grass },
       uRockTexture: { value: TERRAIN_TEXTURES.rock },
@@ -1651,6 +1673,7 @@ export function createAtmosphereMaterial(params: {
 
 export function createCloudMaterial(params: {
   seed: number
+  cloudMask: THREE.Texture
   coverage: number
   opacity: number
   scale: number
@@ -1717,9 +1740,15 @@ export function createCloudMaterial(params: {
     float direct = clamp(nDotL, 0.0, 1.0);
     float rim = pow(1.0 - max(dot(toCamera, shellNormal), 0.0), 2.1);
 
+    float macroMask = sharedCloudMask(dir);
     float density = cloudFieldLod(dir);
+    density = mix(density, density * 0.72 + macroMask * 0.82, 0.48);
     float cloud = cloudMaskFromDensity(density);
     float body = cloudBodyFromDensity(density);
+    float macroGate = smoothstep(0.015, 0.16, macroMask);
+    float macroBody = smoothstep(0.22, 0.72, macroMask);
+    cloud = clamp(max(cloud * macroGate, macroMask * 0.38), 0.0, 1.0);
+    body = clamp(max(body * smoothstep(0.08, 0.42, macroMask), macroBody * 0.42), 0.0, 1.0);
     float edge = cloudEdgeFromMaskBody(cloud, body);
     float densityTone = clamp(body * 0.72 + density * 0.24, 0.0, 1.0);
 
@@ -1728,25 +1757,25 @@ export function createCloudMaterial(params: {
     float forwardGlow = pow(max(dot(toCamera, sunDir), 0.0), 7.5);
     float rimLight = pow(1.0 - max(dot(toCamera, shellNormal), 0.0), 3.0);
 
-    vec3 coolWhite = mix(uCloudColor, uAtmosphereColor, 0.16);
-    vec3 sunWhite = mix(vec3(1.0), uSunColor, 0.28);
-    vec3 sunset = mix(vec3(1.0, 0.40, 0.14), uSunColor, 0.42);
-    vec3 denseCore = mix(coolWhite * vec3(0.58, 0.62, 0.68), uAtmosphereLightColor * 0.32, 0.25);
-    vec3 litCloud = mix(coolWhite * (0.34 + direct * 0.62), sunWhite, direct * 0.58);
-    litCloud = mix(litCloud, denseCore, densityTone * (0.18 + (1.0 - direct) * 0.26));
-    litCloud = mix(litCloud, sunset, lowSun * 0.58 + terminator * 0.28);
-    vec3 nightCloud = mix(vec3(0.010, 0.016, 0.032) * 0.50, uAtmosphereLightColor * 0.10, 0.28);
+    vec3 coolWhite = mix(uCloudColor, uAtmosphereColor, 0.10) * 0.86;
+    vec3 sunWhite = mix(vec3(0.82), uSunColor, 0.24);
+    vec3 sunset = mix(vec3(0.76, 0.30, 0.11), uSunColor, 0.34);
+    vec3 denseCore = mix(coolWhite * vec3(0.46, 0.50, 0.58), uAtmosphereLightColor * 0.18, 0.18);
+    vec3 litCloud = mix(coolWhite * (0.22 + direct * 0.56), sunWhite, direct * 0.40);
+    litCloud = mix(litCloud, denseCore, densityTone * (0.26 + (1.0 - direct) * 0.38));
+    litCloud = mix(litCloud, sunset, lowSun * 0.42 + terminator * 0.18);
+    vec3 nightCloud = mix(vec3(0.010, 0.016, 0.032) * 0.34, uAtmosphereLightColor * 0.045, 0.18);
     vec3 color = mix(nightCloud, litCloud, day);
     float qualityVolume = mix(0.64, 1.0, smoothstep(0.0, 2.0, uCloudQuality));
     float volume = clamp(uCloudVolumeStrength, 0.0, 1.5) * qualityVolume;
-    float silver = edge * (0.26 + forwardGlow * 2.10 + rimLight * 0.52) * smoothstep(-0.22, 0.62, nDotL) * volume;
-    float selfShadow = body * (1.0 - direct) * (0.24 + volume * 0.30);
-    float baseShade = (1.0 - max(dot(shellNormal, toCamera), 0.0)) * body * volume * 0.20;
-    float underside = body * smoothstep(-0.16, 0.30, -nDotL) * (0.12 + volume * 0.18);
-    color = mix(color, color * vec3(0.48, 0.54, 0.64), clamp(selfShadow + baseShade + underside, 0.0, 0.70));
-    color += mix(uAtmosphereLightColor, uSunColor, 0.48) * silver * (0.10 + day * 0.70);
-    color += uAtmosphereLightColor * rim * (0.012 + day * 0.13) * (1.0 + volume * 0.40);
-    color *= mix(0.74, 1.10 + volume * 0.12, body);
+    float silver = edge * (0.12 + forwardGlow * 1.08 + rimLight * 0.24) * smoothstep(-0.12, 0.66, nDotL) * volume;
+    float selfShadow = body * (1.0 - direct) * (0.34 + volume * 0.42);
+    float baseShade = (1.0 - max(dot(shellNormal, toCamera), 0.0)) * body * volume * 0.30;
+    float underside = body * smoothstep(-0.16, 0.30, -nDotL) * (0.18 + volume * 0.24);
+    color = mix(color, color * vec3(0.36, 0.41, 0.50), clamp(selfShadow + baseShade + underside, 0.0, 0.82));
+    color += mix(uAtmosphereLightColor, uSunColor, 0.42) * silver * (0.06 + day * 0.38);
+    color += uAtmosphereLightColor * rim * (0.006 + day * 0.052) * (1.0 + volume * 0.18);
+    color *= mix(0.62, 0.96 + volume * 0.05, body);
 
     float colorStr = clamp(uCloudColorStrength, 0.0, 1.0);
     float lum = dot(color, vec3(0.2126, 0.7152, 0.0722));
@@ -1779,6 +1808,8 @@ export function createCloudMaterial(params: {
       uCloudColor: { value: cloudColor },
       uSunPosition: { value: params.sunPosition.clone() },
       uPlanetCenter: { value: new THREE.Vector3() },
+      uCloudMask: { value: params.cloudMask },
+      uCloudMaskOffset: { value: 0 },
       uSeed: { value: params.seed },
       uTime: { value: 0 },
       uOpacity: { value: params.opacity },

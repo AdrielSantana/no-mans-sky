@@ -448,6 +448,114 @@ export function EditorPanel({ params, onChange }: Props) {
           <span className="editor-value">{params.waterLevel.toFixed(2)}</span>
         </div>
         <div className="editor-row">
+          <span className="editor-label">Deep Water</span>
+          <input
+            className="editor-color"
+            type="color"
+            value={params.oceanDeepColor}
+            onChange={e => set('oceanDeepColor', e.target.value)}
+          />
+          <span className="editor-value">{params.oceanDeepColor}</span>
+        </div>
+        <div className="editor-row">
+          <span className="editor-label">Shallow</span>
+          <input
+            className="editor-color"
+            type="color"
+            value={params.oceanShallowColor}
+            onChange={e => set('oceanShallowColor', e.target.value)}
+          />
+          <span className="editor-value">{params.oceanShallowColor}</span>
+        </div>
+        <div className="editor-row">
+          <span className="editor-label">Foam Color</span>
+          <input
+            className="editor-color"
+            type="color"
+            value={params.oceanFoamColor}
+            onChange={e => set('oceanFoamColor', e.target.value)}
+          />
+          <span className="editor-value">{params.oceanFoamColor}</span>
+        </div>
+        <div className="editor-row">
+          <span className="editor-label">Wave Height</span>
+          <input
+            className="editor-slider"
+            type="range"
+            min={RANGES.oceanWaveHeight.min}
+            max={RANGES.oceanWaveHeight.max}
+            step={RANGES.oceanWaveHeight.step}
+            value={params.oceanWaveHeight}
+            onChange={e => set('oceanWaveHeight', Number(e.target.value))}
+          />
+          <span className="editor-value">{params.oceanWaveHeight.toFixed(2)}</span>
+        </div>
+        <div className="editor-row">
+          <span className="editor-label">Wind Speed</span>
+          <input
+            className="editor-slider"
+            type="range"
+            min={RANGES.oceanWindSpeed.min}
+            max={RANGES.oceanWindSpeed.max}
+            step={RANGES.oceanWindSpeed.step}
+            value={params.oceanWindSpeed}
+            onChange={e => set('oceanWindSpeed', Number(e.target.value))}
+          />
+          <span className="editor-value">{params.oceanWindSpeed.toFixed(1)}</span>
+        </div>
+        <div className="editor-row">
+          <span className="editor-label">Wave Detail</span>
+          <input
+            className="editor-slider"
+            type="range"
+            min={RANGES.oceanDetail.min}
+            max={RANGES.oceanDetail.max}
+            step={RANGES.oceanDetail.step}
+            value={params.oceanDetail}
+            onChange={e => set('oceanDetail', Number(e.target.value))}
+          />
+          <span className="editor-value">{params.oceanDetail.toFixed(2)}</span>
+        </div>
+        <div className="editor-row">
+          <span className="editor-label">Choppiness</span>
+          <input
+            className="editor-slider"
+            type="range"
+            min={RANGES.oceanChoppiness.min}
+            max={RANGES.oceanChoppiness.max}
+            step={RANGES.oceanChoppiness.step}
+            value={params.oceanChoppiness}
+            onChange={e => set('oceanChoppiness', Number(e.target.value))}
+          />
+          <span className="editor-value">{params.oceanChoppiness.toFixed(2)}</span>
+        </div>
+        <div className="editor-row">
+          <span className="editor-label">Foam</span>
+          <input
+            className="editor-slider"
+            type="range"
+            min={RANGES.oceanFoamStrength.min}
+            max={RANGES.oceanFoamStrength.max}
+            step={RANGES.oceanFoamStrength.step}
+            value={params.oceanFoamStrength}
+            onChange={e => set('oceanFoamStrength', Number(e.target.value))}
+          />
+          <span className="editor-value">{params.oceanFoamStrength.toFixed(2)}</span>
+        </div>
+        <div className="editor-row">
+          <span className="editor-label">Specular</span>
+          <input
+            className="editor-slider"
+            type="range"
+            min={RANGES.oceanSpecularStrength.min}
+            max={RANGES.oceanSpecularStrength.max}
+            step={RANGES.oceanSpecularStrength.step}
+            value={params.oceanSpecularStrength}
+            onChange={e => set('oceanSpecularStrength', Number(e.target.value))}
+          />
+          <span className="editor-value">{params.oceanSpecularStrength.toFixed(2)}</span>
+        </div>
+        <div className="editor-row">
           <span className="editor-label">Color A</span>
           <input
             className="editor-color"

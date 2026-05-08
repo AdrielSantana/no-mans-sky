@@ -102,7 +102,7 @@ export class CelestialSystem {
             colorB: params.colorB,
             atmosphereColor: params.atmosphereColor,
             atmosphereDensity: params.atmosphereDensity,
-          })
+          }, this.engine.renderer)
           renderer.setPosition(renderState.currentPosition)
           renderer.setRotation(renderState.currentRotationAngle, renderState.currentAxialTilt)
           renderer.setSunPosition(this.sunPosition)

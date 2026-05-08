@@ -1,11 +1,165 @@
 import * as THREE from 'three'
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js'
 import { EffectComposer } from 'three/examples/jsm/postprocessing/EffectComposer.js'
+import { FullScreenQuad, Pass } from 'three/examples/jsm/postprocessing/Pass.js'
 import { RenderPass } from 'three/examples/jsm/postprocessing/RenderPass.js'
 import { UnrealBloomPass } from 'three/examples/jsm/postprocessing/UnrealBloomPass.js'
 import { OutputPass } from 'three/examples/jsm/postprocessing/OutputPass.js'
 import { createSkybox } from './skybox'
 import { WORLD_SCALE } from './world-scale'
+import { CLOUD_RENDER_LAYER, MAIN_RENDER_LAYER } from './render-layers'
+
+const CLOUD_RENDER_SCALE = 0.5
+
+class CloudCompositePass extends Pass {
+  private scene: THREE.Scene
+  private camera: THREE.Camera
+  private cloudTarget: THREE.WebGLRenderTarget
+  private material: THREE.ShaderMaterial
+  private fsQuad: FullScreenQuad
+  private clearColor = new THREE.Color()
+  private materialColorWrite = new Map<THREE.Material, boolean>()
+
+  constructor(scene: THREE.Scene, camera: THREE.Camera) {
+    super()
+    this.scene = scene
+    this.camera = camera
+    this.needsSwap = true
+    this.cloudTarget = this.createCloudTarget(1, 1)
+    this.material = new THREE.ShaderMaterial({
+      depthTest: false,
+      depthWrite: false,
+      uniforms: {
+        tDiffuse: { value: null },
+        tClouds: { value: this.cloudTarget.texture },
+        uCloudEnabled: { value: 1 },
+      },
+      vertexShader: /* glsl */ `
+        varying vec2 vUv;
+
+        void main() {
+          vUv = uv;
+          gl_Position = vec4(position.xy, 0.0, 1.0);
+        }
+      `,
+      fragmentShader: /* glsl */ `
+        uniform sampler2D tDiffuse;
+        uniform sampler2D tClouds;
+        uniform float uCloudEnabled;
+        varying vec2 vUv;
+
+        void main() {
+          vec4 base = texture2D(tDiffuse, vUv);
+          vec4 clouds = texture2D(tClouds, vUv);
+          clouds.a *= uCloudEnabled;
+          gl_FragColor = vec4(mix(base.rgb, clouds.rgb, clouds.a), max(base.a, clouds.a));
+        }
+      `,
+    })
+    this.fsQuad = new FullScreenQuad(this.material)
+  }
+
+  private createCloudTarget(width: number, height: number): THREE.WebGLRenderTarget {
+    const target = new THREE.WebGLRenderTarget(width, height, {
+      minFilter: THREE.LinearFilter,
+      magFilter: THREE.LinearFilter,
+      format: THREE.RGBAFormat,
+      depthBuffer: true,
+      stencilBuffer: false,
+    })
+    target.texture.name = 'cloud-half-res'
+    return target
+  }
+
+  setSize(width: number, height: number) {
+    const targetWidth = Math.max(1, Math.floor(width * CLOUD_RENDER_SCALE))
+    const targetHeight = Math.max(1, Math.floor(height * CLOUD_RENDER_SCALE))
+    this.cloudTarget.setSize(targetWidth, targetHeight)
+  }
+
+  render(renderer: THREE.WebGLRenderer, writeBuffer: THREE.WebGLRenderTarget, readBuffer: THREE.WebGLRenderTarget) {
+    const hasClouds = this.hasVisibleClouds()
+    if (hasClouds) this.renderClouds(renderer)
+
+    this.material.uniforms.tDiffuse.value = readBuffer.texture
+    this.material.uniforms.tClouds.value = this.cloudTarget.texture
+    this.material.uniforms.uCloudEnabled.value = hasClouds ? 1 : 0
+    renderer.setRenderTarget(this.renderToScreen ? null : writeBuffer)
+    this.fsQuad.render(renderer)
+  }
+
+  private hasVisibleClouds(): boolean {
+    let visible = false
+    const cloudLayerMask = 1 << CLOUD_RENDER_LAYER
+    this.scene.traverse(object => {
+      if (visible) return
+      if (object.visible && (object.layers.mask & cloudLayerMask) !== 0) visible = true
+    })
+    return visible
+  }
+
+  private renderClouds(renderer: THREE.WebGLRenderer) {
+    const previousTarget = renderer.getRenderTarget()
+    const previousAutoClear = renderer.autoClear
+    const previousBackground = this.scene.background
+    const previousCameraMask = this.camera.layers.mask
+    const previousClearAlpha = renderer.getClearAlpha()
+    renderer.getClearColor(this.clearColor)
+
+    try {
+      this.scene.background = null
+      renderer.setRenderTarget(this.cloudTarget)
+      renderer.setClearColor(0x000000, 0)
+      renderer.clear(true, true, true)
+
+      this.camera.layers.set(MAIN_RENDER_LAYER)
+      this.setSceneColorWrite(false)
+      renderer.render(this.scene, this.camera)
+      this.restoreSceneColorWrite()
+
+      renderer.autoClear = false
+      this.camera.layers.set(CLOUD_RENDER_LAYER)
+      renderer.render(this.scene, this.camera)
+    } finally {
+      this.restoreSceneColorWrite()
+      renderer.autoClear = previousAutoClear
+      this.camera.layers.mask = previousCameraMask
+      this.scene.background = previousBackground
+      renderer.setClearColor(this.clearColor, previousClearAlpha)
+      renderer.setRenderTarget(previousTarget)
+    }
+  }
+
+  private setSceneColorWrite(value: boolean) {
+    this.materialColorWrite.clear()
+    this.scene.traverse(object => {
+      const mesh = object as THREE.Mesh
+      const material = mesh.material
+      if (!material) return
+
+      const materials = Array.isArray(material) ? material : [material]
+      for (const item of materials) {
+        if (!this.materialColorWrite.has(item)) {
+          this.materialColorWrite.set(item, item.colorWrite)
+          item.colorWrite = value
+        }
+      }
+    })
+  }
+
+  private restoreSceneColorWrite() {
+    for (const [material, colorWrite] of this.materialColorWrite) {
+      material.colorWrite = colorWrite
+    }
+    this.materialColorWrite.clear()
+  }
+
+  dispose() {
+    this.cloudTarget.dispose()
+    this.material.dispose()
+    this.fsQuad.dispose()
+  }
+}
 
 export class GameEngine {
   readonly scene: THREE.Scene
@@ -22,6 +176,7 @@ export class GameEngine {
   private sunLight: THREE.PointLight | null = null
   private bloomPass: UnrealBloomPass | null = null
   private outputPass: OutputPass | null = null
+  private cloudPass: CloudCompositePass | null = null
 
   constructor(container: HTMLElement) {
     this.container = container
@@ -58,6 +213,9 @@ export class GameEngine {
     this.composer = new EffectComposer(this.renderer)
     this.composer.setPixelRatio(this.pixelRatioLimit)
     this.composer.addPass(new RenderPass(this.scene, this.camera))
+    const cloudPass = new CloudCompositePass(this.scene, this.camera)
+    this.composer.addPass(cloudPass)
+    this.cloudPass = cloudPass
     const bloomPass = new UnrealBloomPass(
       new THREE.Vector2(width, height),
       1.5,
@@ -227,6 +385,7 @@ export class GameEngine {
     this.stop()
     window.removeEventListener('resize', this.boundResize)
     this.controls.dispose()
+    this.cloudPass?.dispose()
     this.outputPass?.dispose()
     this.composer.dispose()
     this.renderer.dispose()

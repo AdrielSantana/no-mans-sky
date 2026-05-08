@@ -21,12 +21,21 @@ declare global {
   }
 }
 
-function createPlanet(scene: THREE.Scene, params: EditorParams): PlanetRenderer {
+function createPlanet(scene: THREE.Scene, renderer: THREE.WebGLRenderer, params: EditorParams): PlanetRenderer {
   return new PlanetRenderer(scene, params.planetRadius, {
     seed: BigInt(params.seed),
     planetType: params.planetType,
     terrainScale: params.terrainScale,
     waterLevel: params.waterLevel,
+    oceanDeepColor: params.oceanDeepColor,
+    oceanShallowColor: params.oceanShallowColor,
+    oceanFoamColor: params.oceanFoamColor,
+    oceanWaveHeight: params.oceanWaveHeight,
+    oceanWindSpeed: params.oceanWindSpeed,
+    oceanDetail: params.oceanDetail,
+    oceanChoppiness: params.oceanChoppiness,
+    oceanFoamStrength: params.oceanFoamStrength,
+    oceanSpecularStrength: params.oceanSpecularStrength,
     colorA: params.colorA,
     colorB: params.colorB,
     textureScale: params.textureScale,
@@ -88,7 +97,7 @@ function createPlanet(scene: THREE.Scene, params: EditorParams): PlanetRenderer 
     skirts: params.skirts,
     horizonMargin: params.horizonMargin,
     terrainWorkers: params.terrainWorkers,
-  })
+  }, renderer)
 }
 
 function applyDebugSettings(engine: GameEngine, planet: PlanetRenderer, params: EditorParams) {
@@ -129,6 +138,15 @@ function buildPlanetKey(params: EditorParams): string {
     planetRadius: params.planetRadius,
     terrainScale: params.terrainScale,
     waterLevel: params.waterLevel,
+    oceanDeepColor: params.oceanDeepColor,
+    oceanShallowColor: params.oceanShallowColor,
+    oceanFoamColor: params.oceanFoamColor,
+    oceanWaveHeight: params.oceanWaveHeight,
+    oceanWindSpeed: params.oceanWindSpeed,
+    oceanDetail: params.oceanDetail,
+    oceanChoppiness: params.oceanChoppiness,
+    oceanFoamStrength: params.oceanFoamStrength,
+    oceanSpecularStrength: params.oceanSpecularStrength,
     colorA: params.colorA,
     colorB: params.colorB,
     textureScale: params.textureScale,
@@ -222,7 +240,7 @@ export function EditorCanvas({ params }: Props) {
     engine.camera.lookAt(0, 0, 0)
     engine.setOrbitBounds(r * 0.5, r * 15)
 
-    const planet = createPlanet(engine.scene, params)
+    const planet = createPlanet(engine.scene, engine.renderer, params)
     const sunPosition = buildSunPosition(params)
     planet.setSunPosition(sunPosition)
     engine.setSunPosition(sunPosition)
@@ -406,7 +424,7 @@ export function EditorCanvas({ params }: Props) {
       const oldPlanet = planetRef.current
       if (oldPlanet) oldPlanet.dispose()
 
-      const newPlanet = createPlanet(engine.scene, paramsRef.current)
+      const newPlanet = createPlanet(engine.scene, engine.renderer, paramsRef.current)
       const latestSunPosition = buildSunPosition(paramsRef.current)
       newPlanet.setSunPosition(latestSunPosition)
       engine.setSunPosition(latestSunPosition)
