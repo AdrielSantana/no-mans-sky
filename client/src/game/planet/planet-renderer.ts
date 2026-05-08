@@ -90,6 +90,18 @@ interface TerrainWorkerSlot {
   epoch: number
 }
 
+export interface UnderwaterViewState {
+  factor: number
+  depth: number
+}
+
+interface OceanMeshRaycastHit {
+  radius: number
+  ia: number
+  ib: number
+  ic: number
+}
+
 interface PlanetRendererParams {
   seed: bigint
   planetType: string
@@ -210,6 +222,9 @@ export class PlanetRenderer {
   private oceanMesh: THREE.Mesh | null = null
   private oceanShoreMask: THREE.DataTexture | null = null
   private oceanSeaRadius = 0
+  private oceanMeshFacetInset = 0
+  private oceanWaveHeight = DEFAULT_OCEAN_WAVE_HEIGHT
+  private underwaterViewState: UnderwaterViewState = { factor: 0, depth: 0 }
   private atmosphereMaterial: THREE.ShaderMaterial | null = null
   private cloudMaterial: THREE.ShaderMaterial | null = null
   private quadtrees: QuadtreeNode[] = []
@@ -1235,6 +1250,10 @@ export class PlanetRenderer {
     return chunk?.sampleVisualRadius(dir) ?? samplePlanetRadiusDetailed(dir, this.terrainParams)
   }
 
+  getUnderwaterViewState(): UnderwaterViewState {
+    return this.underwaterViewState
+  }
+
   getDebugStats(camera: THREE.Camera) {
     const camPos = new THREE.Vector3()
     camera.getWorldPosition(camPos)
@@ -1337,6 +1356,8 @@ export class PlanetRenderer {
     this.group.getWorldQuaternion(planetQuat)
     const inversePlanetQuat = planetQuat.clone().invert()
     const localCamPos = camPos.clone().sub(planetPos).applyQuaternion(inversePlanetQuat)
+    this.underwaterViewState = this.computeUnderwaterViewState(localCamPos)
+    this.updateOceanViewSide(this.underwaterViewState)
     this.cloudLocalSunDirection.copy(this.sunPosition).sub(planetPos).applyQuaternion(inversePlanetQuat)
     if (this.cloudLocalSunDirection.lengthSq() > 0.000001) {
       this.cloudLocalSunDirection.normalize()
@@ -1961,10 +1982,12 @@ export class PlanetRenderer {
 
     this.oceanSeaRadius = seaRadius
     const oceanGeo = new THREE.IcosahedronGeometry(seaRadius, OCEAN_GEODESIC_DETAIL)
+    this.oceanMeshFacetInset = this.measureOceanMeshFacetInset(oceanGeo)
     this.addOceanTerrainHeightAttribute(oceanGeo)
     this.oceanShoreMask?.dispose()
     this.oceanShoreMask = this.createOceanShoreMaskTexture()
     const oceanWaveHeight = params.oceanWaveHeight ?? DEFAULT_OCEAN_WAVE_HEIGHT
+    this.oceanWaveHeight = oceanWaveHeight
     const oceanSpectrumParams = {
       seed: Number(params.seed),
       planetRadius: this.planetRadius,
@@ -2119,6 +2142,39 @@ export class PlanetRenderer {
     return texture
   }
 
+  private measureOceanMeshFacetInset(geometry: THREE.BufferGeometry): number {
+    const positions = geometry.getAttribute('position')
+    const index = geometry.getIndex()
+    const a = new THREE.Vector3()
+    const b = new THREE.Vector3()
+    const c = new THREE.Vector3()
+    const normal = new THREE.Vector3()
+    let maxInset = 0
+
+    const measureTriangle = (ia: number, ib: number, ic: number) => {
+      a.fromBufferAttribute(positions, ia)
+      b.fromBufferAttribute(positions, ib)
+      c.fromBufferAttribute(positions, ic)
+      normal.crossVectors(b.clone().sub(a), c.clone().sub(a))
+      if (normal.lengthSq() <= 1e-10) return
+      normal.normalize()
+      const planeDistance = Math.abs(a.dot(normal))
+      maxInset = Math.max(maxInset, Math.max(0, this.oceanSeaRadius - planeDistance))
+    }
+
+    if (index) {
+      for (let i = 0; i < index.count; i += 3) {
+        measureTriangle(index.getX(i), index.getX(i + 1), index.getX(i + 2))
+      }
+    } else {
+      for (let i = 0; i < positions.count; i += 3) {
+        measureTriangle(i, i + 1, i + 2)
+      }
+    }
+
+    return maxInset
+  }
+
   private updateOceanRenderState(useTerrain: boolean) {
     if (!this.oceanMesh || !this.oceanMaterial) return
 
@@ -2126,6 +2182,154 @@ export class PlanetRenderer {
     this.oceanMaterial.depthTest = useTerrain
     this.setFloatUniform(this.oceanMaterial, 'uOceanQuality', 2)
     this.setFloatUniform(this.oceanMaterial, 'uOceanAlpha', 1)
+  }
+
+  private updateOceanViewSide(state: UnderwaterViewState) {
+    if (!this.oceanMaterial || !this.oceanMesh || this.oceanSeaRadius <= 0) return
+
+    const nextSide = state.factor > 0.01 ? THREE.BackSide : THREE.FrontSide
+    if (this.oceanMaterial.side !== nextSide) {
+      this.oceanMaterial.side = nextSide
+    }
+  }
+
+  private computeUnderwaterViewState(localCamPos: THREE.Vector3): UnderwaterViewState {
+    if (!this.oceanMesh || this.seaHeight < -1 || this.oceanSeaRadius <= 0) {
+      return { factor: 0, depth: 0 }
+    }
+
+    const localRadius = localCamPos.length()
+    if (!Number.isFinite(localRadius) || localRadius <= 1e-6) {
+      return { factor: 0, depth: 0 }
+    }
+
+    const localDir = localCamPos.clone().divideScalar(localRadius)
+    const oceanSurfaceRadius = this.sampleOceanVisualSurfaceRadius(localDir, localRadius)
+    const terrainSurfaceRadius = this.sampleSurfaceRadius(localDir)
+    const waterDepthAtCameraDir = oceanSurfaceRadius - terrainSurfaceRadius
+    const waterMask = smoothstepNumber(0.05, 0.8, waterDepthAtCameraDir)
+
+    if (waterMask <= 0.01) return { factor: 0, depth: 0 }
+
+    const cameraDepth = oceanSurfaceRadius - localRadius
+    const fadeDepth = Math.max(1.2, Math.min(3.5, this.oceanWaveHeight * 0.22))
+    const factor = cameraDepth > 0
+      ? smoothstepNumber(0, fadeDepth, cameraDepth) * waterMask
+      : 0
+    return {
+      factor,
+      depth: Math.max(0, cameraDepth),
+    }
+  }
+
+  private sampleOceanVisualSurfaceRadius(localDir: THREE.Vector3, localRadius: number): number {
+    if (!this.oceanMesh?.geometry || this.oceanSeaRadius <= 0) return this.oceanSeaRadius
+
+    const idealDepth = this.oceanSeaRadius - localRadius
+    const probeRange = Math.max(2.5, this.oceanMeshFacetInset * 1.5 + this.oceanWaveHeight * 0.5 + 0.5)
+    if (Math.abs(idealDepth) > probeRange) {
+      return this.oceanSeaRadius + this.sampleOceanSurfaceDisplacement(localDir, 1)
+    }
+
+    const hit = this.raycastOceanMesh(localDir)
+    if (!hit) {
+      return this.oceanSeaRadius + this.sampleOceanSurfaceDisplacement(localDir, 1)
+    }
+
+    return this.raycastDisplacedOceanTriangleRadius(localDir, hit)
+      ?? hit.radius + this.sampleOceanSurfaceDisplacement(localDir, 1)
+  }
+
+  private raycastOceanMesh(localDir: THREE.Vector3): OceanMeshRaycastHit | null {
+    const geometry = this.oceanMesh?.geometry
+    if (!geometry) return null
+
+    const positions = geometry.getAttribute('position')
+    const index = geometry.getIndex()
+    const ray = new THREE.Ray(new THREE.Vector3(0, 0, 0), localDir)
+    const a = new THREE.Vector3()
+    const b = new THREE.Vector3()
+    const c = new THREE.Vector3()
+    const hit = new THREE.Vector3()
+    let closest = Infinity
+    let closestHit: OceanMeshRaycastHit | null = null
+
+    const testTriangle = (ia: number, ib: number, ic: number) => {
+      a.fromBufferAttribute(positions, ia)
+      b.fromBufferAttribute(positions, ib)
+      c.fromBufferAttribute(positions, ic)
+      const intersection = ray.intersectTriangle(a, b, c, false, hit)
+      if (!intersection) return
+      const radius = intersection.dot(localDir)
+      if (radius > 0 && radius < closest) {
+        closest = radius
+        closestHit = { radius, ia, ib, ic }
+      }
+    }
+
+    if (index) {
+      for (let i = 0; i < index.count; i += 3) {
+        testTriangle(index.getX(i), index.getX(i + 1), index.getX(i + 2))
+      }
+    } else {
+      for (let i = 0; i < positions.count; i += 3) {
+        testTriangle(i, i + 1, i + 2)
+      }
+    }
+
+    return closestHit
+  }
+
+  private raycastDisplacedOceanTriangleRadius(localDir: THREE.Vector3, baseHit: OceanMeshRaycastHit): number | null {
+    const geometry = this.oceanMesh?.geometry
+    if (!geometry) return null
+
+    const positions = geometry.getAttribute('position')
+    const terrainHeights = geometry.getAttribute('terrainHeight')
+    if (!terrainHeights) return null
+
+    const ray = new THREE.Ray(new THREE.Vector3(0, 0, 0), localDir)
+    const a = new THREE.Vector3()
+    const b = new THREE.Vector3()
+    const c = new THREE.Vector3()
+    const hit = new THREE.Vector3()
+    this.getDisplacedOceanVertex(positions, terrainHeights, baseHit.ia, a)
+    this.getDisplacedOceanVertex(positions, terrainHeights, baseHit.ib, b)
+    this.getDisplacedOceanVertex(positions, terrainHeights, baseHit.ic, c)
+
+    const intersection = ray.intersectTriangle(a, b, c, false, hit)
+    if (!intersection) return null
+    const radius = intersection.dot(localDir)
+    return radius > 0 ? radius : null
+  }
+
+  private getDisplacedOceanVertex(
+    positions: THREE.BufferAttribute | THREE.InterleavedBufferAttribute,
+    terrainHeights: THREE.BufferAttribute | THREE.InterleavedBufferAttribute,
+    index: number,
+    target: THREE.Vector3,
+  ) {
+    target.fromBufferAttribute(positions, index)
+    const dir = target.clone().normalize()
+    const normalizedWaterDepth = this.seaHeight - terrainHeights.getX(index)
+    const displacement = this.sampleOceanSurfaceDisplacementFromNormalizedDepth(dir, normalizedWaterDepth)
+    target.addScaledVector(dir, displacement)
+  }
+
+  private sampleOceanSurfaceDisplacement(localDir: THREE.Vector3, waterDepth: number): number {
+    if (!this.oceanIfft || this.oceanSeaRadius <= 0) return 0
+
+    const terrainMeters = Math.max(this.terrainParams.terrainScale * this.terrainParams.radius, 0.001)
+    const normalizedDepth = Math.max(waterDepth, 0) / terrainMeters
+    return this.sampleOceanSurfaceDisplacementFromNormalizedDepth(localDir, normalizedDepth)
+  }
+
+  private sampleOceanSurfaceDisplacementFromNormalizedDepth(localDir: THREE.Vector3, normalizedDepth: number): number {
+    if (!this.oceanIfft || this.oceanSeaRadius <= 0) return 0
+
+    const shoreCalm = smoothstepNumber(0.005, 0.055, normalizedDepth)
+    const waveHeight = this.oceanIfft.sampleHeightAtDirection(localDir, this.oceanSeaRadius, this.time)
+    return waveHeight * this.oceanIfft.heightScale * (0.35 + shoreCalm * 0.65)
   }
 
   private updateOceanDetailIfft(surfaceDistance: number) {

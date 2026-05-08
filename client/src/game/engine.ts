@@ -11,6 +11,14 @@ import { CLOUD_RENDER_LAYER, MAIN_RENDER_LAYER } from './render-layers'
 
 const CLOUD_RENDER_SCALE = 0.5
 
+export interface UnderwaterFilterSettings {
+  enabled: boolean
+  tint: string
+  strength: number
+  distortion: number
+  murk: number
+}
+
 class CloudCompositePass extends Pass {
   private scene: THREE.Scene
   private camera: THREE.Camera
@@ -161,6 +169,148 @@ class CloudCompositePass extends Pass {
   }
 }
 
+class UnderwaterPass extends Pass {
+  private material: THREE.ShaderMaterial
+  private fsQuad: FullScreenQuad
+  private settings: UnderwaterFilterSettings = {
+    enabled: true,
+    tint: '#1b8f9d',
+    strength: 0.72,
+    distortion: 0.75,
+    murk: 0.34,
+  }
+
+  constructor() {
+    super()
+    this.enabled = false
+    this.needsSwap = true
+    this.material = new THREE.ShaderMaterial({
+      depthTest: false,
+      depthWrite: false,
+      uniforms: {
+        tDiffuse: { value: null },
+        uStrength: { value: 0 },
+        uDepth: { value: 0 },
+        uTime: { value: 0 },
+        uTexelSize: { value: new THREE.Vector2(1, 1) },
+        uTintColor: { value: new THREE.Color(this.settings.tint) },
+        uDistortion: { value: this.settings.distortion },
+        uMurk: { value: this.settings.murk },
+      },
+      vertexShader: /* glsl */ `
+        varying vec2 vUv;
+
+        void main() {
+          vUv = uv;
+          gl_Position = vec4(position.xy, 0.0, 1.0);
+        }
+      `,
+      fragmentShader: /* glsl */ `
+        uniform sampler2D tDiffuse;
+        uniform vec2 uTexelSize;
+        uniform vec3 uTintColor;
+        uniform float uStrength;
+        uniform float uDepth;
+        uniform float uTime;
+        uniform float uDistortion;
+        uniform float uMurk;
+        varying vec2 vUv;
+
+        float underwaterHash(vec2 p) {
+          return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453123);
+        }
+
+        float underwaterCaustic(vec2 uv, float time) {
+          float a = sin((uv.x * 22.0 + uv.y * 13.0) + time * 1.15);
+          float b = sin((uv.x * -18.0 + uv.y * 25.0) - time * 0.82);
+          float c = sin((uv.x * 41.0 - uv.y * 17.0) + time * 0.48);
+          return smoothstep(1.54, 2.46, a + b + c);
+        }
+
+        void main() {
+          float strength = clamp(uStrength, 0.0, 1.0);
+          float depth01 = clamp(uDepth / 38.0, 0.0, 1.0);
+          vec2 centered = vUv - vec2(0.5);
+          float shimmerA = sin(vUv.y * 84.0 + uTime * 1.55 + sin(vUv.x * 17.0 + uTime * 0.7));
+          float shimmerB = sin(vUv.x * 52.0 - uTime * 1.22 + sin(vUv.y * 23.0 - uTime * 0.43));
+          vec2 distortion = vec2(shimmerA * 0.86 + shimmerB * 0.32, shimmerB * 0.58 - shimmerA * 0.20);
+          distortion *= uTexelSize * (2.4 + depth01 * 4.2) * uDistortion * strength;
+
+          vec2 sampleUv = clamp(vUv + distortion, vec2(0.001), vec2(0.999));
+          vec4 base = texture2D(tDiffuse, sampleUv);
+          vec3 blur = base.rgb;
+          blur += texture2D(tDiffuse, clamp(sampleUv + vec2(1.2, 0.0) * uTexelSize, vec2(0.001), vec2(0.999))).rgb;
+          blur += texture2D(tDiffuse, clamp(sampleUv + vec2(-1.2, 0.0) * uTexelSize, vec2(0.001), vec2(0.999))).rgb;
+          blur += texture2D(tDiffuse, clamp(sampleUv + vec2(0.0, 1.2) * uTexelSize, vec2(0.001), vec2(0.999))).rgb;
+          blur += texture2D(tDiffuse, clamp(sampleUv + vec2(0.0, -1.2) * uTexelSize, vec2(0.001), vec2(0.999))).rgb;
+          blur *= 0.2;
+
+          float murk = clamp(uMurk, 0.0, 1.0);
+          vec3 color = mix(base.rgb, blur, strength * murk * (0.18 + depth01 * 0.24));
+          color.r *= 1.0 - strength * (0.20 + depth01 * 0.34);
+          color.g *= 1.0 - strength * (0.035 + depth01 * 0.10);
+          color.b *= 1.0 + strength * (0.035 - depth01 * 0.04);
+
+          vec3 deepTint = mix(uTintColor, vec3(0.010, 0.105, 0.145), depth01 * 0.82);
+          float fog = strength * (0.24 + murk * 0.26 + depth01 * 0.28);
+          color = mix(color, deepTint, clamp(fog, 0.0, 0.72));
+
+          float causticTop = 1.0 - smoothstep(0.10, 0.84, depth01);
+          float caustic = underwaterCaustic(vUv + distortion * 35.0, uTime);
+          color += uTintColor * caustic * causticTop * strength * 0.035;
+
+          float luma = dot(color, vec3(0.2126, 0.7152, 0.0722));
+          color = mix(vec3(luma), color, 1.0 - strength * (0.08 + depth01 * 0.18));
+
+          float vignette = smoothstep(0.34, 0.86, length(centered));
+          color *= 1.0 - vignette * strength * (0.12 + murk * 0.14);
+          float grain = underwaterHash(gl_FragCoord.xy + floor(uTime * 24.0));
+          color += (grain - 0.5) * strength * murk * 0.016;
+
+          gl_FragColor = vec4(max(color, vec3(0.0)), base.a);
+        }
+      `,
+    })
+    this.fsQuad = new FullScreenQuad(this.material)
+  }
+
+  setSettings(settings: UnderwaterFilterSettings) {
+    this.settings = settings
+    this.material.uniforms.uTintColor.value.set(settings.tint)
+    this.material.uniforms.uDistortion.value = settings.distortion
+    this.material.uniforms.uMurk.value = settings.murk
+    if (!settings.enabled) this.setState(0, 0)
+  }
+
+  setState(factor: number, depth: number) {
+    const strength = this.settings.enabled
+      ? THREE.MathUtils.clamp(factor, 0, 1) * THREE.MathUtils.clamp(this.settings.strength, 0, 1.5)
+      : 0
+    this.enabled = strength > 0.001
+    this.material.uniforms.uStrength.value = strength
+    this.material.uniforms.uDepth.value = Math.max(0, depth)
+  }
+
+  setTime(time: number) {
+    this.material.uniforms.uTime.value = time
+  }
+
+  setSize(width: number, height: number) {
+    this.material.uniforms.uTexelSize.value.set(1 / Math.max(1, width), 1 / Math.max(1, height))
+  }
+
+  render(renderer: THREE.WebGLRenderer, writeBuffer: THREE.WebGLRenderTarget, readBuffer: THREE.WebGLRenderTarget) {
+    this.material.uniforms.tDiffuse.value = readBuffer.texture
+    renderer.setRenderTarget(this.renderToScreen ? null : writeBuffer)
+    this.fsQuad.render(renderer)
+  }
+
+  dispose() {
+    this.material.dispose()
+    this.fsQuad.dispose()
+  }
+}
+
 export class GameEngine {
   readonly scene: THREE.Scene
   readonly renderer: THREE.WebGLRenderer
@@ -177,6 +327,8 @@ export class GameEngine {
   private bloomPass: UnrealBloomPass | null = null
   private outputPass: OutputPass | null = null
   private cloudPass: CloudCompositePass | null = null
+  private underwaterPass: UnderwaterPass | null = null
+  private elapsedTime = 0
 
   constructor(container: HTMLElement) {
     this.container = container
@@ -227,6 +379,10 @@ export class GameEngine {
     bloomPass.radius = 0.5
     this.composer.addPass(bloomPass)
     this.bloomPass = bloomPass
+    const underwaterPass = new UnderwaterPass()
+    this.composer.addPass(underwaterPass)
+    underwaterPass.setSize(width * this.pixelRatioLimit, height * this.pixelRatioLimit)
+    this.underwaterPass = underwaterPass
     const outputPass = new OutputPass()
     this.composer.addPass(outputPass)
     this.outputPass = outputPass
@@ -282,6 +438,14 @@ export class GameEngine {
 
   setToneMappingExposure(exposure: number) {
     this.renderer.toneMappingExposure = exposure
+  }
+
+  setUnderwaterFilterSettings(settings: UnderwaterFilterSettings) {
+    this.underwaterPass?.setSettings(settings)
+  }
+
+  setUnderwaterState(state: { factor: number; depth: number }) {
+    this.underwaterPass?.setState(state.factor, state.depth)
   }
 
   getToneMappingExposure(): number {
@@ -367,8 +531,10 @@ export class GameEngine {
     const loop = () => {
       this.animationId = requestAnimationFrame(loop)
       const dt = this.clock.getDelta()
+      this.elapsedTime += dt
       this.controls.update()
       onFrame?.(dt)
+      this.underwaterPass?.setTime(this.elapsedTime)
       this.composer.render()
     }
     loop()
@@ -386,6 +552,7 @@ export class GameEngine {
     window.removeEventListener('resize', this.boundResize)
     this.controls.dispose()
     this.cloudPass?.dispose()
+    this.underwaterPass?.dispose()
     this.outputPass?.dispose()
     this.composer.dispose()
     this.renderer.dispose()

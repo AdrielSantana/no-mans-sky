@@ -113,6 +113,13 @@ function applyDebugSettings(engine: GameEngine, planet: PlanetRenderer, params: 
     threshold: params.bloomThreshold,
   })
   engine.setToneMappingExposure(params.toneMappingExposure)
+  engine.setUnderwaterFilterSettings({
+    enabled: params.underwaterFilter,
+    tint: params.underwaterTint,
+    strength: params.underwaterStrength,
+    distortion: params.underwaterDistortion,
+    murk: params.underwaterMurk,
+  })
   planet.setDebugRendering({
     showAtmosphere: params.debugAtmosphere,
     showClouds: params.debugClouds,
@@ -364,6 +371,11 @@ export function EditorCanvas({ params }: Props) {
       }
       walker.update(dt)
       planetRef.current?.update(engine.camera, dt)
+      engine.setUnderwaterState(
+        paramsRef.current.underwaterFilter
+          ? planetRef.current?.getUnderwaterViewState() ?? { factor: 0, depth: 0 }
+          : { factor: 0, depth: 0 },
+      )
       if (showPerf) {
         updateSamples.push(performance.now() - updateStart)
         if (updateSamples.length > 240) updateSamples.shift()

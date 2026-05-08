@@ -1208,6 +1208,69 @@ export function EditorPanel({ params, onChange }: Props) {
           <label style={{ display: 'flex', alignItems: 'center', gap: 6, cursor: 'pointer' }}>
             <input
               type="checkbox"
+              checked={params.underwaterFilter}
+              onChange={e => set('underwaterFilter', e.target.checked)}
+              style={{ accentColor: '#2dd4a7' }}
+            />
+            <span className="editor-label" style={{ width: 'auto' }}>Underwater Filter</span>
+          </label>
+        </div>
+        <div className="editor-row">
+          <span className="editor-label">Water Tint</span>
+          <input
+            className="editor-color"
+            type="color"
+            value={params.underwaterTint}
+            onChange={e => set('underwaterTint', e.target.value)}
+          />
+          <span className="editor-value">{params.underwaterTint}</span>
+        </div>
+        <div className="editor-row">
+          <span className="editor-label">Water Filter</span>
+          <input
+            className="editor-slider"
+            type="range"
+            min={RANGES.underwaterStrength.min}
+            max={RANGES.underwaterStrength.max}
+            step={RANGES.underwaterStrength.step}
+            value={params.underwaterStrength}
+            onInput={e => set('underwaterStrength', Number(e.currentTarget.value))}
+            onChange={e => set('underwaterStrength', Number(e.target.value))}
+          />
+          <span className="editor-value">{params.underwaterStrength.toFixed(2)}</span>
+        </div>
+        <div className="editor-row">
+          <span className="editor-label">Refraction</span>
+          <input
+            className="editor-slider"
+            type="range"
+            min={RANGES.underwaterDistortion.min}
+            max={RANGES.underwaterDistortion.max}
+            step={RANGES.underwaterDistortion.step}
+            value={params.underwaterDistortion}
+            onInput={e => set('underwaterDistortion', Number(e.currentTarget.value))}
+            onChange={e => set('underwaterDistortion', Number(e.target.value))}
+          />
+          <span className="editor-value">{params.underwaterDistortion.toFixed(2)}</span>
+        </div>
+        <div className="editor-row">
+          <span className="editor-label">Murk</span>
+          <input
+            className="editor-slider"
+            type="range"
+            min={RANGES.underwaterMurk.min}
+            max={RANGES.underwaterMurk.max}
+            step={RANGES.underwaterMurk.step}
+            value={params.underwaterMurk}
+            onInput={e => set('underwaterMurk', Number(e.currentTarget.value))}
+            onChange={e => set('underwaterMurk', Number(e.target.value))}
+          />
+          <span className="editor-value">{params.underwaterMurk.toFixed(2)}</span>
+        </div>
+        <div className="editor-row">
+          <label style={{ display: 'flex', alignItems: 'center', gap: 6, cursor: 'pointer' }}>
+            <input
+              type="checkbox"
               checked={params.debugAtmosphere}
               onChange={e => set('debugAtmosphere', e.target.checked)}
               style={{ accentColor: '#2dd4a7' }}

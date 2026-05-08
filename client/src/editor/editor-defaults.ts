@@ -92,6 +92,11 @@ export interface EditorParams {
   bloomRadius: number
   bloomThreshold: number
   toneMappingExposure: number
+  underwaterFilter: boolean
+  underwaterTint: string
+  underwaterStrength: number
+  underwaterDistortion: number
+  underwaterMurk: number
   debugBloom: boolean
   debugAtmosphere: boolean
   debugClouds: boolean
@@ -214,6 +219,11 @@ export const DEFAULT_PARAMS: EditorParams = {
   bloomRadius: 0.5,
   bloomThreshold: 1.50,
   toneMappingExposure: 1.0,
+  underwaterFilter: true,
+  underwaterTint: '#1b8f9d',
+  underwaterStrength: 0.72,
+  underwaterDistortion: 0.75,
+  underwaterMurk: 0.34,
   debugBloom: true,
   debugAtmosphere: true,
   debugClouds: true,
@@ -293,6 +303,9 @@ export const RANGES = {
   bloomRadius: { min: 0, max: 1.5, step: 0.01 },
   bloomThreshold: { min: 0, max: 2, step: 0.01 },
   toneMappingExposure: { min: 0.1, max: 3, step: 0.01 },
+  underwaterStrength: { min: 0, max: 1.5, step: 0.01 },
+  underwaterDistortion: { min: 0, max: 2, step: 0.01 },
+  underwaterMurk: { min: 0, max: 1, step: 0.01 },
 } as const
 
 /** Per-type presets for noise profile */

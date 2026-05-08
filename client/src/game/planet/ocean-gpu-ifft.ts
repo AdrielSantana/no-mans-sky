@@ -21,7 +21,19 @@ interface OceanGpuIfftSpectrumParams {
   maxHarmonic?: number
 }
 
+interface OceanWaveSampleComponent {
+  kx: number
+  ky: number
+  h0R: number
+  h0I: number
+  h0OppR: number
+  h0OppI: number
+  omega: number
+  energy: number
+}
+
 const DEFAULT_GPU_IFFT_SIZE = 512
+const GPU_HEIGHT_SAMPLE_COMPONENTS = 160
 const GRAVITY = 9.81
 const TWO_PI = Math.PI * 2
 
@@ -91,6 +103,8 @@ export class OceanGpuIfftSpectrum {
   private readonly evolveMaterial: THREE.ShaderMaterial
   private readonly butterflyMaterial: THREE.ShaderMaterial
   private readonly composeMaterial: THREE.ShaderMaterial
+  private readonly sampleComponents: OceanWaveSampleComponent[]
+  private readonly sampleScale: number
   private outputIndex = 0
 
   constructor(renderer: THREE.WebGLRenderer, params: OceanGpuIfftSpectrumParams) {
@@ -110,6 +124,8 @@ export class OceanGpuIfftSpectrum {
     this.foamStrength = THREE.MathUtils.clamp(params.foamStrength * (params.foamStrengthScale ?? 1), 0, 2)
 
     const spectrum = this.buildInitialSpectrum(params.seed, params.waterLevel, params.windSpeed, params.detail)
+    this.sampleComponents = spectrum.sampleComponents
+    this.sampleScale = spectrum.sampleScale
     this.h0Texture = new THREE.DataTexture(
       spectrum.data,
       this.size,
@@ -198,6 +214,24 @@ export class OceanGpuIfftSpectrum {
     this.quad.dispose()
   }
 
+  sampleHeightAtDirection(dir: THREE.Vector3, seaRadius: number, time: number): number {
+    const length = Math.max(1e-6, Math.hypot(dir.x, dir.y, dir.z))
+    const nx = dir.x / length
+    const ny = dir.y / length
+    const nz = dir.z / length
+    const sx = nx * seaRadius
+    const sy = ny * seaRadius
+    const sz = nz * seaRadius
+    const wx = Math.pow(Math.abs(nx), 5)
+    const wy = Math.pow(Math.abs(ny), 5)
+    const wz = Math.pow(Math.abs(nz), 5)
+    const weightSum = Math.max(wx + wy + wz, 1e-6)
+    const hx = this.sampleHeightAtMeters(sz, sy, time)
+    const hy = this.sampleHeightAtMeters(sx, sz, time)
+    const hz = this.sampleHeightAtMeters(sx, sy, time)
+    return (hx * wx + hy * wy + hz * wz) / weightSum
+  }
+
   private createTarget(name: string, filter: typeof THREE.NearestFilter | typeof THREE.LinearFilter) {
     const target = new THREE.WebGLRenderTarget(this.size, this.size, {
       format: THREE.RGBAFormat,
@@ -268,6 +302,7 @@ export class OceanGpuIfftSpectrum {
     }
 
     let sumSpectrumSq = 0
+    const sampleComponents: OceanWaveSampleComponent[] = []
     for (let y = 0; y < this.size; y++) {
       const oppositeY = (this.size - y) & (this.size - 1)
       for (let x = 0; x < this.size; x++) {
@@ -275,7 +310,24 @@ export class OceanGpuIfftSpectrum {
         const opposite = oppositeY * this.size + ((this.size - x) & (this.size - 1))
         const real = h0R[index] + h0R[opposite]
         const imag = h0I[index] - h0I[opposite]
-        sumSpectrumSq += real * real + imag * imag
+        const energy = real * real + imag * imag
+        sumSpectrumSq += energy
+        if (energy > 1e-14) {
+          const kx = TWO_PI * (x < this.size / 2 ? x : x - this.size) / this.worldSize
+          const ky = TWO_PI * (y < this.size / 2 ? y : y - this.size) / this.worldSize
+          const kLen = Math.hypot(kx, ky)
+          const component = {
+            kx,
+            ky,
+            h0R: h0R[index],
+            h0I: h0I[index],
+            h0OppR: h0R[opposite],
+            h0OppI: h0I[opposite],
+            omega: Math.sqrt(GRAVITY * kLen),
+            energy,
+          }
+          this.insertHeightSampleComponent(sampleComponents, component)
+        }
 
         const out = index * 4
         data[out] = clampHalf(h0R[index])
@@ -288,7 +340,48 @@ export class OceanGpuIfftSpectrum {
     const invSizeSq = 1 / (this.size * this.size)
     const spatialRms = Math.sqrt(sumSpectrumSq) * invSizeSq
     const outputScale = spatialRms > 1e-7 ? 0.34 / spatialRms : 1
-    return { data, outputScale }
+    const sampleScale = outputScale * invSizeSq
+    return { data, outputScale, sampleComponents, sampleScale }
+  }
+
+  private insertHeightSampleComponent(
+    components: OceanWaveSampleComponent[],
+    component: OceanWaveSampleComponent,
+  ): number {
+    if (components.length < GPU_HEIGHT_SAMPLE_COMPONENTS) {
+      components.push(component)
+      return 0
+    }
+
+    let minIndex = 0
+    let minEnergy = components[0].energy
+    for (let i = 1; i < components.length; i++) {
+      if (components[i].energy < minEnergy) {
+        minEnergy = components[i].energy
+        minIndex = i
+      }
+    }
+
+    if (component.energy <= minEnergy) return component.energy
+    components[minIndex] = component
+    return minEnergy
+  }
+
+  private sampleHeightAtMeters(xMeters: number, yMeters: number, time: number): number {
+    let height = 0
+    for (const component of this.sampleComponents) {
+      const phase = component.omega * time
+      const cosPhase = Math.cos(phase)
+      const sinPhase = Math.sin(phase)
+      const spectralR = (component.h0R + component.h0OppR) * cosPhase
+        - (component.h0I + component.h0OppI) * sinPhase
+      const spectralI = (component.h0R - component.h0OppR) * sinPhase
+        + (component.h0I - component.h0OppI) * cosPhase
+      const spatialPhase = component.kx * xMeters + component.ky * yMeters
+      height += spectralR * Math.cos(spatialPhase) - spectralI * Math.sin(spatialPhase)
+    }
+
+    return THREE.MathUtils.clamp(height * this.sampleScale, -2.4, 2.4)
   }
 
   private createEvolveMaterial() {

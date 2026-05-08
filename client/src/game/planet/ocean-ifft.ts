@@ -175,6 +175,25 @@ export class OceanIfftSpectrum {
     this.texture.dispose()
   }
 
+  sampleHeightAtDirection(dir: THREE.Vector3, seaRadius: number, _time = 0): number {
+    void _time
+    const length = Math.max(1e-6, Math.hypot(dir.x, dir.y, dir.z))
+    const nx = dir.x / length
+    const ny = dir.y / length
+    const nz = dir.z / length
+    const sx = nx * seaRadius
+    const sy = ny * seaRadius
+    const sz = nz * seaRadius
+    const wx = Math.pow(Math.abs(nx), 5)
+    const wy = Math.pow(Math.abs(ny), 5)
+    const wz = Math.pow(Math.abs(nz), 5)
+    const weightSum = Math.max(wx + wy + wz, 1e-6)
+    const hx = this.sampleHeightAtMeters(sz, sy)
+    const hy = this.sampleHeightAtMeters(sx, sz)
+    const hz = this.sampleHeightAtMeters(sx, sy)
+    return (hx * wx + hy * wy + hz * wz) / weightSum
+  }
+
   private buildInitialSpectrum(seed: number, waterLevel: number, windSpeedParam: number, detailParam: number) {
     const random = mulberry32((seed ^ 0x9E3779B9) >>> 0)
     const windAngle = (seed % 8192) * 0.00076699039
@@ -268,5 +287,25 @@ export class OceanIfftSpectrum {
     }
 
     this.texture.needsUpdate = true
+  }
+
+  private sampleHeightAtMeters(xMeters: number, yMeters: number): number {
+    const xCoord = THREE.MathUtils.euclideanModulo(xMeters / this.worldSize, 1) * IFFT_SIZE - 0.5
+    const yCoord = THREE.MathUtils.euclideanModulo(yMeters / this.worldSize, 1) * IFFT_SIZE - 0.5
+    const xBase = Math.floor(xCoord)
+    const yBase = Math.floor(yCoord)
+    const tx = xCoord - xBase
+    const ty = yCoord - yBase
+    const x0 = (xBase + IFFT_SIZE) & (IFFT_SIZE - 1)
+    const y0 = (yBase + IFFT_SIZE) & (IFFT_SIZE - 1)
+    const x1 = (x0 + 1) & (IFFT_SIZE - 1)
+    const y1 = (y0 + 1) & (IFFT_SIZE - 1)
+    const h00 = this.height[y0 * IFFT_SIZE + x0]
+    const h10 = this.height[y0 * IFFT_SIZE + x1]
+    const h01 = this.height[y1 * IFFT_SIZE + x0]
+    const h11 = this.height[y1 * IFFT_SIZE + x1]
+    const hx0 = THREE.MathUtils.lerp(h00, h10, tx)
+    const hx1 = THREE.MathUtils.lerp(h01, h11, tx)
+    return THREE.MathUtils.lerp(hx0, hx1, ty)
   }
 }
