@@ -1,5 +1,6 @@
 import * as THREE from 'three'
 import { TERRAIN_NOISE } from '../shaders/noise.glsl'
+import { CLOUD_PATTERN_GLSL } from './planet-generator'
 
 export interface OceanMaterialParams {
   seed: number
@@ -13,6 +14,16 @@ export interface OceanMaterialParams {
   sunColor: THREE.Color | string
   atmosphereColor: THREE.Color | string
   atmosphereLightColor: THREE.Color | string
+  cloudMask: THREE.Texture
+  cloudShadow?: number
+  cloudCoverage?: number
+  cloudScale?: number
+  cloudSoftness?: number
+  cloudHeight?: number
+  cloudSpeed?: number
+  cloudStorms?: number
+  cloudBands?: number
+  cloudDetail?: number
   ifftTexture: THREE.Texture
   ifftWorldSize: number
   ifftHeightScale: number
@@ -31,6 +42,10 @@ export interface OceanMaterialParams {
   deepColor?: THREE.Color | string
   shallowColor?: THREE.Color | string
   foamColor?: THREE.Color | string
+  clarity?: number
+  absorption?: number
+  turbidity?: number
+  reflectionStrength?: number
   specularStrength?: number
 }
 
@@ -51,10 +66,10 @@ vec4 oceanIfftPlaneSample(vec2 meters) {
   return texture2D(uIfftMap, meters / max(uIfftWorldSize, 0.001));
 }
 
-  vec3 oceanIfftBlendWeights(vec3 n) {
-    vec3 weights = pow(abs(n), vec3(5.0));
-    return weights / max(weights.x + weights.y + weights.z, 0.0001);
-  }
+vec3 oceanIfftBlendWeights(vec3 n) {
+  vec3 weights = pow(abs(n), vec3(5.0));
+  return weights / max(weights.x + weights.y + weights.z, 0.0001);
+}
 
 OceanIfftSampleData oceanIfftFromTriplanarSamples(vec3 dir, vec4 sampleX, vec4 sampleY, vec4 sampleZ) {
   vec3 n = normalize(dir);
@@ -229,9 +244,9 @@ export function createOceanMaterial(params: OceanMaterialParams): THREE.ShaderMa
 
   const fragmentShader = /* glsl */ `
   ${TERRAIN_NOISE}
+  ${CLOUD_PATTERN_GLSL}
   #include <logdepthbuf_pars_fragment>
 
-  uniform float uTime;
   uniform float uSeed;
   uniform float uSeaHeight;
   uniform float uSeaRadius;
@@ -256,6 +271,10 @@ export function createOceanMaterial(params: OceanMaterialParams): THREE.ShaderMa
   uniform float uIfftDetailNearDistance;
   uniform float uIfftDetailFarDistance;
   uniform float uOceanSpecularStrength;
+  uniform float uOceanClarity;
+  uniform float uOceanAbsorption;
+  uniform float uOceanTurbidity;
+  uniform float uOceanReflectionStrength;
   uniform sampler2D uIfftMap;
   uniform sampler2D uIfftDetailMap;
   uniform vec3 uSunPosition;
@@ -276,6 +295,11 @@ export function createOceanMaterial(params: OceanMaterialParams): THREE.ShaderMa
 
   float oceanSaturate(float value) {
     return clamp(value, 0.0, 1.0);
+  }
+
+  vec3 oceanDesaturate(vec3 color, float amount) {
+    float luma = dot(color, vec3(0.2126, 0.7152, 0.0722));
+    return mix(color, vec3(luma), clamp(amount, 0.0, 1.0));
   }
 
   ${OCEAN_WAVE_GLSL}
@@ -348,7 +372,7 @@ export function createOceanMaterial(params: OceanMaterialParams): THREE.ShaderMa
     detailIfft.foam = 0.0;
     float detailWeight = 0.0;
     float detailSlopeAmount = 0.0;
-    if (uIfftDetailEnabled > 0.5) {
+    if (uIfftDetailEnabled > 0.001) {
       detailIfft = oceanIfftDetailSampleData(normalize(vSphereDir));
       detailWeight = oceanIfftDetailWeight(distance(cameraPosition, vWorldPos));
       vec3 detailSlope = detailIfft.slope - radial * dot(detailIfft.slope, radial);
@@ -385,10 +409,38 @@ export function createOceanMaterial(params: OceanMaterialParams): THREE.ShaderMa
 
     float depth = oceanSaturate(waterDepthRaw / max(uDepthRange, 0.001));
     float shallow = 1.0 - smoothstep(0.025, 0.16, waterDepthRaw);
-    vec3 deepColor = mix(uOceanDeepColor, vec3(0.030, 0.105, 0.145), uIceBlend * 0.22);
-    vec3 shelfColor = mix(uOceanShallowColor, vec3(0.245, 0.515, 0.610), uIceBlend * 0.32);
-    vec3 waterColor = mix(shelfColor, deepColor, depth);
-    waterColor = mix(waterColor, uAtmosphereColor * 0.42 + uAtmosphereLightColor * 0.08, litFresnel * (0.34 + day * 0.20));
+    vec3 atmosphereWaterTint = mix(uAtmosphereColor, uAtmosphereLightColor, 0.18);
+    vec3 deepAtmosphereTint = atmosphereWaterTint * vec3(0.060, 0.145, 0.245);
+    vec3 shelfAtmosphereTint = atmosphereWaterTint * vec3(0.340, 0.590, 0.660);
+    vec3 deepColor = mix(uOceanDeepColor, deepAtmosphereTint, 0.18);
+    vec3 shelfColor = mix(uOceanShallowColor * vec3(0.62, 0.74, 0.76), shelfAtmosphereTint, 0.38);
+    deepColor = mix(deepColor, vec3(0.030, 0.105, 0.145), uIceBlend * 0.18);
+    shelfColor = mix(shelfColor, vec3(0.245, 0.515, 0.610), uIceBlend * 0.26);
+    float clarity = clamp(uOceanClarity, 0.0, 1.0);
+    float absorption = clamp(uOceanAbsorption, 0.2, 2.0);
+    float turbidity = clamp(uOceanTurbidity, 0.0, 1.0);
+    float absorptionDepth = smoothstep(0.0, max(0.050, uDepthRange * mix(2.10, 0.92, absorption * 0.5)), waterDepthRaw);
+    float opticalDepth = pow(absorptionDepth, mix(1.52, 0.86, absorption * 0.5));
+    float shoal = 1.0 - smoothstep(0.000, max(0.105, uDepthRange * (0.72 + clarity * 0.38)), waterDepthRaw);
+    float abyss = smoothstep(0.085, max(0.155, uDepthRange * mix(1.45, 0.82, absorption * 0.5)), waterDepthRaw);
+    vec3 lagoonColor = mix(shelfColor, uOceanShallowColor * 0.58 + uAtmosphereLightColor * 0.035, 0.10 + clarity * 0.08);
+    vec3 midWaterColor = mix(shelfColor, deepColor, smoothstep(0.030, max(0.160, uDepthRange * 1.08), waterDepthRaw));
+    vec3 abyssColor = mix(deepColor, uOceanDeepColor * vec3(0.70, 0.82, 1.00), 0.16 + clamp(absorption * 0.08, 0.0, 0.20));
+    vec3 waterColor = mix(lagoonColor, midWaterColor, smoothstep(0.018, max(0.190, uDepthRange * 1.26), waterDepthRaw));
+    waterColor = mix(waterColor, abyssColor, max(depth * 0.54, opticalDepth * 0.62) * abyss);
+    vec3 suspendedColor = mix(vec3(0.040, 0.110, 0.086), uOceanShallowColor, 0.40);
+    waterColor = mix(waterColor, suspendedColor, turbidity * (1.0 - abyss * 0.76) * (0.10 + shoal * 0.18));
+    waterColor = oceanDesaturate(waterColor, shoal * 0.16 + turbidity * 0.10);
+
+    float horizonReflection = pow(1.0 - abs(dot(viewDir, radial)), 2.2);
+    float reflectionAmount = litFresnel * (0.30 + day * 0.18 + horizonReflection * 0.42) * uOceanReflectionStrength;
+    vec3 skyReflection = mix(
+      uAtmosphereColor * 0.30 + deepColor * 0.38,
+      uAtmosphereLightColor * 0.58 + uAtmosphereColor * 0.36,
+      horizonReflection
+    );
+    float reflectionMask = clamp(reflectionAmount * (0.38 + clarity * 0.10 + depth * 0.18), 0.0, 0.48);
+    waterColor = mix(waterColor, skyReflection, reflectionMask);
 
     float halfSpec = pow(max(dot(normalize(lightDir + viewDir), normal), 0.0), 160.0);
     float broadSpec = pow(max(dot(reflect(-lightDir, normal), viewDir), 0.0), 42.0);
@@ -397,20 +449,35 @@ export function createOceanMaterial(params: OceanMaterialParams): THREE.ShaderMa
       float glintNoise = uOceanQuality > 1.5
         ? terrainFbm(normalize(vSphereDir) * (uWaveScale * 0.9) + vec3(uTime * 0.08), uSeed + 2211.0, 2, 2.4, 0.42) * 0.5 + 0.5
         : terrainFbm(normalize(vSphereDir) * (uWaveScale * 0.42) + vec3(uTime * 0.045), uSeed + 2211.0, 1, 2.2, 0.42) * 0.5 + 0.5;
-      glitter = smoothstep(0.68, 1.14, glintNoise + fragmentIfftSlope * 0.92 + max(vWave, 0.0) * 0.16) * pow(direct, 2.0);
+      float glintField = glintNoise * 0.54 + fragmentIfftSlope * 0.46 + max(vWave, 0.0) * 0.08;
+      glitter = smoothstep(0.92, 1.32, glintField) * pow(direct, 3.2);
     }
-    vec3 specular = uSunColor * day * (halfSpec * 1.10 + broadSpec * 0.28 + glitter * 0.16) * uOceanSpecularStrength;
+    vec3 specular = uSunColor * day * (halfSpec * 0.82 + broadSpec * 0.18 + glitter * 0.055) * uOceanSpecularStrength;
+    float sunMirror = pow(max(dot(reflect(-viewDir, normal), lightDir), 0.0), 34.0) * day * reflectionLight;
+    specular += uSunColor * sunMirror * uOceanReflectionStrength * (0.035 + uOceanClarity * 0.060);
+    float cloudShadow = cloudShadowMask(radial, lightDir);
+    float lowSunCoast = (1.0 - smoothstep(0.16, 0.55, sunFacing)) * smoothstep(-0.18, 0.28, sunFacing);
+    float coastOcclusion = (1.0 - smoothstep(0.018, 0.145, waterDepthRaw)) * lowSunCoast;
+    float terrainShadow = clamp(coastOcclusion * (0.24 + uOceanTurbidity * 0.12 + (1.0 - uOceanClarity) * 0.10), 0.0, 0.42);
+    specular *= 1.0 - clamp(cloudShadow * 0.72 + terrainShadow * 0.64, 0.0, 0.86);
 
-    float shoreBand = smoothstep(0.003, 0.014, waterDepthRaw) * (1.0 - smoothstep(0.018, 0.050, waterDepthRaw));
+    float shoreBand = smoothstep(0.002, 0.010, waterDepthRaw) * (1.0 - smoothstep(0.014, 0.036, waterDepthRaw));
+    float shoreWash = smoothstep(0.006, 0.026, waterDepthRaw) * (1.0 - smoothstep(0.038, 0.090, waterDepthRaw));
     float foamNoise = uOceanQuality > 0.5
       ? terrainFbm(normalize(vSphereDir) * (uWaveScale * 0.34) + vec3(-uTime * 0.035, uTime * 0.018, uTime * 0.011), uSeed + 3019.0, uOceanQuality > 1.5 ? 3 : 1, 2.1, 0.5) * 0.5 + 0.5
       : 0.62;
     float foamDetail = uOceanQuality > 0.5
       ? terrainFbm(normalize(vSphereDir) * (uWaveScale * 1.16) + vec3(uTime * 0.070, -uTime * 0.038, uTime * 0.026), uSeed + 4049.0, uOceanQuality > 1.5 ? 2 : 1, 2.32, 0.44) * 0.5 + 0.5
       : 0.62;
+    float shoreThreadNoise = 0.62;
+    if (uOceanQuality > 0.5 && max(shoreBand, shoreWash) > 0.001) {
+      shoreThreadNoise = terrainFbm(normalize(vSphereDir) * (uWaveScale * 2.85) + vec3(-uTime * 0.120, uTime * 0.052, uTime * 0.038), uSeed + 5021.0, uOceanQuality > 1.5 ? 2 : 1, 2.28, 0.42) * 0.5 + 0.5;
+    }
     float foamLight = smoothstep(-0.08, 0.46, sunFacing);
     float foamVisibility = smoothstep(0.02, 0.54, sunFacing);
-    float shoreFoam = shoreBand * smoothstep(0.70, 1.08, foamNoise * 0.54 + foamDetail * 0.46 + abs(vWave) * 0.18) * (0.70 + uWaterLevel * 0.22) * 0.36;
+    float shoreLine = shoreBand * smoothstep(0.62, 1.03, foamDetail * 0.42 + shoreThreadNoise * 0.46 + abs(vWave) * 0.14);
+    float shoreFeather = shoreWash * smoothstep(0.78, 1.16, foamNoise * 0.45 + foamDetail * 0.35 + shoreThreadNoise * 0.20) * 0.28;
+    float shoreFoam = (shoreLine * 0.72 + shoreFeather) * (0.70 + uWaterLevel * 0.22) * (0.18 + uIfftFoamStrength * 0.24);
     float crestBreakup = smoothstep(0.56, 0.90, foamDetail + fragmentIfftFoam * 0.22);
     float crestFoam = smoothstep(0.36, 0.86, fragmentIfftFoam) * smoothstep(0.18, 0.58, fragmentIfftSlope + max(vWave, 0.0) * 0.12) * crestBreakup;
     crestFoam = max(crestFoam, smoothstep(0.34, 0.82, microSlope + fragmentIfftFoam * 0.35) * microWeight * 0.16);
@@ -425,10 +492,16 @@ export function createOceanMaterial(params: OceanMaterialParams): THREE.ShaderMa
     vec3 finalColor = mix(nightColor, litColor, day);
     finalColor = mix(finalColor, foam, foamMask);
     finalColor += uAtmosphereLightColor * litFresnel * (0.018 + day * 0.065);
+    float waterShadow = clamp(cloudShadow * (0.34 + depth * 0.30) + terrainShadow, 0.0, 0.74);
+    vec3 shadowedWater = finalColor * mix(vec3(0.58, 0.64, 0.70), vec3(0.28, 0.34, 0.43), depth);
+    finalColor = mix(finalColor, shadowedWater, waterShadow);
+    finalColor = oceanDesaturate(finalColor, waterShadow * (0.30 + shoal * 0.18));
 
-    float alpha = mix(0.84, 0.975, depth);
+    float shallowTransparency = shoal * clarity * (1.0 - turbidity * 0.62);
+    float alphaDepth = smoothstep(0.010, max(0.030, uDepthRange * 0.82), waterDepthRaw);
+    float alpha = mix(0.72 + turbidity * 0.12, 0.982, pow(alphaDepth, 0.72));
     alpha += litFresnel * 0.065 + foamMask * (0.08 + foamVisibility * 0.14);
-    alpha -= shallow * 0.020;
+    alpha -= shallowTransparency * 0.052;
     alpha *= waterMask;
     alpha *= mix(0.90, 1.0, reflectionLight);
     alpha *= uOceanAlpha;
@@ -473,6 +546,10 @@ export function createOceanMaterial(params: OceanMaterialParams): THREE.ShaderMa
       uIfftDetailNearDistance: { value: params.ifftDetailNearDistance ?? 900 },
       uIfftDetailFarDistance: { value: params.ifftDetailFarDistance ?? 5200 },
       uOceanSpecularStrength: { value: params.specularStrength ?? 1 },
+      uOceanClarity: { value: params.clarity ?? 0.72 },
+      uOceanAbsorption: { value: params.absorption ?? 0.85 },
+      uOceanTurbidity: { value: params.turbidity ?? 0.18 },
+      uOceanReflectionStrength: { value: params.reflectionStrength ?? 0.86 },
       uOceanDeepColor: { value: deepOceanColor },
       uOceanShallowColor: { value: shallowOceanColor },
       uOceanFoamColor: { value: foamOceanColor },
@@ -483,6 +560,20 @@ export function createOceanMaterial(params: OceanMaterialParams): THREE.ShaderMa
       uSunColor: { value: sunColor },
       uAtmosphereColor: { value: atmosphereColor },
       uAtmosphereLightColor: { value: atmosphereLightColor },
+      uCloudCoverage: { value: params.cloudCoverage ?? 0.68 },
+      uCloudScale: { value: params.cloudScale ?? 2.7 },
+      uCloudSoftness: { value: params.cloudSoftness ?? 0.15 },
+      uCloudHeight: { value: params.cloudHeight ?? 0.045 },
+      uCloudSpeed: { value: params.cloudSpeed ?? 0.012 },
+      uCloudShadowStrength: { value: params.cloudShadow ?? 0 },
+      uCloudVolumeStrength: { value: 1.08 },
+      uCloudStormStrength: { value: params.cloudStorms ?? 0.62 },
+      uCloudBandStrength: { value: params.cloudBands ?? 0.72 },
+      uCloudDetailStrength: { value: params.cloudDetail ?? 0.82 },
+      uCloudQuality: { value: 2 },
+      uCloudSeed: { value: params.seed },
+      uCloudMask: { value: params.cloudMask },
+      uCloudMaskOffset: { value: 0 },
     },
   })
 }

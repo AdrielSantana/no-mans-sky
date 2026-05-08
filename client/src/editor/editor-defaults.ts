@@ -7,6 +7,10 @@ export interface EditorParams {
   oceanDeepColor: string
   oceanShallowColor: string
   oceanFoamColor: string
+  oceanClarity: number
+  oceanAbsorption: number
+  oceanTurbidity: number
+  oceanReflectionStrength: number
   oceanWaveHeight: number
   oceanWindSpeed: number
   oceanDetail: number
@@ -128,9 +132,13 @@ export const DEFAULT_PARAMS: EditorParams = {
   planetRadius: 50000,
   terrainScale: 0.065,
   waterLevel: 0.45,
-  oceanDeepColor: '#063869',
-  oceanShallowColor: '#12a6b8',
-  oceanFoamColor: '#d8f6ff',
+  oceanDeepColor: '#073a58',
+  oceanShallowColor: '#3aa4a7',
+  oceanFoamColor: '#d7edf2',
+  oceanClarity: 0.62,
+  oceanAbsorption: 0.78,
+  oceanTurbidity: 0.14,
+  oceanReflectionStrength: 0.86,
   oceanWaveHeight: 1.0,
   oceanWindSpeed: 26,
   oceanDetail: 1.45,
@@ -223,6 +231,10 @@ export const RANGES = {
   oceanChoppiness: { min: 0, max: 2.5, step: 0.01 },
   oceanFoamStrength: { min: 0, max: 2, step: 0.01 },
   oceanSpecularStrength: { min: 0, max: 2, step: 0.01 },
+  oceanClarity: { min: 0, max: 1, step: 0.01 },
+  oceanAbsorption: { min: 0.2, max: 2.0, step: 0.01 },
+  oceanTurbidity: { min: 0, max: 1, step: 0.01 },
+  oceanReflectionStrength: { min: 0, max: 1.5, step: 0.01 },
   textureScale: { min: 8, max: 240, step: 1 },
   textureBlend: { min: 0, max: 1, step: 0.01 },
   textureNearDistance: { min: 10, max: 5000, step: 10 },
@@ -302,6 +314,10 @@ export const TYPE_PRESETS: Record<string, Pick<EditorParams,
   | 'oceanDeepColor'
   | 'oceanShallowColor'
   | 'oceanFoamColor'
+  | 'oceanClarity'
+  | 'oceanAbsorption'
+  | 'oceanTurbidity'
+  | 'oceanReflectionStrength'
   | 'oceanWaveHeight'
   | 'oceanWindSpeed'
   | 'oceanDetail'
@@ -327,9 +343,13 @@ export const TYPE_PRESETS: Record<string, Pick<EditorParams,
     microDetailStrength: 0.5,
     microDetailScale: 2.5,
     microReliefMeters: 1.5,
-    oceanDeepColor: '#063869',
-    oceanShallowColor: '#12a6b8',
-    oceanFoamColor: '#d8f6ff',
+    oceanDeepColor: '#073a58',
+    oceanShallowColor: '#3aa4a7',
+    oceanFoamColor: '#d7edf2',
+    oceanClarity: 0.62,
+    oceanAbsorption: 0.78,
+    oceanTurbidity: 0.14,
+    oceanReflectionStrength: 0.86,
     oceanWaveHeight: 1.0,
     oceanWindSpeed: 26,
     oceanDetail: 1.45,
@@ -355,9 +375,13 @@ export const TYPE_PRESETS: Record<string, Pick<EditorParams,
     microDetailStrength: 0,
     microDetailScale: 1.0,
     microReliefMeters: 0,
-    oceanDeepColor: '#063869',
-    oceanShallowColor: '#12a6b8',
-    oceanFoamColor: '#d8f6ff',
+    oceanDeepColor: '#073553',
+    oceanShallowColor: '#3b8f99',
+    oceanFoamColor: '#d7edf2',
+    oceanClarity: 0.45,
+    oceanAbsorption: 0.65,
+    oceanTurbidity: 0.34,
+    oceanReflectionStrength: 0.62,
     oceanWaveHeight: 0.7,
     oceanWindSpeed: 18,
     oceanDetail: 0.85,
@@ -383,9 +407,13 @@ export const TYPE_PRESETS: Record<string, Pick<EditorParams,
     microDetailStrength: 0.48,
     microDetailScale: 1.15,
     microReliefMeters: 1.35,
-    oceanDeepColor: '#0c4f72',
-    oceanShallowColor: '#8bd5e8',
-    oceanFoamColor: '#effcff',
+    oceanDeepColor: '#0b4965',
+    oceanShallowColor: '#78c6d3',
+    oceanFoamColor: '#e7f8fb',
+    oceanClarity: 0.78,
+    oceanAbsorption: 0.62,
+    oceanTurbidity: 0.06,
+    oceanReflectionStrength: 1.05,
     oceanWaveHeight: 0.58,
     oceanWindSpeed: 16,
     oceanDetail: 1.15,

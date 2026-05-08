@@ -52,6 +52,10 @@ const DETAILED_MATERIAL_DISTANCE = WORLD_SCALE.localDetailFar
 const LOD_COLLAPSE_HYSTERESIS = 1.35
 const CLOUD_BILLBOARD_MAX_INSTANCES = 1600
 const OCEAN_GEODESIC_DETAIL = 32
+const OCEAN_DETAIL_IFFT_FULL_DISTANCE = 900
+const OCEAN_DETAIL_IFFT_HALF_DISTANCE = 1800
+const OCEAN_DETAIL_IFFT_QUARTER_DISTANCE = 2800
+const OCEAN_DETAIL_IFFT_DISABLE_DISTANCE = 4200
 const GRASS_NEAR_LOD_BACKOFF = 3
 const GRASS_FAR_LOD_BACKOFF = 7
 const GRASS_FAR_DISTANCE_MULTIPLIER = 3.0
@@ -79,6 +83,10 @@ interface PlanetRendererParams {
   oceanDeepColor?: string
   oceanShallowColor?: string
   oceanFoamColor?: string
+  oceanClarity?: number
+  oceanAbsorption?: number
+  oceanTurbidity?: number
+  oceanReflectionStrength?: number
   oceanWaveHeight?: number
   oceanWindSpeed?: number
   oceanDetail?: number
@@ -183,6 +191,7 @@ export class PlanetRenderer {
   private oceanMaterial: THREE.ShaderMaterial | null = null
   private oceanIfft: OceanIfftSpectrum | OceanGpuIfftSpectrum | null = null
   private oceanDetailIfft: OceanGpuIfftSpectrum | null = null
+  private oceanDetailIfftFrame = 0
   private oceanMesh: THREE.Mesh | null = null
   private oceanSeaRadius = 0
   private atmosphereMaterial: THREE.ShaderMaterial | null = null
@@ -870,6 +879,7 @@ export class PlanetRenderer {
       this.material,
       ...this.farLodMaterials,
       this.fallbackMaterial,
+      this.oceanMaterial,
       this.cloudMaterial,
       this.cloudBillboardMaterial,
       this.grassMaterial,
@@ -1317,6 +1327,7 @@ export class PlanetRenderer {
       this.material,
       ...this.farLodMaterials,
       this.fallbackMaterial,
+      this.oceanMaterial,
       this.cloudMaterial,
       this.grassMaterial,
       this.farGrassMaterial,
@@ -1325,13 +1336,10 @@ export class PlanetRenderer {
       this.setFloatUniform(material, 'uCloudMaskOffset', cloudMaskOffset)
     }
     this.oceanIfft?.update(this.time)
-    this.oceanDetailIfft?.update(this.time)
     if (this.oceanIfft && this.oceanMaterial) {
       this.oceanMaterial.uniforms.uIfftMap.value = this.oceanIfft.texture
-      if (this.oceanDetailIfft) {
-        this.oceanMaterial.uniforms.uIfftDetailMap.value = this.oceanDetailIfft.texture
-      }
     }
+    this.updateOceanDetailIfft(surfaceDist)
     this.setFloatUniform(this.oceanMaterial, 'uTime', this.time)
     if (this.cloudMaterial) {
       this.group.getWorldPosition(this.cloudMaterial.uniforms.uPlanetCenter.value)
@@ -1951,6 +1959,16 @@ export class PlanetRenderer {
       sunColor: this.sunColor,
       atmosphereColor: this.atmosphereColor,
       atmosphereLightColor: this.atmosphereLightColor,
+      cloudMask: this.cloudMask.texture,
+      cloudShadow: this.cloudShadow,
+      cloudCoverage: this.cloudCoverage,
+      cloudScale: this.cloudScale,
+      cloudSoftness: this.cloudSoftness,
+      cloudHeight: this.cloudHeight,
+      cloudSpeed: this.cloudSpeed,
+      cloudStorms: this.cloudStorms,
+      cloudBands: this.cloudBands,
+      cloudDetail: this.cloudDetail,
       ifftTexture: this.oceanIfft.texture,
       ifftWorldSize: this.oceanIfft.worldSize,
       ifftHeightScale: this.oceanIfft.heightScale,
@@ -1969,6 +1987,10 @@ export class PlanetRenderer {
       deepColor: params.oceanDeepColor,
       shallowColor: params.oceanShallowColor,
       foamColor: params.oceanFoamColor,
+      clarity: params.oceanClarity,
+      absorption: params.oceanAbsorption,
+      turbidity: params.oceanTurbidity,
+      reflectionStrength: params.oceanReflectionStrength,
       specularStrength: params.oceanSpecularStrength ?? 1,
     })
 
@@ -1998,6 +2020,44 @@ export class PlanetRenderer {
     this.oceanMaterial.depthTest = useTerrain
     this.setFloatUniform(this.oceanMaterial, 'uOceanQuality', 2)
     this.setFloatUniform(this.oceanMaterial, 'uOceanAlpha', 1)
+  }
+
+  private updateOceanDetailIfft(surfaceDistance: number) {
+    if (!this.oceanMaterial) return
+
+    const strength = this.getOceanDetailIfftStrength(surfaceDistance)
+    this.setFloatUniform(this.oceanMaterial, 'uIfftDetailEnabled', strength)
+    if (!this.oceanDetailIfft || strength <= 0.001) return
+
+    const cadence = this.getOceanDetailIfftCadence(surfaceDistance)
+    if (cadence <= 0) return
+
+    if (this.oceanDetailIfftFrame % cadence === 0) {
+      this.oceanDetailIfft.update(this.time)
+      this.oceanMaterial.uniforms.uIfftDetailMap.value = this.oceanDetailIfft.texture
+    }
+    this.oceanDetailIfftFrame = (this.oceanDetailIfftFrame + 1) % 240
+  }
+
+  private getOceanDetailIfftStrength(surfaceDistance: number): number {
+    if (!this.oceanDetailIfft) return 0
+
+    const distance = Math.max(0, surfaceDistance)
+    return 1 - THREE.MathUtils.smoothstep(
+      distance,
+      OCEAN_DETAIL_IFFT_QUARTER_DISTANCE,
+      OCEAN_DETAIL_IFFT_DISABLE_DISTANCE,
+    )
+  }
+
+  private getOceanDetailIfftCadence(surfaceDistance: number): number {
+    if (!this.oceanDetailIfft) return 0
+
+    const distance = Math.max(0, surfaceDistance)
+    if (distance <= OCEAN_DETAIL_IFFT_FULL_DISTANCE) return 1
+    if (distance <= OCEAN_DETAIL_IFFT_HALF_DISTANCE) return 2
+    if (distance <= OCEAN_DETAIL_IFFT_QUARTER_DISTANCE) return 4
+    return 0
   }
 
   private updateChunkGrassVisibility(chunk: TerrainChunk, localCamPos: THREE.Vector3) {

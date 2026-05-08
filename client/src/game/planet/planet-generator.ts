@@ -888,6 +888,12 @@ export function createPlanetMaterial(params: {
     float rockMask = saturate(slope * 0.75 + smoothstep(0.60, 0.72, heightNorm));
     float snowMask = smoothstep(0.74, 0.84, heightNorm + latitude * 0.18) * smoothstep(0.54, 0.78, latitude);
     terrainColor = applyTerrainTexture(terrainColor, vSphereDir, uPlanetKind, heightNorm, coast, rockMask, snowMask, moisture, distance(cameraPosition, vWorldPos));
+    float wetShore = smoothstep(uSeaHeight + 0.002, uSeaHeight + 0.020, vHeight)
+      * (1.0 - smoothstep(uSeaHeight + 0.034, uSeaHeight + 0.115, vHeight))
+      * (1.0 - snowMask)
+      * (1.0 - smoothstep(0.42, 0.82, slope))
+      * (1.0 - step(0.5, uPlanetKind));
+    terrainColor = mix(terrainColor, terrainColor * vec3(0.48, 0.56, 0.54), wetShore * 0.36);
     terrainColor = mix(terrainColor, vec3(0.43, 0.39, 0.32), 0.06);
 
     vec3 finalNormal = detailNormal(normalize(vNormal), latitude, moisture, slope, coast);
@@ -1176,6 +1182,12 @@ export function createPlanetFarMaterial(params: {
     float rockMask = saturate(slope * 0.75 + smoothstep(0.60, 0.72, heightNorm));
     float snowMask = smoothstep(0.74, 0.84, heightNorm + latitude * 0.18) * smoothstep(0.54, 0.78, latitude);
     terrain = applyTerrainTexture(terrain, vSphereDir, uPlanetKind, heightNorm, coast, rockMask, snowMask, moisture, distance(cameraPosition, vWorldPos));
+    float wetShore = smoothstep(uSeaHeight + 0.002, uSeaHeight + 0.020, visualHeight)
+      * (1.0 - smoothstep(uSeaHeight + 0.034, uSeaHeight + 0.115, visualHeight))
+      * (1.0 - snowMask)
+      * (1.0 - smoothstep(0.42, 0.82, slope))
+      * (1.0 - step(0.5, uPlanetKind));
+    terrain = mix(terrain, terrain * vec3(0.48, 0.56, 0.54), wetShore * 0.34);
     terrain = mix(terrain, vec3(0.43, 0.39, 0.32), 0.06);
 
     vec3 finalColor = applyPlanetLighting(terrain, shadingNormal, vRadialNormal, vWorldPos, heightNorm, slope);
@@ -1434,6 +1446,12 @@ export function createPlanetFallbackMaterial(params: {
     float rockMask = saturate(slope * 0.75 + smoothstep(0.60, 0.72, heightNorm));
     float snowMask = smoothstep(0.74, 0.84, heightNorm + latitude * 0.18) * smoothstep(0.54, 0.78, latitude);
     terrain = applyTerrainTexture(terrain, vSphereDir, uPlanetKind, heightNorm, coast, rockMask, snowMask, moisture, distance(cameraPosition, vWorldPos));
+    float wetShore = smoothstep(uSeaHeight + 0.002, uSeaHeight + 0.020, visualHeight)
+      * (1.0 - smoothstep(uSeaHeight + 0.034, uSeaHeight + 0.115, visualHeight))
+      * (1.0 - snowMask)
+      * (1.0 - smoothstep(0.42, 0.82, slope))
+      * (1.0 - step(0.5, uPlanetKind));
+    terrain = mix(terrain, terrain * vec3(0.48, 0.56, 0.54), wetShore * 0.26);
     terrain = mix(terrain, vec3(0.43, 0.39, 0.32), 0.06);
 
     vec3 finalColor = applyPlanetLighting(terrain, shadingNormal, vRadialNormal, vWorldPos, heightNorm, slope);
