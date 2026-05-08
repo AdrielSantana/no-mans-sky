@@ -51,6 +51,9 @@ const DETAILED_MATERIAL_MIN_LOD = 6
 const DETAILED_MATERIAL_DISTANCE = WORLD_SCALE.localDetailFar
 const LOD_COLLAPSE_HYSTERESIS = 1.35
 const CLOUD_BILLBOARD_MAX_INSTANCES = 1600
+const CLOUD_BILLBOARD_SURFACE_BUDGET = 0.42
+const CLOUD_BILLBOARD_BUDGET_NEAR_DISTANCE = WORLD_SCALE.localDetailFar * 1.25
+const CLOUD_BILLBOARD_BUDGET_FULL_DISTANCE = WORLD_SCALE.localDetailFar * 8
 const OCEAN_GEODESIC_DETAIL = 32
 const OCEAN_DETAIL_IFFT_FULL_DISTANCE = 900
 const OCEAN_DETAIL_IFFT_HALF_DISTANCE = 1800
@@ -967,7 +970,17 @@ export class PlanetRenderer {
     return x - Math.floor(x)
   }
 
-  private updateCloudBillboards(localCamPos: THREE.Vector3) {
+  private getCloudBillboardBudget(surfaceDistance: number): number {
+    const distance = Math.max(0, surfaceDistance)
+    const t = THREE.MathUtils.smoothstep(
+      distance,
+      CLOUD_BILLBOARD_BUDGET_NEAR_DISTANCE,
+      CLOUD_BILLBOARD_BUDGET_FULL_DISTANCE,
+    )
+    return THREE.MathUtils.lerp(CLOUD_BILLBOARD_SURFACE_BUDGET, 1, t)
+  }
+
+  private updateCloudBillboards(localCamPos: THREE.Vector3, surfaceDistance: number) {
     const mesh = this.cloudBillboardMesh
     const alphaAttr = this.cloudBillboardAlphaAttr
     const seedAttr = this.cloudBillboardSeedAttr
@@ -990,13 +1003,18 @@ export class PlanetRenderer {
       : new THREE.Vector3(0, 1, 0)
 
     const cloudRadius = this.planetRadius * (1 + THREE.MathUtils.clamp(this.cloudHeight, 0.001, 0.20))
-    const desiredCount = Math.min(
+    const configuredCount = Math.min(
       CLOUD_BILLBOARD_MAX_INSTANCES,
       Math.max(0, Math.round(this.cloudBillboardCount)),
     )
+    const billboardBudget = this.getCloudBillboardBudget(surfaceDistance)
+    const desiredCount = Math.min(
+      configuredCount,
+      Math.max(1, Math.round(configuredCount * billboardBudget)),
+    )
     const capAngle = 0.92
-    const baseSize = this.planetRadius * 0.092
-    const threshold = 0.06
+    const baseSize = this.planetRadius * 0.092 * THREE.MathUtils.lerp(1.12, 1.0, billboardBudget)
+    const threshold = THREE.MathUtils.lerp(0.13, 0.06, billboardBudget)
     const maskOffset = this.getCloudMaskOffset()
     const candidateTarget = Math.min(CLOUD_BILLBOARD_MAX_INSTANCES, Math.max(64, Math.round(desiredCount * 2.35)))
     const angularStep = THREE.MathUtils.clamp(
@@ -1376,7 +1394,7 @@ export class PlanetRenderer {
     if (this.atmosphereMaterial) {
       this.group.getWorldPosition(this.atmosphereMaterial.uniforms.uPlanetCenter.value)
     }
-    this.updateCloudBillboards(localCamPos)
+    this.updateCloudBillboards(localCamPos, surfaceDist)
     // Decide: show fallback sphere or quadtree terrain
     const useTerrain = surfaceDist < this.lodDistances[1]
     this.updateOceanRenderState(useTerrain)

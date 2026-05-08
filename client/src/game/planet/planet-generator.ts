@@ -581,9 +581,7 @@ float cloudShadowField(vec3 dir) {
 
 float cloudShadowPattern(vec3 dir) {
   float macroMask = sharedCloudMask(dir);
-  float procedural = cloudShadowField(dir);
-  float detail = cloudMaskFromDensity(procedural);
-  return clamp(macroMask * 0.82 + detail * macroMask * 0.28, 0.0, 1.0);
+  return smoothstep(0.05, 0.96, macroMask);
 }
 
 float cloudShadowMask(vec3 surfaceDir, vec3 sunDir) {
@@ -1784,11 +1782,11 @@ export function createCloudMaterial(params: {
     float forwardGlow = pow(max(dot(toCamera, sunDir), 0.0), 7.5);
     float rimLight = pow(1.0 - max(dot(toCamera, shellNormal), 0.0), 3.0);
 
-    vec3 coolWhite = mix(uCloudColor, uAtmosphereColor, 0.10) * 0.86;
+    vec3 coolWhite = mix(uCloudColor, uAtmosphereColor, 0.10) * 0.92;
     vec3 sunWhite = mix(vec3(0.82), uSunColor, 0.24);
     vec3 sunset = mix(vec3(0.76, 0.30, 0.11), uSunColor, 0.34);
     vec3 denseCore = mix(coolWhite * vec3(0.46, 0.50, 0.58), uAtmosphereLightColor * 0.18, 0.18);
-    vec3 litCloud = mix(coolWhite * (0.22 + direct * 0.56), sunWhite, direct * 0.40);
+    vec3 litCloud = mix(coolWhite * (0.25 + direct * 0.60), sunWhite, direct * 0.43);
     litCloud = mix(litCloud, denseCore, densityTone * (0.26 + (1.0 - direct) * 0.38));
     litCloud = mix(litCloud, sunset, lowSun * 0.42 + terminator * 0.18);
     vec3 nightCloud = mix(vec3(0.010, 0.016, 0.032) * 0.34, uAtmosphereLightColor * 0.045, 0.18);
@@ -1800,9 +1798,9 @@ export function createCloudMaterial(params: {
     float baseShade = (1.0 - max(dot(shellNormal, toCamera), 0.0)) * body * volume * 0.30;
     float underside = body * smoothstep(-0.16, 0.30, -nDotL) * (0.18 + volume * 0.24);
     color = mix(color, color * vec3(0.36, 0.41, 0.50), clamp(selfShadow + baseShade + underside, 0.0, 0.82));
-    color += mix(uAtmosphereLightColor, uSunColor, 0.42) * silver * (0.06 + day * 0.38);
-    color += uAtmosphereLightColor * rim * (0.006 + day * 0.052) * (1.0 + volume * 0.18);
-    color *= mix(0.62, 0.96 + volume * 0.05, body);
+    color += mix(uAtmosphereLightColor, uSunColor, 0.42) * silver * (0.07 + day * 0.42);
+    color += uAtmosphereLightColor * rim * (0.008 + day * 0.058) * (1.0 + volume * 0.18);
+    color *= mix(0.66, 1.02 + volume * 0.05, body);
 
     float colorStr = clamp(uCloudColorStrength, 0.0, 1.0);
     float lum = dot(color, vec3(0.2126, 0.7152, 0.0722));
@@ -1949,28 +1947,28 @@ export function createCloudBillboardMaterial(params: {
     float nDotL = dot(dir, sunDir);
     float day = smoothstep(-0.22, 0.58, nDotL);
     float direct = clamp(nDotL, 0.0, 1.0);
-    vec3 cloudDay = mix(uCloudColor, uAtmosphereColor, 0.13);
-    cloudDay = mix(cloudDay * (0.56 + direct * 0.42), mix(vec3(1.0), uSunColor, 0.25), direct * 0.52);
-    vec3 sunset = mix(vec3(1.0, 0.42, 0.16), uSunColor, 0.42);
-    cloudDay = mix(cloudDay, sunset, smoothstep(-0.24, 0.22, nDotL) * (1.0 - smoothstep(0.12, 0.54, nDotL)) * 0.32);
-    vec3 cloudNight = mix(vec3(0.010, 0.016, 0.032) * 0.45, uAtmosphereLightColor * 0.08, 0.28);
+    vec3 cloudDay = mix(uCloudColor, uAtmosphereColor, 0.13) * 0.82;
+    cloudDay = mix(cloudDay * (0.34 + direct * 0.50), mix(vec3(0.82), uSunColor, 0.22), direct * 0.32);
+    vec3 sunset = mix(vec3(0.72, 0.30, 0.12), uSunColor, 0.34);
+    cloudDay = mix(cloudDay, sunset, smoothstep(-0.24, 0.22, nDotL) * (1.0 - smoothstep(0.12, 0.54, nDotL)) * 0.24);
+    vec3 cloudNight = mix(vec3(0.010, 0.016, 0.032) * 0.34, uAtmosphereLightColor * 0.045, 0.22);
     vec3 color = mix(cloudNight, cloudDay, day);
     float edgeLight = feather * pow(max(dot(normalize(cameraPosition - vWorldPos), sunDir), 0.0), 4.5);
-    float innerShade = core * (1.0 - direct) * 0.18;
-    color = mix(color, color * vec3(0.58, 0.64, 0.72), innerShade);
-    color += mix(uAtmosphereLightColor, uSunColor, 0.35) * (feather * day * 0.07 + edgeLight * 0.22);
+    float innerShade = core * (1.0 - direct) * 0.28;
+    color = mix(color, color * vec3(0.46, 0.52, 0.62), innerShade);
+    color += mix(uAtmosphereLightColor, uSunColor, 0.35) * (feather * day * 0.035 + edgeLight * 0.10);
 
     float colorStr = clamp(uCloudColorStrength, 0.0, 1.0);
     float lum = dot(color, vec3(0.2126, 0.7152, 0.0722));
     color = mix(color, uCloudColor * max(lum, 0.0), colorStr);
 
     float alpha = mask * vAlpha * clamp(uOpacity, 0.0, 1.0);
-    alpha *= mix(0.35, 1.0, day);
-    alpha *= mix(0.88, 1.06, core);
+    alpha *= mix(0.30, 0.92, day);
+    alpha *= mix(0.78, 0.98, core);
     if (alpha < 0.006) discard;
 
     #include <logdepthbuf_fragment>
-    gl_FragColor = vec4(color, clamp(alpha, 0.0, 0.74));
+    gl_FragColor = vec4(color, clamp(alpha, 0.0, 0.58));
   }
   `
 
