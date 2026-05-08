@@ -51,20 +51,14 @@ vec4 oceanIfftPlaneSample(vec2 meters) {
   return texture2D(uIfftMap, meters / max(uIfftWorldSize, 0.001));
 }
 
-vec3 oceanIfftBlendWeights(vec3 n) {
-  vec3 weights = pow(abs(n), vec3(5.0));
-  return weights / max(weights.x + weights.y + weights.z, 0.0001);
-}
+  vec3 oceanIfftBlendWeights(vec3 n) {
+    vec3 weights = pow(abs(n), vec3(5.0));
+    return weights / max(weights.x + weights.y + weights.z, 0.0001);
+  }
 
-OceanIfftSampleData oceanIfftSampleData(vec3 dir) {
+OceanIfftSampleData oceanIfftFromTriplanarSamples(vec3 dir, vec4 sampleX, vec4 sampleY, vec4 sampleZ) {
   vec3 n = normalize(dir);
-  vec3 surface = n * uSeaRadius;
   vec3 weights = oceanIfftBlendWeights(n);
-
-  vec4 sampleX = oceanIfftPlaneSample(vec2(surface.z, surface.y));
-  vec4 sampleY = oceanIfftPlaneSample(vec2(surface.x, surface.z));
-  vec4 sampleZ = oceanIfftPlaneSample(vec2(surface.x, surface.y));
-
   vec3 slopeX = vec3(0.0, sampleX.b, sampleX.g);
   vec3 slopeY = vec3(sampleY.g, 0.0, sampleY.b);
   vec3 slopeZ = vec3(sampleZ.g, sampleZ.b, 0.0);
@@ -75,6 +69,15 @@ OceanIfftSampleData oceanIfftSampleData(vec3 dir) {
   data.slope -= n * dot(data.slope, n);
   data.foam = sampleX.a * weights.x + sampleY.a * weights.y + sampleZ.a * weights.z;
   return data;
+}
+
+OceanIfftSampleData oceanIfftSampleData(vec3 dir) {
+  vec3 n = normalize(dir);
+  vec3 surface = n * uSeaRadius;
+  vec4 sampleX = oceanIfftPlaneSample(vec2(surface.z, surface.y));
+  vec4 sampleY = oceanIfftPlaneSample(vec2(surface.x, surface.z));
+  vec4 sampleZ = oceanIfftPlaneSample(vec2(surface.x, surface.y));
+  return oceanIfftFromTriplanarSamples(dir, sampleX, sampleY, sampleZ);
 }
 
 vec3 oceanWarpedDirection(vec3 dir, float time) {
@@ -245,8 +248,16 @@ export function createOceanMaterial(params: OceanMaterialParams): THREE.ShaderMa
   uniform float uIfftNormalStrength;
   uniform float uIfftFoamStrength;
   uniform float uIfftChoppiness;
+  uniform float uIfftDetailEnabled;
+  uniform float uIfftDetailWorldSize;
+  uniform float uIfftDetailNormalStrength;
+  uniform float uIfftDetailFoamStrength;
+  uniform float uIfftDetailChoppiness;
+  uniform float uIfftDetailNearDistance;
+  uniform float uIfftDetailFarDistance;
   uniform float uOceanSpecularStrength;
   uniform sampler2D uIfftMap;
+  uniform sampler2D uIfftDetailMap;
   uniform vec3 uSunPosition;
   uniform vec3 uSunColor;
   uniform vec3 uAtmosphereColor;
@@ -268,6 +279,29 @@ export function createOceanMaterial(params: OceanMaterialParams): THREE.ShaderMa
   }
 
   ${OCEAN_WAVE_GLSL}
+
+  vec4 oceanIfftDetailPlaneSample(vec2 meters) {
+    return texture2D(uIfftDetailMap, meters / max(uIfftDetailWorldSize, 0.001));
+  }
+
+  OceanIfftSampleData oceanIfftDetailSampleData(vec3 dir) {
+    vec3 n = normalize(dir);
+    vec3 surface = n * uSeaRadius;
+    vec4 sampleX = oceanIfftDetailPlaneSample(vec2(surface.z, surface.y));
+    vec4 sampleY = oceanIfftDetailPlaneSample(vec2(surface.x, surface.z));
+    vec4 sampleZ = oceanIfftDetailPlaneSample(vec2(surface.x, surface.y));
+    return oceanIfftFromTriplanarSamples(dir, sampleX, sampleY, sampleZ);
+  }
+
+  float oceanIfftDetailWeight(float distanceToCamera) {
+    float detailAmount = smoothstep(0.70, 2.75, uOceanWaveDetail);
+    float nearWeight = 1.0 - smoothstep(
+      uIfftDetailNearDistance,
+      max(uIfftDetailNearDistance + 1.0, uIfftDetailFarDistance),
+      distanceToCamera
+    );
+    return uIfftDetailEnabled * detailAmount * mix(0.06, 1.0, nearWeight);
+  }
 
   vec3 oceanIfftNormal(vec3 dir, vec3 radialNormal) {
     OceanIfftSampleData ifft = oceanIfftSampleData(dir);
@@ -307,9 +341,24 @@ export function createOceanMaterial(params: OceanMaterialParams): THREE.ShaderMa
     OceanIfftSampleData fragmentIfft = oceanIfftSampleData(normalize(vSphereDir));
     float fragmentIfftSlope = length(fragmentIfft.slope) * uIfftEnabled;
     float fragmentIfftFoam = fragmentIfft.foam * uIfftEnabled;
+    OceanIfftSampleData detailIfft;
+    detailIfft.height = 0.0;
+    detailIfft.slope = vec3(0.0);
+    detailIfft.foam = 0.0;
+    float detailWeight = 0.0;
+    float detailSlopeAmount = 0.0;
+    if (uIfftDetailEnabled > 0.5) {
+      detailIfft = oceanIfftDetailSampleData(normalize(vSphereDir));
+      detailWeight = oceanIfftDetailWeight(distance(cameraPosition, vWorldPos));
+      vec3 detailSlope = detailIfft.slope - radial * dot(detailIfft.slope, radial);
+      normal = normalize(normal - detailSlope * uIfftDetailNormalStrength * detailWeight);
+      detailSlopeAmount = length(detailSlope) * detailWeight;
+      fragmentIfftSlope += detailSlopeAmount * (0.86 + uIfftDetailChoppiness * 0.24);
+      fragmentIfftFoam = max(fragmentIfftFoam, detailIfft.foam * detailWeight * (0.68 + uIfftDetailFoamStrength * 0.22));
+    }
     float detailAmount = smoothstep(0.75, 2.70, uOceanWaveDetail);
     float closeDetail = 1.0 - smoothstep(140.0, 2200.0, distance(cameraPosition, vWorldPos));
-    float microWeight = detailAmount * closeDetail * uIfftEnabled;
+    float microWeight = detailAmount * closeDetail * uIfftEnabled * (1.0 - uIfftDetailEnabled * 0.62);
     float microSlope = 0.0;
     if (microWeight > 0.001) {
       vec3 tangent = oceanTangentFor(radial);
@@ -364,6 +413,7 @@ export function createOceanMaterial(params: OceanMaterialParams): THREE.ShaderMa
     float crestBreakup = smoothstep(0.56, 0.90, foamDetail + fragmentIfftFoam * 0.22);
     float crestFoam = smoothstep(0.36, 0.86, fragmentIfftFoam) * smoothstep(0.18, 0.58, fragmentIfftSlope + max(vWave, 0.0) * 0.12) * crestBreakup;
     crestFoam = max(crestFoam, smoothstep(0.34, 0.82, microSlope + fragmentIfftFoam * 0.35) * microWeight * 0.16);
+    crestFoam = max(crestFoam, smoothstep(0.46, 1.10, detailSlopeAmount + detailIfft.foam * 0.42) * detailWeight * uIfftDetailFoamStrength * 0.18);
     crestFoam *= smoothstep(0.045, 0.24, waterDepthRaw) * uIfftFoamStrength * 0.62;
     crestFoam *= mix(0.54, 0.96, clamp(uIfftChoppiness / 2.5, 0.0, 1.0));
     float foamMask = pow(max(shoreFoam, crestFoam), 1.35) * (0.04 + foamVisibility * 0.96);
@@ -413,6 +463,14 @@ export function createOceanMaterial(params: OceanMaterialParams): THREE.ShaderMa
       uIfftNormalStrength: { value: params.ifftNormalStrength },
       uIfftFoamStrength: { value: params.ifftFoamStrength },
       uIfftChoppiness: { value: params.ifftChoppiness },
+      uIfftDetailEnabled: { value: params.ifftDetailTexture ? 1 : 0 },
+      uIfftDetailMap: { value: params.ifftDetailTexture ?? params.ifftTexture },
+      uIfftDetailWorldSize: { value: params.ifftDetailWorldSize ?? params.ifftWorldSize },
+      uIfftDetailNormalStrength: { value: params.ifftDetailNormalStrength ?? params.ifftNormalStrength * 0.48 },
+      uIfftDetailFoamStrength: { value: params.ifftDetailFoamStrength ?? params.ifftFoamStrength * 0.28 },
+      uIfftDetailChoppiness: { value: params.ifftDetailChoppiness ?? params.ifftChoppiness },
+      uIfftDetailNearDistance: { value: params.ifftDetailNearDistance ?? 900 },
+      uIfftDetailFarDistance: { value: params.ifftDetailFarDistance ?? 5200 },
       uOceanSpecularStrength: { value: params.specularStrength ?? 1 },
       uOceanDeepColor: { value: deepOceanColor },
       uOceanShallowColor: { value: shallowOceanColor },

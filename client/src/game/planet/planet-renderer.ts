@@ -182,6 +182,7 @@ export class PlanetRenderer {
   private simpleTerrainMaterial = new THREE.MeshBasicMaterial({ color: 0x8f927f })
   private oceanMaterial: THREE.ShaderMaterial | null = null
   private oceanIfft: OceanIfftSpectrum | OceanGpuIfftSpectrum | null = null
+  private oceanDetailIfft: OceanGpuIfftSpectrum | null = null
   private oceanMesh: THREE.Mesh | null = null
   private oceanSeaRadius = 0
   private atmosphereMaterial: THREE.ShaderMaterial | null = null
@@ -1324,8 +1325,12 @@ export class PlanetRenderer {
       this.setFloatUniform(material, 'uCloudMaskOffset', cloudMaskOffset)
     }
     this.oceanIfft?.update(this.time)
+    this.oceanDetailIfft?.update(this.time)
     if (this.oceanIfft && this.oceanMaterial) {
       this.oceanMaterial.uniforms.uIfftMap.value = this.oceanIfft.texture
+      if (this.oceanDetailIfft) {
+        this.oceanMaterial.uniforms.uIfftDetailMap.value = this.oceanDetailIfft.texture
+      }
     }
     this.setFloatUniform(this.oceanMaterial, 'uTime', this.time)
     if (this.cloudMaterial) {
@@ -1899,12 +1904,40 @@ export class PlanetRenderer {
       choppiness: params.oceanChoppiness ?? 1.1,
       foamStrength: params.oceanFoamStrength ?? THREE.MathUtils.lerp(0.46, 0.82, THREE.MathUtils.clamp(waterLevel, 0, 1)),
     }
-    this.oceanIfft = this.renderer && OceanGpuIfftSpectrum.isSupported(this.renderer, 512)
-      ? new OceanGpuIfftSpectrum(this.renderer, {
+    const gpuIfftRenderer = this.renderer && OceanGpuIfftSpectrum.isSupported(this.renderer, 512)
+      ? this.renderer
+      : null
+    this.oceanIfft = gpuIfftRenderer
+      ? new OceanGpuIfftSpectrum(gpuIfftRenderer, {
           ...oceanSpectrumParams,
           size: 512,
         })
       : new OceanIfftSpectrum(oceanSpectrumParams)
+    if (gpuIfftRenderer && this.oceanIfft instanceof OceanGpuIfftSpectrum) {
+      const detail = THREE.MathUtils.clamp(params.oceanDetail ?? 1.45, 0.35, 3)
+      const detailBlend = THREE.MathUtils.smoothstep(detail, 0.35, 3)
+      const detailWorldSize = THREE.MathUtils.clamp(
+        this.oceanIfft.worldSize * THREE.MathUtils.lerp(0.18, 0.10, detailBlend),
+        220,
+        480,
+      )
+      this.oceanDetailIfft = new OceanGpuIfftSpectrum(gpuIfftRenderer, {
+        ...oceanSpectrumParams,
+        seed: (Number(params.seed) ^ 0x6A09E667) >>> 0,
+        size: 512,
+        worldSize: detailWorldSize,
+        waveHeight: (params.oceanWaveHeight ?? 1) * 0.58,
+        windSpeed: Math.max(8, oceanSpectrumParams.windSpeed * 0.56),
+        detail: Math.min(3, detail * 2.10),
+        choppiness: THREE.MathUtils.clamp(oceanSpectrumParams.choppiness * 0.62 + 0.55, 0, 2.5),
+        foamStrength: oceanSpectrumParams.foamStrength,
+        waveHeightScale: 0.055,
+        normalStrengthScale: THREE.MathUtils.lerp(1.55, 2.20, detailBlend),
+        foamStrengthScale: 0.20,
+        minHarmonic: 18,
+        maxHarmonic: 512 * 0.46,
+      })
+    }
 
     this.oceanMaterial = createOceanMaterial({
       seed: Number(params.seed),
@@ -1924,6 +1957,14 @@ export class PlanetRenderer {
       ifftNormalStrength: this.oceanIfft.normalStrength,
       ifftFoamStrength: this.oceanIfft.foamStrength,
       ifftChoppiness: this.oceanIfft.choppiness,
+      ifftDetailTexture: this.oceanDetailIfft?.texture,
+      ifftDetailWorldSize: this.oceanDetailIfft?.worldSize,
+      ifftDetailHeightScale: this.oceanDetailIfft?.heightScale,
+      ifftDetailNormalStrength: this.oceanDetailIfft?.normalStrength,
+      ifftDetailFoamStrength: this.oceanDetailIfft?.foamStrength,
+      ifftDetailChoppiness: this.oceanDetailIfft?.choppiness,
+      ifftDetailNearDistance: 1250,
+      ifftDetailFarDistance: 3800,
       waveDetail: params.oceanDetail ?? 1.45,
       deepColor: params.oceanDeepColor,
       shallowColor: params.oceanShallowColor,
@@ -2159,6 +2200,7 @@ export class PlanetRenderer {
     this.cloudMask.dispose()
     this.oceanMaterial?.dispose()
     this.oceanIfft?.dispose()
+    this.oceanDetailIfft?.dispose()
     this.grassMaterial?.dispose()
     this.farGrassMaterial?.dispose()
     this.atmosphereMaterial?.dispose()
