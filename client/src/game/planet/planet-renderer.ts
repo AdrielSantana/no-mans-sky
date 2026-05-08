@@ -1409,9 +1409,9 @@ export class PlanetRenderer {
     this.updateCloudBillboards(localCamPos, surfaceDist)
     // Decide: show fallback sphere or quadtree terrain
     const useTerrain = surfaceDist < this.lodDistances[1]
-    this.updateOceanRenderState(useTerrain)
 
     if (!useTerrain) {
+      this.updateOceanRenderState(false)
       this.fallbackSphere.visible = true
       this.fallbackSphere.material = this.debugSimpleTerrain || !this.debugFallbackTerrainShader
         ? this.simpleTerrainMaterial
@@ -1427,7 +1427,6 @@ export class PlanetRenderer {
       return
     }
 
-    this.fallbackSphere.visible = false
     this.fallbackSphere.material = this.debugSimpleTerrain || !this.debugFallbackTerrainShader
       ? this.simpleTerrainMaterial
       : this.fallbackMaterial
@@ -1472,6 +1471,9 @@ export class PlanetRenderer {
       this.collectRenderKeys(root, renderKeys)
       this.collectRetainKeys(root, retainKeys)
     }
+    const terrainReady = this.hasQuadtreeTerrainCoverage()
+    this.updateOceanRenderState(terrainReady)
+    this.fallbackSphere.visible = !terrainReady
 
     // 5. Remove chunks no longer needed. Chunks can be retained while hidden so
     //    a parent only disappears after its target children fully cover it.
@@ -1481,7 +1483,7 @@ export class PlanetRenderer {
         this.disposeChunk(chunk)
         this.chunks.delete(key)
       } else {
-        chunk.mesh.visible = renderKeys.has(key)
+        chunk.mesh.visible = terrainReady && renderKeys.has(key)
         if (chunk.mesh.visible) {
           if (this.debugSimpleTerrain) {
             chunk.mesh.material = this.simpleTerrainMaterial
@@ -1710,6 +1712,10 @@ export class PlanetRenderer {
     const childrenCovered = node.children.every(child => this.isNodeCovered(child))
     if (!childrenCovered) out.add(key)
     for (const child of node.children) this.collectRetainKeys(child, out)
+  }
+
+  private hasQuadtreeTerrainCoverage(): boolean {
+    return this.quadtrees.every(root => this.isNodeCovered(root))
   }
 
   private isChunkBuildPending(key: string): boolean {
