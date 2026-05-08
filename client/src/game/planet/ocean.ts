@@ -294,13 +294,14 @@ export function createOceanMaterial(params: OceanMaterialParams): THREE.ShaderMa
   }
 
   float oceanIfftDetailWeight(float distanceToCamera) {
-    float detailAmount = smoothstep(0.70, 2.75, uOceanWaveDetail);
+    float detailAmount = smoothstep(0.35, 2.55, uOceanWaveDetail);
     float nearWeight = 1.0 - smoothstep(
       uIfftDetailNearDistance,
       max(uIfftDetailNearDistance + 1.0, uIfftDetailFarDistance),
       distanceToCamera
     );
-    return uIfftDetailEnabled * detailAmount * mix(0.06, 1.0, nearWeight);
+    float closeStrength = mix(0.56, 1.18, detailAmount);
+    return uIfftDetailEnabled * closeStrength * mix(0.03, 1.0, nearWeight);
   }
 
   vec3 oceanIfftNormal(vec3 dir, vec3 radialNormal) {
@@ -353,12 +354,12 @@ export function createOceanMaterial(params: OceanMaterialParams): THREE.ShaderMa
       vec3 detailSlope = detailIfft.slope - radial * dot(detailIfft.slope, radial);
       normal = normalize(normal - detailSlope * uIfftDetailNormalStrength * detailWeight);
       detailSlopeAmount = length(detailSlope) * detailWeight;
-      fragmentIfftSlope += detailSlopeAmount * (0.86 + uIfftDetailChoppiness * 0.24);
-      fragmentIfftFoam = max(fragmentIfftFoam, detailIfft.foam * detailWeight * (0.68 + uIfftDetailFoamStrength * 0.22));
+      fragmentIfftSlope += detailSlopeAmount * (1.08 + uIfftDetailChoppiness * 0.28);
+      fragmentIfftFoam = max(fragmentIfftFoam, detailIfft.foam * detailWeight * (0.78 + uIfftDetailFoamStrength * 0.24));
     }
     float detailAmount = smoothstep(0.75, 2.70, uOceanWaveDetail);
     float closeDetail = 1.0 - smoothstep(140.0, 2200.0, distance(cameraPosition, vWorldPos));
-    float microWeight = detailAmount * closeDetail * uIfftEnabled * (1.0 - uIfftDetailEnabled * 0.62);
+    float microWeight = detailAmount * closeDetail * uIfftEnabled * (1.0 - uIfftDetailEnabled * 0.84);
     float microSlope = 0.0;
     if (microWeight > 0.001) {
       vec3 tangent = oceanTangentFor(radial);

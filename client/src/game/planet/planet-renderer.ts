@@ -1917,24 +1917,24 @@ export class PlanetRenderer {
       const detail = THREE.MathUtils.clamp(params.oceanDetail ?? 1.45, 0.35, 3)
       const detailBlend = THREE.MathUtils.smoothstep(detail, 0.35, 3)
       const detailWorldSize = THREE.MathUtils.clamp(
-        this.oceanIfft.worldSize * THREE.MathUtils.lerp(0.18, 0.10, detailBlend),
-        220,
-        480,
+        this.oceanIfft.worldSize * THREE.MathUtils.lerp(0.12, 0.065, detailBlend),
+        150,
+        320,
       )
       this.oceanDetailIfft = new OceanGpuIfftSpectrum(gpuIfftRenderer, {
         ...oceanSpectrumParams,
         seed: (Number(params.seed) ^ 0x6A09E667) >>> 0,
         size: 512,
         worldSize: detailWorldSize,
-        waveHeight: (params.oceanWaveHeight ?? 1) * 0.58,
-        windSpeed: Math.max(8, oceanSpectrumParams.windSpeed * 0.56),
-        detail: Math.min(3, detail * 2.10),
-        choppiness: THREE.MathUtils.clamp(oceanSpectrumParams.choppiness * 0.62 + 0.55, 0, 2.5),
+        waveHeight: (params.oceanWaveHeight ?? 1) * 0.46,
+        windSpeed: Math.max(8, oceanSpectrumParams.windSpeed * 0.50),
+        detail: Math.min(3, detail * 2.55),
+        choppiness: THREE.MathUtils.clamp(oceanSpectrumParams.choppiness * 0.56 + 0.62, 0, 2.5),
         foamStrength: oceanSpectrumParams.foamStrength,
-        waveHeightScale: 0.055,
-        normalStrengthScale: THREE.MathUtils.lerp(1.55, 2.20, detailBlend),
-        foamStrengthScale: 0.20,
-        minHarmonic: 18,
+        waveHeightScale: 0.052,
+        normalStrengthScale: THREE.MathUtils.lerp(2.25, 3.15, detailBlend),
+        foamStrengthScale: 0.22,
+        minHarmonic: 30,
         maxHarmonic: 512 * 0.46,
       })
     }
@@ -1963,8 +1963,8 @@ export class PlanetRenderer {
       ifftDetailNormalStrength: this.oceanDetailIfft?.normalStrength,
       ifftDetailFoamStrength: this.oceanDetailIfft?.foamStrength,
       ifftDetailChoppiness: this.oceanDetailIfft?.choppiness,
-      ifftDetailNearDistance: 1250,
-      ifftDetailFarDistance: 3800,
+      ifftDetailNearDistance: 820,
+      ifftDetailFarDistance: 2600,
       waveDetail: params.oceanDetail ?? 1.45,
       deepColor: params.oceanDeepColor,
       shallowColor: params.oceanShallowColor,
