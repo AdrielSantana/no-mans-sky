@@ -284,6 +284,7 @@ export function createOceanMaterial(params: OceanMaterialParams): THREE.ShaderMa
   uniform vec3 uOceanDeepColor;
   uniform vec3 uOceanShallowColor;
   uniform vec3 uOceanFoamColor;
+  uniform vec3 uCloudLocalSunDirection;
 
   varying vec3 vWorldPos;
   varying vec3 vSphereDir;
@@ -455,7 +456,7 @@ export function createOceanMaterial(params: OceanMaterialParams): THREE.ShaderMa
     vec3 specular = uSunColor * day * (halfSpec * 0.82 + broadSpec * 0.18 + glitter * 0.055) * uOceanSpecularStrength;
     float sunMirror = pow(max(dot(reflect(-viewDir, normal), lightDir), 0.0), 34.0) * day * reflectionLight;
     specular += uSunColor * sunMirror * uOceanReflectionStrength * (0.035 + uOceanClarity * 0.060);
-    float cloudShadow = cloudShadowMask(radial, lightDir);
+    float cloudShadow = cloudShadowMask(normalize(vSphereDir), normalize(uCloudLocalSunDirection));
     float lowSunCoast = (1.0 - smoothstep(0.16, 0.55, sunFacing)) * smoothstep(-0.18, 0.28, sunFacing);
     float coastOcclusion = (1.0 - smoothstep(0.018, 0.145, waterDepthRaw)) * lowSunCoast;
     float terrainShadow = clamp(coastOcclusion * (0.24 + uOceanTurbidity * 0.12 + (1.0 - uOceanClarity) * 0.10), 0.0, 0.42);
@@ -574,6 +575,7 @@ export function createOceanMaterial(params: OceanMaterialParams): THREE.ShaderMa
       uCloudSeed: { value: params.seed },
       uCloudMask: { value: params.cloudMask },
       uCloudMaskOffset: { value: 0 },
+      uCloudLocalSunDirection: { value: new THREE.Vector3(0, 1, 0) },
     },
   })
 }

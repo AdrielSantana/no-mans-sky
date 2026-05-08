@@ -1119,6 +1119,20 @@ export function EditorPanel({ params, onChange }: Props) {
           />
           <span className="editor-value">{params.sunElevation.toFixed(0)}°</span>
         </div>
+        <div className="editor-row">
+          <span className="editor-label">Planet Rotation</span>
+          <input
+            className="editor-slider"
+            type="range"
+            min={RANGES.planetRotationSpeed.min}
+            max={RANGES.planetRotationSpeed.max}
+            step={RANGES.planetRotationSpeed.step}
+            value={params.planetRotationSpeed}
+            onInput={e => set('planetRotationSpeed', Number(e.currentTarget.value))}
+            onChange={e => set('planetRotationSpeed', Number(e.target.value))}
+          />
+          <span className="editor-value">{params.planetRotationSpeed.toFixed(1)}°/s</span>
+        </div>
       </div>
 
       <div className="editor-section">

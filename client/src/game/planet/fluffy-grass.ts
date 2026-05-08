@@ -213,6 +213,7 @@ export function createFluffyGrassMaterial(
       uCloudSeed: { value: 0 },
       uCloudMask: { value: DEFAULT_CLOUD_MASK_TEXTURE },
       uCloudMaskOffset: { value: 0 },
+      uCloudLocalSunDirection: { value: new THREE.Vector3(0, 1, 0) },
     },
     vertexShader: /* glsl */ `
       #include <common>
@@ -226,6 +227,7 @@ export function createFluffyGrassMaterial(
       varying float vTerrainMicroAo;
       varying float vTerrainMacroAo;
       varying vec3 vWorldPos;
+      varying vec3 vLocalPlanetDir;
       attribute float instanceSeed;
       attribute vec3 instanceTerrainNormal;
       attribute float instanceTerrainMicroAo;
@@ -238,24 +240,29 @@ export function createFluffyGrassMaterial(
         vSeed = instanceSeed;
 
         vec3 transformed = position;
+        vec3 instancePlanetLocal = vec3(0.0);
+        #ifdef USE_INSTANCING
+          instancePlanetLocal = (instanceMatrix * vec4(0.0, 0.0, 0.0, 1.0)).xyz;
+        #endif
+
         #if GRASS_ANIMATED == 1
-        vec3 instanceWorld = (modelMatrix * instanceMatrix * vec4(0.0, 0.0, 0.0, 1.0)).xyz;
         vec3 windDirA = normalize(vec3(0.74, 0.18, -0.65));
         vec3 windDirB = normalize(vec3(-0.32, 0.09, -0.94));
-        float waveA = sin(dot(instanceWorld, windDirA) * 0.040 + uTime * 1.35);
-        float waveB = sin(dot(instanceWorld, windDirB) * 0.075 + uTime * 2.10 + 1.7);
-        float gustEnvelope = smoothstep(-0.35, 0.95, sin(dot(instanceWorld, windDirA) * 0.012 - uTime * 0.55));
+        float waveA = sin(dot(instancePlanetLocal, windDirA) * 0.040 + uTime * 1.35);
+        float waveB = sin(dot(instancePlanetLocal, windDirB) * 0.075 + uTime * 2.10 + 1.7);
+        float gustEnvelope = smoothstep(-0.35, 0.95, sin(dot(instancePlanetLocal, windDirA) * 0.012 - uTime * 0.55));
         float localFlutter = sin(instanceSeed * 6.2831853 + uTime * 3.6 + position.y * 3.0) * 0.16;
         float gust = (waveA * 0.72 + waveB * 0.28) * (0.45 + gustEnvelope * 0.75) + localFlutter;
         float bend = vTip * vTip * uWindStrength * gust * 0.30;
         transformed.x += bend;
-        transformed.z += bend * 0.24 * cos(dot(instanceWorld, windDirB) * 0.030 + uTime * 0.80);
+        transformed.z += bend * 0.24 * cos(dot(instancePlanetLocal, windDirB) * 0.030 + uTime * 0.80);
         #endif
 
         #ifdef USE_INSTANCING
           transformed = (instanceMatrix * vec4(transformed, 1.0)).xyz;
         #endif
 
+        vLocalPlanetDir = normalize(instancePlanetLocal);
         vec4 worldPosition = modelMatrix * vec4(transformed, 1.0);
         vWorldPos = worldPosition.xyz;
         vTerrainNormal = normalize(mat3(modelMatrix) * instanceTerrainNormal);
@@ -279,6 +286,7 @@ export function createFluffyGrassMaterial(
       uniform vec3 uColorB;
       uniform vec3 uSunPosition;
       uniform vec3 uPlanetCenter;
+      uniform vec3 uCloudLocalSunDirection;
       uniform float uPlanetRadius;
       uniform float uLayerOpacity;
       uniform vec3 uSunColor;
@@ -295,6 +303,7 @@ export function createFluffyGrassMaterial(
       varying float vTerrainMicroAo;
       varying float vTerrainMacroAo;
       varying vec3 vWorldPos;
+      varying vec3 vLocalPlanetDir;
       #include <logdepthbuf_pars_fragment>
 
       float terrainBakedAmbientOcclusion(float bakedAo, float amount, float nearFloor, float farFloor) {
@@ -356,7 +365,7 @@ export function createFluffyGrassMaterial(
         vec3 radialUp = normalize(vWorldPos - uPlanetCenter);
         vec3 terrainNormal = normalize(vTerrainNormal);
         vec3 color = applyGrassLighting(baseColor, terrainNormal, radialUp, vWorldPos, vTerrainMicroAo, vTerrainMacroAo);
-        color = applyCloudShadow(color, radialUp, normalize(uSunPosition - vWorldPos), 1.0);
+        color = applyCloudShadow(color, normalize(vLocalPlanetDir), normalize(uCloudLocalSunDirection), 1.0);
         gl_FragColor = vec4(color, 1.0);
       }
     `,

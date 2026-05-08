@@ -224,6 +224,7 @@ export class PlanetRenderer {
   private grassFarMinLod = 0
   private grassVisibleInstances = 0
   private sunPosition = new THREE.Vector3(0, 0, 0)
+  private cloudLocalSunDirection = new THREE.Vector3(0, 1, 0)
   private sunColor = new THREE.Color(0xfff2c8)
   private atmosphereColor = new THREE.Color(0x6fa8dc)
   private cloudColor = new THREE.Color(0xe8edf2)
@@ -691,6 +692,11 @@ export class PlanetRenderer {
   private copyColorUniform(material: THREE.ShaderMaterial | null, name: string, color: THREE.Color) {
     const uniform = material?.uniforms[name]
     if (uniform?.value?.copy) uniform.value.copy(color)
+  }
+
+  private copyVectorUniform(material: THREE.ShaderMaterial | null, name: string, vector: THREE.Vector3) {
+    const uniform = material?.uniforms[name]
+    if (uniform?.value?.copy) uniform.value.copy(vector)
   }
 
   private setFloatUniform(material: THREE.ShaderMaterial | null, name: string, value: number) {
@@ -1300,6 +1306,12 @@ export class PlanetRenderer {
     this.group.getWorldQuaternion(planetQuat)
     const inversePlanetQuat = planetQuat.clone().invert()
     const localCamPos = camPos.clone().sub(planetPos).applyQuaternion(inversePlanetQuat)
+    this.cloudLocalSunDirection.copy(this.sunPosition).sub(planetPos).applyQuaternion(inversePlanetQuat)
+    if (this.cloudLocalSunDirection.lengthSq() > 0.000001) {
+      this.cloudLocalSunDirection.normalize()
+    } else {
+      this.cloudLocalSunDirection.set(0, 1, 0)
+    }
     this.chunkPriorityCache.clear()
 
     const surfaceDist = this.getLocalSurfaceDistance(localCamPos)
@@ -1316,6 +1328,18 @@ export class PlanetRenderer {
     this.cloudBillboardMaterial?.uniforms.uSunPosition.value.copy(this.sunPosition)
     this.oceanMaterial?.uniforms.uSunPosition.value.copy(this.sunPosition)
     this.atmosphereMaterial?.uniforms.uSunPosition.value.copy(this.sunPosition)
+    const cloudLocalSunMaterials = [
+      this.material,
+      ...this.farLodMaterials,
+      this.fallbackMaterial,
+      this.oceanMaterial,
+      this.cloudMaterial,
+      this.grassMaterial,
+      this.farGrassMaterial,
+    ]
+    for (const material of cloudLocalSunMaterials) {
+      this.copyVectorUniform(material, 'uCloudLocalSunDirection', this.cloudLocalSunDirection)
+    }
     this.updateLightColorUniforms()
     this.setFloatUniform(this.material, 'uTime', this.time)
     for (const material of this.farLodMaterials) {

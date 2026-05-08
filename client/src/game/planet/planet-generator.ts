@@ -604,10 +604,11 @@ vec3 applyCloudShadow(vec3 color, vec3 surfaceDir, vec3 sunDir, float strengthMu
 `
 
 const TERRAIN_CLOUD_SHADOW_GLSL = /* glsl */ `
-vec3 applyTerrainCloudShadow(vec3 color, vec3 surfaceDir, float strengthMultiplier) {
+uniform vec3 uCloudLocalSunDirection;
+
+vec3 applyTerrainCloudShadow(vec3 color, vec3 cloudDir, float strengthMultiplier) {
   if (uPlanetKind > 0.5 && uPlanetKind < 1.5) return color;
-  vec3 sunDir = normalize(uSunPosition - vWorldPos);
-  return applyCloudShadow(color, normalize(surfaceDir), sunDir, strengthMultiplier);
+  return applyCloudShadow(color, normalize(cloudDir), normalize(uCloudLocalSunDirection), strengthMultiplier);
 }
 `
 
@@ -901,7 +902,7 @@ export function createPlanetMaterial(params: {
     finalColor = applyTerrainMacroAoToColor(finalColor, vMacroAo, 0.28);
     finalColor = applyTerrainMicroAoToColor(finalColor, vMicroAo, 0.52 * vNearDetail);
     finalColor = applyGrassGroundAo(finalColor, vGrassPatch, heightNorm, moisture, slope, coast, rockMask, snowMask);
-    finalColor = applyTerrainCloudShadow(finalColor, vRadialNormal, 1.0);
+    finalColor = applyTerrainCloudShadow(finalColor, vSphereDir, 1.0);
     #include <logdepthbuf_fragment>
     gl_FragColor = vec4(finalColor, 1.0);
   }
@@ -943,6 +944,7 @@ export function createPlanetMaterial(params: {
       uCloudSeed: { value: params.seed },
       uCloudMask: { value: params.cloudMask },
       uCloudMaskOffset: { value: 0 },
+      uCloudLocalSunDirection: { value: new THREE.Vector3(0, 1, 0) },
       uTime: { value: 0 },
       uGrassTexture: { value: TERRAIN_TEXTURES.grass },
       uRockTexture: { value: TERRAIN_TEXTURES.rock },
@@ -1193,7 +1195,7 @@ export function createPlanetFarMaterial(params: {
     vec3 finalColor = applyPlanetLighting(terrain, shadingNormal, vRadialNormal, vWorldPos, heightNorm, slope);
     finalColor = applyTerrainMacroAoToColor(finalColor, vMacroAo, 0.24);
     finalColor = applyGrassGroundAo(finalColor, vGrassPatch, heightNorm, moisture, slope, coast, rockMask, snowMask);
-    finalColor = applyTerrainCloudShadow(finalColor, vRadialNormal, 1.0);
+    finalColor = applyTerrainCloudShadow(finalColor, vSphereDir, 1.0);
     #include <logdepthbuf_fragment>
     gl_FragColor = vec4(finalColor, 1.0);
   }
@@ -1241,6 +1243,7 @@ export function createPlanetFarMaterial(params: {
       uCloudSeed: { value: params.seed },
       uCloudMask: { value: params.cloudMask },
       uCloudMaskOffset: { value: 0 },
+      uCloudLocalSunDirection: { value: new THREE.Vector3(0, 1, 0) },
       uTime: { value: 0 },
       uGrassTexture: { value: TERRAIN_TEXTURES.grass },
       uRockTexture: { value: TERRAIN_TEXTURES.rock },
@@ -1456,7 +1459,7 @@ export function createPlanetFallbackMaterial(params: {
 
     vec3 finalColor = applyPlanetLighting(terrain, shadingNormal, vRadialNormal, vWorldPos, heightNorm, slope);
     finalColor = applyTerrainMacroAoToColor(finalColor, vMacroAo, 0.14);
-    finalColor = applyTerrainCloudShadow(finalColor, vRadialNormal, 1.0);
+    finalColor = applyTerrainCloudShadow(finalColor, vSphereDir, 1.0);
     #include <logdepthbuf_fragment>
     gl_FragColor = vec4(finalColor, 1.0);
   }
@@ -1503,6 +1506,7 @@ export function createPlanetFallbackMaterial(params: {
       uCloudSeed: { value: params.seed },
       uCloudMask: { value: params.cloudMask },
       uCloudMaskOffset: { value: 0 },
+      uCloudLocalSunDirection: { value: new THREE.Vector3(0, 1, 0) },
       uTime: { value: 0 },
       uGrassTexture: { value: TERRAIN_TEXTURES.grass },
       uRockTexture: { value: TERRAIN_TEXTURES.rock },
@@ -1720,8 +1724,10 @@ export function createCloudMaterial(params: {
 
   varying vec3 vWorldPos;
   varying vec3 vNormal;
+  varying vec3 vLocalDir;
 
   void main() {
+    vLocalDir = normalize(position);
     vNormal = normalize((modelMatrix * vec4(normal, 0.0)).xyz);
     vec4 worldPos = modelMatrix * vec4(position, 1.0);
     vWorldPos = worldPos.xyz;
@@ -1741,19 +1747,22 @@ export function createCloudMaterial(params: {
   uniform vec3 uCloudColor;
   uniform vec3 uSunPosition;
   uniform vec3 uPlanetCenter;
+  uniform vec3 uCloudLocalSunDirection;
   uniform float uSeed;
   uniform float uOpacity;
   uniform float uCloudColorStrength;
 
   varying vec3 vWorldPos;
   varying vec3 vNormal;
+  varying vec3 vLocalDir;
 
   void main() {
-    vec3 dir = normalize(vWorldPos - uPlanetCenter);
+    vec3 dir = normalize(vLocalDir);
     vec3 shellNormal = normalize(vNormal);
+    vec3 localSunDir = normalize(uCloudLocalSunDirection);
     vec3 sunDir = normalize(uSunPosition - uPlanetCenter);
     vec3 toCamera = normalize(cameraPosition - vWorldPos);
-    float nDotL = dot(dir, sunDir);
+    float nDotL = dot(dir, localSunDir);
     float day = smoothstep(-0.18, 0.60, nDotL);
     float direct = clamp(nDotL, 0.0, 1.0);
     float rim = pow(1.0 - max(dot(toCamera, shellNormal), 0.0), 2.1);
@@ -1826,6 +1835,7 @@ export function createCloudMaterial(params: {
       uCloudColor: { value: cloudColor },
       uSunPosition: { value: params.sunPosition.clone() },
       uPlanetCenter: { value: new THREE.Vector3() },
+      uCloudLocalSunDirection: { value: new THREE.Vector3(0, 1, 0) },
       uCloudMask: { value: params.cloudMask },
       uCloudMaskOffset: { value: 0 },
       uSeed: { value: params.seed },

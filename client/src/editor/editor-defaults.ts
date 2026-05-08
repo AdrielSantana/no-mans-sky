@@ -57,6 +57,7 @@ export interface EditorParams {
   sunColor: string
   sunAzimuth: number
   sunElevation: number
+  planetRotationSpeed: number
   // Noise profile overrides
   octaves: number
   lacunarity: number
@@ -185,6 +186,7 @@ export const DEFAULT_PARAMS: EditorParams = {
   sunColor: '#fff2c8',
   sunAzimuth: 315,
   sunElevation: 28,
+  planetRotationSpeed: 0,
   octaves: 6,
   lacunarity: 2.05,
   gain: 0.48,
@@ -265,6 +267,7 @@ export const RANGES = {
   grassDistance: { min: 20, max: 2500, step: 10 },
   sunAzimuth: { min: 0, max: 360, step: 1 },
   sunElevation: { min: -20, max: 80, step: 1 },
+  planetRotationSpeed: { min: -30, max: 30, step: 0.1 },
   octaves: { min: 1, max: 8, step: 1 },
   lacunarity: { min: 1.0, max: 4.0, step: 0.1 },
   gain: { min: 0.1, max: 0.9, step: 0.01 },

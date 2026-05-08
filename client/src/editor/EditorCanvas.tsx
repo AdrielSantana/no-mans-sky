@@ -10,6 +10,7 @@ interface Props {
 }
 
 const PERF_QUERY_PARAM = 'perf'
+const PLANET_ROTATION_AXIS = new THREE.Vector3(0, 1, 0)
 
 declare global {
   interface Window {
@@ -221,12 +222,18 @@ function buildWalkerTarget(params: EditorParams, renderer: PlanetRenderer): Plan
   }
 }
 
+function syncWalkerTargetRotation(target: PlanetWalkerTarget | null, rotationAngle: number) {
+  target?.worldQuaternion.setFromAxisAngle(PLANET_ROTATION_AXIS, rotationAngle)
+}
+
 export function EditorCanvas({ params }: Props) {
   const containerRef = useRef<HTMLDivElement>(null)
   const engineRef = useRef<GameEngine | null>(null)
   const planetRef = useRef<PlanetRenderer | null>(null)
   const walkerRef = useRef<PlanetWalkerController | null>(null)
+  const walkerTargetRef = useRef<PlanetWalkerTarget | null>(null)
   const paramsRef = useRef(params)
+  const rotationAngleRef = useRef(0)
   const prevRadiusRef = useRef(params.planetRadius)
   const planetKeyRef = useRef(buildPlanetKey(params))
   const initializedRef = useRef(false)
@@ -259,7 +266,9 @@ export function EditorCanvas({ params }: Props) {
     planetRef.current = planet
     initializedRef.current = true
 
-    walker.setTargets([buildWalkerTarget(params, planet)])
+    const walkerTarget = buildWalkerTarget(params, planet)
+    walkerTargetRef.current = walkerTarget
+    walker.setTargets([walkerTarget])
 
     const showPerf = import.meta.env.DEV && new URLSearchParams(window.location.search).has(PERF_QUERY_PARAM)
     const frameSamples: number[] = []
@@ -344,6 +353,15 @@ export function EditorCanvas({ params }: Props) {
         if (frameSamples.length > 240) frameSamples.shift()
       }
       const updateStart = showPerf ? performance.now() : 0
+      const rotationSpeed = THREE.MathUtils.degToRad(paramsRef.current.planetRotationSpeed)
+      if (Math.abs(rotationSpeed) > 1e-6) {
+        rotationAngleRef.current = THREE.MathUtils.euclideanModulo(
+          rotationAngleRef.current + rotationSpeed * dt,
+          Math.PI * 2,
+        )
+        planetRef.current?.setRotation(rotationAngleRef.current, 0)
+        syncWalkerTargetRotation(walkerTargetRef.current, rotationAngleRef.current)
+      }
       walker.update(dt)
       planetRef.current?.update(engine.camera, dt)
       if (showPerf) {
@@ -364,6 +382,7 @@ export function EditorCanvas({ params }: Props) {
       engineRef.current = null
       planetRef.current = null
       walkerRef.current = null
+      walkerTargetRef.current = null
       initializedRef.current = false
       if (window.__nmsEditorDebug?.engine === engine) {
         delete window.__nmsEditorDebug
@@ -435,6 +454,7 @@ export function EditorCanvas({ params }: Props) {
       const newPlanet = createPlanet(engine.scene, engine.renderer, paramsRef.current)
       const latestSunPosition = buildSunPosition(paramsRef.current)
       newPlanet.setSunPosition(latestSunPosition)
+      newPlanet.setRotation(rotationAngleRef.current, 0)
       engine.setSunPosition(latestSunPosition)
       newPlanet.setSunColor(paramsRef.current.sunColor)
       newPlanet.setCloudColor(paramsRef.current.cloudColor)
@@ -472,7 +492,10 @@ export function EditorCanvas({ params }: Props) {
         window.__nmsEditorDebug = { engine, planet: newPlanet, walker }
       }
 
-      walker?.setTargets([buildWalkerTarget(paramsRef.current, newPlanet)])
+      const walkerTarget = buildWalkerTarget(paramsRef.current, newPlanet)
+      syncWalkerTargetRotation(walkerTarget, rotationAngleRef.current)
+      walkerTargetRef.current = walkerTarget
+      walker?.setTargets([walkerTarget])
 
       // Reposition camera only when radius changes
       if (params.planetRadius !== prevRadiusRef.current) {
