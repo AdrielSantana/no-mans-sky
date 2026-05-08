@@ -5,6 +5,7 @@ interface OceanIfftSpectrumParams {
   planetRadius: number
   terrainScale: number
   waterLevel: number
+  // World-unit wave height scale. This is intentionally not planet-relative.
   waveHeight: number
   windSpeed: number
   detail: number
@@ -123,9 +124,8 @@ export class OceanIfftSpectrum {
   private initialized = false
 
   constructor(params: OceanIfftSpectrumParams) {
-    const terrainMeters = Math.max(params.terrainScale * params.planetRadius, 1)
     this.worldSize = THREE.MathUtils.clamp(params.planetRadius * 1.05, 360, 2400)
-    this.heightScale = THREE.MathUtils.clamp(terrainMeters * 0.018 * params.waveHeight, 0.12, params.planetRadius * 0.012)
+    this.heightScale = Math.max(0, params.waveHeight)
     this.choppiness = THREE.MathUtils.clamp(params.choppiness, 0, 2.5)
     this.normalStrength = THREE.MathUtils.clamp(this.heightScale * (1.15 + this.choppiness * 0.42), 1.2, 10)
     this.foamStrength = THREE.MathUtils.clamp(params.foamStrength, 0, 2)

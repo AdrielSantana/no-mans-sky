@@ -540,7 +540,7 @@ export function EditorPanel({ params, onChange }: Props) {
             value={params.oceanWaveHeight}
             onChange={e => set('oceanWaveHeight', Number(e.target.value))}
           />
-          <span className="editor-value">{params.oceanWaveHeight.toFixed(2)}</span>
+          <span className="editor-value">{params.oceanWaveHeight.toFixed(1)}m</span>
         </div>
         <div className="editor-row">
           <span className="editor-label">Wind Speed</span>

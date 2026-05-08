@@ -65,6 +65,7 @@ const OCEAN_SHORE_MASK_HEIGHT = 256
 const OCEAN_SHORE_MASK_BIAS = 0.045
 const OCEAN_SHORE_MASK_SURFACE_EDGE = 0.008
 const OCEAN_SHORE_MASK_DEPTH_SCALE = 0.35
+const DEFAULT_OCEAN_WAVE_HEIGHT = 12.0
 const GRASS_NEAR_LOD_BACKOFF = 3
 const GRASS_FAR_LOD_BACKOFF = 7
 const GRASS_FAR_DISTANCE_MULTIPLIER = 3.0
@@ -1963,12 +1964,13 @@ export class PlanetRenderer {
     this.addOceanTerrainHeightAttribute(oceanGeo)
     this.oceanShoreMask?.dispose()
     this.oceanShoreMask = this.createOceanShoreMaskTexture()
+    const oceanWaveHeight = params.oceanWaveHeight ?? DEFAULT_OCEAN_WAVE_HEIGHT
     const oceanSpectrumParams = {
       seed: Number(params.seed),
       planetRadius: this.planetRadius,
       terrainScale: params.terrainScale,
       waterLevel,
-      waveHeight: params.oceanWaveHeight ?? 1,
+      waveHeight: oceanWaveHeight,
       windSpeed: params.oceanWindSpeed ?? THREE.MathUtils.lerp(18, 32, THREE.MathUtils.clamp(waterLevel, 0, 1)),
       detail: params.oceanDetail ?? 1.45,
       choppiness: params.oceanChoppiness ?? 1.1,
@@ -1996,7 +1998,7 @@ export class PlanetRenderer {
         seed: (Number(params.seed) ^ 0x6A09E667) >>> 0,
         size: 512,
         worldSize: detailWorldSize,
-        waveHeight: (params.oceanWaveHeight ?? 1) * 0.46,
+        waveHeight: oceanWaveHeight * 0.46,
         windSpeed: Math.max(8, oceanSpectrumParams.windSpeed * 0.50),
         detail: Math.min(3, detail * 2.55),
         choppiness: THREE.MathUtils.clamp(oceanSpectrumParams.choppiness * 0.56 + 0.62, 0, 2.5),

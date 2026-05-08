@@ -6,6 +6,7 @@ interface OceanGpuIfftSpectrumParams {
   planetRadius: number
   terrainScale: number
   waterLevel: number
+  // World-unit wave height scale. This is intentionally not planet-relative.
   waveHeight: number
   windSpeed: number
   detail: number
@@ -94,17 +95,12 @@ export class OceanGpuIfftSpectrum {
 
   constructor(renderer: THREE.WebGLRenderer, params: OceanGpuIfftSpectrumParams) {
     this.renderer = renderer
-    const terrainMeters = Math.max(params.terrainScale * params.planetRadius, 1)
     this.size = params.size ?? DEFAULT_GPU_IFFT_SIZE
     this.bits = Math.round(Math.log2(this.size))
     this.minHarmonic = params.minHarmonic ?? 0
     this.maxHarmonic = params.maxHarmonic ?? this.size * 0.48
     this.worldSize = params.worldSize ?? THREE.MathUtils.clamp(params.planetRadius * 1.05, 360, 2400)
-    this.heightScale = THREE.MathUtils.clamp(
-      terrainMeters * 0.018 * params.waveHeight * (params.waveHeightScale ?? 1),
-      0.04,
-      params.planetRadius * 0.012,
-    )
+    this.heightScale = Math.max(0, params.waveHeight * (params.waveHeightScale ?? 1))
     this.choppiness = THREE.MathUtils.clamp(params.choppiness, 0, 2.5)
     this.normalStrength = THREE.MathUtils.clamp(
       this.heightScale * (1.15 + this.choppiness * 0.42) * (params.normalStrengthScale ?? 1),
