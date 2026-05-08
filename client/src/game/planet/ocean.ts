@@ -15,6 +15,8 @@ export interface OceanMaterialParams {
   atmosphereColor: THREE.Color | string
   atmosphereLightColor: THREE.Color | string
   cloudMask: THREE.Texture
+  shoreMask: THREE.Texture
+  shoreMaskDepthScale: number
   cloudShadow?: number
   cloudCoverage?: number
   cloudScale?: number
@@ -277,6 +279,8 @@ export function createOceanMaterial(params: OceanMaterialParams): THREE.ShaderMa
   uniform float uOceanReflectionStrength;
   uniform sampler2D uIfftMap;
   uniform sampler2D uIfftDetailMap;
+  uniform sampler2D uOceanShoreMask;
+  uniform float uOceanShoreMaskDepthScale;
   uniform vec3 uSunPosition;
   uniform vec3 uSunColor;
   uniform vec3 uAtmosphereColor;
@@ -357,10 +361,22 @@ export function createOceanMaterial(params: OceanMaterialParams): THREE.ShaderMa
     return normalize(radialNormal - worldTangent * tx * normalStrength - worldBitangent * ty * normalStrength);
   }
 
+  vec2 oceanShoreMaskUv(vec3 sphereDir) {
+    vec3 n = normalize(sphereDir);
+    const float invTau = 0.15915494309189535;
+    const float invPi = 0.3183098861837907;
+    float longitude = atan(n.z, n.x);
+    float latitude = asin(clamp(n.y, -1.0, 1.0));
+    return vec2(fract(longitude * invTau + 0.5), latitude * invPi + 0.5);
+  }
+
   void main() {
     float waterDepthRaw = uSeaHeight - vTerrainHeight;
-    float waterMask = 1.0 - smoothstep(-0.004, 0.010, -waterDepthRaw);
+    vec4 shoreMaskSample = texture2D(uOceanShoreMask, oceanShoreMaskUv(vSphereDir));
+    float vertexWaterMask = smoothstep(-0.045, 0.008, waterDepthRaw);
+    float waterMask = max(vertexWaterMask, shoreMaskSample.r);
     if (waterMask <= 0.01) discard;
+    waterDepthRaw = max(max(waterDepthRaw, shoreMaskSample.g * uOceanShoreMaskDepthScale), 0.0);
 
     vec3 radial = normalize(vRadialNormal);
     vec3 normal = oceanNormal(normalize(vSphereDir), radial);
@@ -546,6 +562,8 @@ export function createOceanMaterial(params: OceanMaterialParams): THREE.ShaderMa
       uIfftDetailChoppiness: { value: params.ifftDetailChoppiness ?? params.ifftChoppiness },
       uIfftDetailNearDistance: { value: params.ifftDetailNearDistance ?? 900 },
       uIfftDetailFarDistance: { value: params.ifftDetailFarDistance ?? 5200 },
+      uOceanShoreMask: { value: params.shoreMask },
+      uOceanShoreMaskDepthScale: { value: params.shoreMaskDepthScale },
       uOceanSpecularStrength: { value: params.specularStrength ?? 1 },
       uOceanClarity: { value: params.clarity ?? 0.72 },
       uOceanAbsorption: { value: params.absorption ?? 0.85 },

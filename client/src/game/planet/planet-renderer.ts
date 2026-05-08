@@ -23,6 +23,7 @@ import {
 import { WORLD_SCALE } from '../world-scale'
 import {
   samplePlanetHeight,
+  samplePlanetHeightDetailed,
   samplePlanetRadius,
   samplePlanetRadiusDetailed,
   type PlanetTerrainParams,
@@ -59,6 +60,11 @@ const OCEAN_DETAIL_IFFT_FULL_DISTANCE = 900
 const OCEAN_DETAIL_IFFT_HALF_DISTANCE = 1800
 const OCEAN_DETAIL_IFFT_QUARTER_DISTANCE = 2800
 const OCEAN_DETAIL_IFFT_DISABLE_DISTANCE = 4200
+const OCEAN_SHORE_MASK_WIDTH = 512
+const OCEAN_SHORE_MASK_HEIGHT = 256
+const OCEAN_SHORE_MASK_BIAS = 0.045
+const OCEAN_SHORE_MASK_SURFACE_EDGE = 0.008
+const OCEAN_SHORE_MASK_DEPTH_SCALE = 0.35
 const GRASS_NEAR_LOD_BACKOFF = 3
 const GRASS_FAR_LOD_BACKOFF = 7
 const GRASS_FAR_DISTANCE_MULTIPLIER = 3.0
@@ -69,6 +75,11 @@ const FAR_TEXTURE_LOD_BANDS = [
   { maxLod: 8, detailScale: 0.420, farScale: 0.110, farStrength: 0.48 },
   { maxLod: Infinity, detailScale: 0.650, farScale: 0.160, farStrength: 0.44 },
 ]
+
+function smoothstepNumber(edge0: number, edge1: number, value: number): number {
+  const t = THREE.MathUtils.clamp((value - edge0) / Math.max(edge1 - edge0, 1e-6), 0, 1)
+  return t * t * (3 - 2 * t)
+}
 
 interface TerrainWorkerSlot {
   worker: Worker
@@ -196,6 +207,7 @@ export class PlanetRenderer {
   private oceanDetailIfft: OceanGpuIfftSpectrum | null = null
   private oceanDetailIfftFrame = 0
   private oceanMesh: THREE.Mesh | null = null
+  private oceanShoreMask: THREE.DataTexture | null = null
   private oceanSeaRadius = 0
   private atmosphereMaterial: THREE.ShaderMaterial | null = null
   private cloudMaterial: THREE.ShaderMaterial | null = null
@@ -1943,6 +1955,8 @@ export class PlanetRenderer {
     this.oceanSeaRadius = seaRadius
     const oceanGeo = new THREE.IcosahedronGeometry(seaRadius, OCEAN_GEODESIC_DETAIL)
     this.addOceanTerrainHeightAttribute(oceanGeo)
+    this.oceanShoreMask?.dispose()
+    this.oceanShoreMask = this.createOceanShoreMaskTexture()
     const oceanSpectrumParams = {
       seed: Number(params.seed),
       planetRadius: this.planetRadius,
@@ -2002,6 +2016,8 @@ export class PlanetRenderer {
       atmosphereColor: this.atmosphereColor,
       atmosphereLightColor: this.atmosphereLightColor,
       cloudMask: this.cloudMask.texture,
+      shoreMask: this.oceanShoreMask,
+      shoreMaskDepthScale: OCEAN_SHORE_MASK_DEPTH_SCALE,
       cloudShadow: this.cloudShadow,
       cloudCoverage: this.cloudCoverage,
       cloudScale: this.cloudScale,
@@ -2049,10 +2065,50 @@ export class PlanetRenderer {
 
     for (let i = 0; i < positions.count; i++) {
       dir.fromBufferAttribute(positions, i).normalize()
-      heights[i] = samplePlanetHeight(dir, this.terrainParams)
+      heights[i] = samplePlanetHeightDetailed(dir, this.terrainParams, 1)
     }
 
     geometry.setAttribute('terrainHeight', new THREE.BufferAttribute(heights, 1))
+  }
+
+  private createOceanShoreMaskTexture(): THREE.DataTexture {
+    const width = OCEAN_SHORE_MASK_WIDTH
+    const height = OCEAN_SHORE_MASK_HEIGHT
+    const data = new Uint8Array(width * height * 4)
+    const dir = new THREE.Vector3()
+
+    for (let y = 0; y < height; y++) {
+      const v = (y + 0.5) / height
+      const latitude = (v - 0.5) * Math.PI
+      const sinLat = Math.sin(latitude)
+      const cosLat = Math.cos(latitude)
+
+      for (let x = 0; x < width; x++) {
+        const u = (x + 0.5) / width
+        const longitude = (u - 0.5) * Math.PI * 2
+        const index = (y * width + x) * 4
+
+        dir.set(Math.cos(longitude) * cosLat, sinLat, Math.sin(longitude) * cosLat)
+        const terrainHeight = samplePlanetHeightDetailed(dir, this.terrainParams, 1)
+        const waterDepth = this.seaHeight - terrainHeight
+        const waterMask = smoothstepNumber(-OCEAN_SHORE_MASK_BIAS, OCEAN_SHORE_MASK_SURFACE_EDGE, waterDepth)
+        const depthMask = THREE.MathUtils.clamp(waterDepth / OCEAN_SHORE_MASK_DEPTH_SCALE, 0, 1)
+
+        data[index] = Math.round(waterMask * 255)
+        data[index + 1] = Math.round(depthMask * 255)
+        data[index + 2] = 0
+        data[index + 3] = 255
+      }
+    }
+
+    const texture = new THREE.DataTexture(data, width, height, THREE.RGBAFormat, THREE.UnsignedByteType)
+    texture.wrapS = THREE.RepeatWrapping
+    texture.wrapT = THREE.ClampToEdgeWrapping
+    texture.minFilter = THREE.LinearFilter
+    texture.magFilter = THREE.LinearFilter
+    texture.generateMipmaps = false
+    texture.needsUpdate = true
+    return texture
   }
 
   private updateOceanRenderState(useTerrain: boolean) {
@@ -2303,6 +2359,7 @@ export class PlanetRenderer {
     this.oceanMaterial?.dispose()
     this.oceanIfft?.dispose()
     this.oceanDetailIfft?.dispose()
+    this.oceanShoreMask?.dispose()
     this.grassMaterial?.dispose()
     this.farGrassMaterial?.dispose()
     this.atmosphereMaterial?.dispose()
