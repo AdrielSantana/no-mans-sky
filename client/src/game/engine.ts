@@ -7,9 +7,31 @@ import { UnrealBloomPass } from 'three/examples/jsm/postprocessing/UnrealBloomPa
 import { OutputPass } from 'three/examples/jsm/postprocessing/OutputPass.js'
 import { createSkybox } from './skybox'
 import { WORLD_SCALE } from './world-scale'
-import { CLOUD_RENDER_LAYER, MAIN_RENDER_LAYER } from './render-layers'
+import { CLOUD_RENDER_LAYER } from './render-layers'
 
 const CLOUD_RENDER_SCALE = 0.5
+const CLOUD_OBJECT_REFRESH_INTERVAL = 30
+
+function createDepthTexture(width: number, height: number, name: string): THREE.DepthTexture {
+  const texture = new THREE.DepthTexture(width, height)
+  texture.name = name
+  texture.format = THREE.DepthFormat
+  texture.type = THREE.UnsignedIntType
+  texture.minFilter = THREE.NearestFilter
+  texture.magFilter = THREE.NearestFilter
+  return texture
+}
+
+function createComposerRenderTarget(width: number, height: number): THREE.WebGLRenderTarget {
+  const target = new THREE.WebGLRenderTarget(width, height, {
+    type: THREE.HalfFloatType,
+    depthBuffer: true,
+    stencilBuffer: false,
+  })
+  target.texture.name = 'EffectComposer.rt1'
+  target.depthTexture = createDepthTexture(width, height, 'main-scene-depth')
+  return target
+}
 
 export interface UnderwaterFilterSettings {
   enabled: boolean
@@ -23,10 +45,18 @@ class CloudCompositePass extends Pass {
   private scene: THREE.Scene
   private camera: THREE.Camera
   private cloudTarget: THREE.WebGLRenderTarget
+  private cloudDepthTarget: THREE.WebGLRenderTarget
   private material: THREE.ShaderMaterial
   private fsQuad: FullScreenQuad
   private clearColor = new THREE.Color()
-  private materialColorWrite = new Map<THREE.Material, boolean>()
+  private cloudRenderObjects: THREE.Object3D[] = []
+  private cloudObjectRefreshFrame = CLOUD_OBJECT_REFRESH_INTERVAL
+  private depthOnlyMaterial = new THREE.MeshBasicMaterial({
+    colorWrite: false,
+    depthWrite: true,
+    depthTest: true,
+    side: THREE.FrontSide,
+  })
 
   constructor(scene: THREE.Scene, camera: THREE.Camera) {
     super()
@@ -34,13 +64,17 @@ class CloudCompositePass extends Pass {
     this.camera = camera
     this.needsSwap = true
     this.cloudTarget = this.createCloudTarget(1, 1)
+    this.cloudDepthTarget = this.createDepthTarget(1, 1, 'cloud-depth')
     this.material = new THREE.ShaderMaterial({
       depthTest: false,
       depthWrite: false,
       uniforms: {
         tDiffuse: { value: null },
         tClouds: { value: this.cloudTarget.texture },
+        tCloudDepth: { value: this.cloudDepthTarget.depthTexture },
+        tSceneDepth: { value: null },
         uCloudEnabled: { value: 1 },
+        uDepthBias: { value: 0.000002 },
       },
       vertexShader: /* glsl */ `
         varying vec2 vUv;
@@ -53,12 +87,20 @@ class CloudCompositePass extends Pass {
       fragmentShader: /* glsl */ `
         uniform sampler2D tDiffuse;
         uniform sampler2D tClouds;
+        uniform sampler2D tCloudDepth;
+        uniform sampler2D tSceneDepth;
         uniform float uCloudEnabled;
+        uniform float uDepthBias;
         varying vec2 vUv;
 
         void main() {
           vec4 base = texture2D(tDiffuse, vUv);
           vec4 clouds = texture2D(tClouds, vUv);
+          float sceneDepth = texture2D(tSceneDepth, vUv).x;
+          float cloudDepth = texture2D(tCloudDepth, vUv).x;
+          float hasSceneDepth = 1.0 - step(0.9999, sceneDepth);
+          float cloudBehindScene = step(sceneDepth - uDepthBias, cloudDepth) * hasSceneDepth;
+          clouds.a *= 1.0 - cloudBehindScene;
           clouds.a *= uCloudEnabled;
           gl_FragColor = vec4(mix(base.rgb, clouds.rgb, clouds.a), max(base.a, clouds.a));
         }
@@ -76,6 +118,20 @@ class CloudCompositePass extends Pass {
       stencilBuffer: false,
     })
     target.texture.name = 'cloud-half-res'
+    target.depthTexture = createDepthTexture(width, height, 'cloud-half-res-depth')
+    return target
+  }
+
+  private createDepthTarget(width: number, height: number, name: string): THREE.WebGLRenderTarget {
+    const target = new THREE.WebGLRenderTarget(width, height, {
+      minFilter: THREE.NearestFilter,
+      magFilter: THREE.NearestFilter,
+      format: THREE.RGBAFormat,
+      depthBuffer: true,
+      stencilBuffer: false,
+    })
+    target.texture.name = name
+    target.depthTexture = createDepthTexture(width, height, `${name}-texture`)
     return target
   }
 
@@ -83,33 +139,62 @@ class CloudCompositePass extends Pass {
     const targetWidth = Math.max(1, Math.floor(width * CLOUD_RENDER_SCALE))
     const targetHeight = Math.max(1, Math.floor(height * CLOUD_RENDER_SCALE))
     this.cloudTarget.setSize(targetWidth, targetHeight)
+    this.cloudDepthTarget.setSize(targetWidth, targetHeight)
   }
 
   render(renderer: THREE.WebGLRenderer, writeBuffer: THREE.WebGLRenderTarget, readBuffer: THREE.WebGLRenderTarget) {
     const hasClouds = this.hasVisibleClouds()
-    if (hasClouds) this.renderClouds(renderer)
+    this.needsSwap = hasClouds
+    if (!hasClouds) return
+
+    this.renderClouds(renderer)
 
     this.material.uniforms.tDiffuse.value = readBuffer.texture
     this.material.uniforms.tClouds.value = this.cloudTarget.texture
+    this.material.uniforms.tCloudDepth.value = this.cloudDepthTarget.depthTexture
+    this.material.uniforms.tSceneDepth.value = readBuffer.depthTexture
     this.material.uniforms.uCloudEnabled.value = hasClouds ? 1 : 0
     renderer.setRenderTarget(this.renderToScreen ? null : writeBuffer)
     this.fsQuad.render(renderer)
   }
 
   private hasVisibleClouds(): boolean {
-    let visible = false
     const cloudLayerMask = 1 << CLOUD_RENDER_LAYER
+
+    if (
+      this.cloudObjectRefreshFrame >= CLOUD_OBJECT_REFRESH_INTERVAL ||
+      this.cloudRenderObjects.some(object => !object.parent || (object.layers.mask & cloudLayerMask) === 0)
+    ) {
+      this.refreshCloudRenderObjects(cloudLayerMask)
+    } else {
+      this.cloudObjectRefreshFrame++
+    }
+
+    return this.cloudRenderObjects.some(object => this.isVisibleInHierarchy(object))
+  }
+
+  private refreshCloudRenderObjects(cloudLayerMask: number) {
+    this.cloudObjectRefreshFrame = 0
+    this.cloudRenderObjects.length = 0
     this.scene.traverse(object => {
-      if (visible) return
-      if (object.visible && (object.layers.mask & cloudLayerMask) !== 0) visible = true
+      if ((object.layers.mask & cloudLayerMask) !== 0) this.cloudRenderObjects.push(object)
     })
-    return visible
+  }
+
+  private isVisibleInHierarchy(object: THREE.Object3D): boolean {
+    let current: THREE.Object3D | null = object
+    while (current) {
+      if (!current.visible) return false
+      current = current.parent
+    }
+    return true
   }
 
   private renderClouds(renderer: THREE.WebGLRenderer) {
     const previousTarget = renderer.getRenderTarget()
     const previousAutoClear = renderer.autoClear
     const previousBackground = this.scene.background
+    const previousOverrideMaterial = this.scene.overrideMaterial
     const previousCameraMask = this.camera.layers.mask
     const previousClearAlpha = renderer.getClearAlpha()
     renderer.getClearColor(this.clearColor)
@@ -118,18 +203,21 @@ class CloudCompositePass extends Pass {
       this.scene.background = null
       renderer.setRenderTarget(this.cloudTarget)
       renderer.setClearColor(0x000000, 0)
-      renderer.clear(true, true, true)
 
-      this.camera.layers.set(MAIN_RENDER_LAYER)
-      this.setSceneColorWrite(false)
+      this.scene.overrideMaterial = this.depthOnlyMaterial
+
+      this.camera.layers.set(CLOUD_RENDER_LAYER)
+      renderer.setRenderTarget(this.cloudDepthTarget)
+      renderer.clear(true, true, true)
       renderer.render(this.scene, this.camera)
-      this.restoreSceneColorWrite()
+      this.scene.overrideMaterial = previousOverrideMaterial
 
       renderer.autoClear = false
-      this.camera.layers.set(CLOUD_RENDER_LAYER)
+      renderer.setRenderTarget(this.cloudTarget)
+      renderer.clear(true, true, true)
       renderer.render(this.scene, this.camera)
     } finally {
-      this.restoreSceneColorWrite()
+      this.scene.overrideMaterial = previousOverrideMaterial
       renderer.autoClear = previousAutoClear
       this.camera.layers.mask = previousCameraMask
       this.scene.background = previousBackground
@@ -138,33 +226,11 @@ class CloudCompositePass extends Pass {
     }
   }
 
-  private setSceneColorWrite(value: boolean) {
-    this.materialColorWrite.clear()
-    this.scene.traverse(object => {
-      const mesh = object as THREE.Mesh
-      const material = mesh.material
-      if (!material) return
-
-      const materials = Array.isArray(material) ? material : [material]
-      for (const item of materials) {
-        if (!this.materialColorWrite.has(item)) {
-          this.materialColorWrite.set(item, item.colorWrite)
-          item.colorWrite = value
-        }
-      }
-    })
-  }
-
-  private restoreSceneColorWrite() {
-    for (const [material, colorWrite] of this.materialColorWrite) {
-      material.colorWrite = colorWrite
-    }
-    this.materialColorWrite.clear()
-  }
-
   dispose() {
     this.cloudTarget.dispose()
+    this.cloudDepthTarget.dispose()
     this.material.dispose()
+    this.depthOnlyMaterial.dispose()
     this.fsQuad.dispose()
   }
 }
@@ -362,7 +428,7 @@ export class GameEngine {
     this.controls.maxDistance = WORLD_SCALE.orbitMaxDistance
 
     // Bloom
-    this.composer = new EffectComposer(this.renderer)
+    this.composer = new EffectComposer(this.renderer, createComposerRenderTarget(width, height))
     this.composer.setPixelRatio(this.pixelRatioLimit)
     this.composer.addPass(new RenderPass(this.scene, this.camera))
     const cloudPass = new CloudCompositePass(this.scene, this.camera)
