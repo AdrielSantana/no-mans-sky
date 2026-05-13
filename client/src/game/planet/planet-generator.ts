@@ -1358,6 +1358,7 @@ export function createPlanetFallbackMaterial(params: {
   uniform vec3 uAtmosphereLightColor;
   uniform vec3 uTwilightColor;
   uniform float uAtmosphereExtinctionStrength;
+  uniform float uSeed;
   uniform float uPlanetKind;
   uniform float uPlanetRadius;
   uniform float uSeaHeight;
@@ -1765,15 +1766,25 @@ export function createCloudMaterial(params: {
     float direct = clamp(nDotL, 0.0, 1.0);
     float rim = pow(1.0 - max(dot(toCamera, shellNormal), 0.0), 2.1);
 
+    float opacity = clamp(uOpacity, 0.0, 1.0);
     float macroMask = sharedCloudMask(dir);
-    float density = cloudFieldLod(dir);
-    density = mix(density, density * 0.72 + macroMask * 0.82, 0.48);
-    float cloud = cloudMaskFromDensity(density);
-    float body = cloudBodyFromDensity(density);
     float macroGate = smoothstep(0.015, 0.16, macroMask);
+    if (max(macroMask * 0.38, macroGate * 0.12) * opacity < 0.004) discard;
+
     float macroBody = smoothstep(0.22, 0.72, macroMask);
-    cloud = clamp(max(cloud * macroGate, macroMask * 0.38), 0.0, 1.0);
-    body = clamp(max(body * smoothstep(0.08, 0.42, macroMask), macroBody * 0.42), 0.0, 1.0);
+    float density = macroMask;
+    float cloud = macroMask;
+    float body = macroBody;
+
+    if (uCloudQuality >= 0.5) {
+      density = cloudFieldLod(dir);
+      density = mix(density, density * 0.72 + macroMask * 0.82, 0.48);
+      cloud = cloudMaskFromDensity(density);
+      body = cloudBodyFromDensity(density);
+      cloud = clamp(max(cloud * macroGate, macroMask * 0.38), 0.0, 1.0);
+      body = clamp(max(body * smoothstep(0.08, 0.42, macroMask), macroBody * 0.42), 0.0, 1.0);
+    }
+
     float edge = cloudEdgeFromMaskBody(cloud, body);
     float densityTone = clamp(body * 0.72 + density * 0.24, 0.0, 1.0);
 
@@ -1806,7 +1817,7 @@ export function createCloudMaterial(params: {
     float lum = dot(color, vec3(0.2126, 0.7152, 0.0722));
     color = mix(color, uCloudColor * max(lum, 0.0), colorStr);
 
-    float alpha = cloud * clamp(uOpacity, 0.0, 1.0);
+    float alpha = cloud * opacity;
     alpha *= mix(0.28, 1.0, day);
     alpha *= 1.0 - rim * mix(0.18, 0.07, clamp(volume, 0.0, 1.0));
     alpha *= mix(0.88, 1.08, body);
@@ -1825,7 +1836,7 @@ export function createCloudMaterial(params: {
     depthWrite: false,
     depthTest: true,
     blending: THREE.NormalBlending,
-    side: THREE.DoubleSide,
+    side: THREE.FrontSide,
     uniforms: {
       uAtmosphereColor: { value: atmosphereColor },
       uSunColor: { value: sunColor },
@@ -1979,7 +1990,7 @@ export function createCloudBillboardMaterial(params: {
     depthWrite: false,
     depthTest: true,
     blending: THREE.NormalBlending,
-    side: THREE.DoubleSide,
+    side: THREE.FrontSide,
     uniforms: {
       uAtmosphereColor: { value: atmosphereColor },
       uSunColor: { value: sunColor },

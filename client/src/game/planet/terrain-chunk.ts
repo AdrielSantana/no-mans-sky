@@ -156,10 +156,10 @@ export class TerrainChunk {
         const b0 = v(x, 0)
         const b1 = v(end, 0)
         for (let ix = x; ix < end - 1; ix++) {
-          pushTri(b0, v(ix, 1), v(ix + 1, 1))
+          pushTri(b0, v(ix + 1, 1), v(ix, 1))
         }
-        pushTri(b0, v(end - 1, 1), b1)
-        pushTri(b1, v(end - 1, 1), v(end, 1))
+        pushTri(b0, b1, v(end - 1, 1))
+        pushTri(b1, v(end, 1), v(end - 1, 1))
       }
     }
 
@@ -169,11 +169,11 @@ export class TerrainChunk {
         const end = Math.min(x + step, seg)
         const b0 = v(x, seg)
         const b1 = v(end, seg)
-        pushTri(b0, b1, v(end - 1, seg - 1))
+        pushTri(b0, v(end - 1, seg - 1), b1)
         for (let ix = end - 1; ix > x; ix--) {
-          pushTri(b0, v(ix, seg - 1), v(ix - 1, seg - 1))
+          pushTri(b0, v(ix - 1, seg - 1), v(ix, seg - 1))
         }
-        pushTri(b1, v(end, seg - 1), v(end - 1, seg - 1))
+        pushTri(b1, v(end - 1, seg - 1), v(end, seg - 1))
       }
     }
 
@@ -183,11 +183,11 @@ export class TerrainChunk {
         const end = Math.min(y + step, seg)
         const b0 = v(0, y)
         const b1 = v(0, end)
-        pushTri(b0, b1, v(1, end - 1))
+        pushTri(b0, v(1, end - 1), b1)
         for (let iy = end - 1; iy > y; iy--) {
-          pushTri(b0, v(1, iy), v(1, iy - 1))
+          pushTri(b0, v(1, iy - 1), v(1, iy))
         }
-        pushTri(b1, v(1, end), v(1, end - 1))
+        pushTri(b1, v(1, end - 1), v(1, end))
       }
     }
 
@@ -198,10 +198,10 @@ export class TerrainChunk {
         const b0 = v(seg, y)
         const b1 = v(seg, end)
         for (let iy = y; iy < end - 1; iy++) {
-          pushTri(b0, v(seg - 1, iy), v(seg - 1, iy + 1))
+          pushTri(b0, v(seg - 1, iy + 1), v(seg - 1, iy))
         }
-        pushTri(b0, v(seg - 1, end - 1), b1)
-        pushTri(b1, v(seg - 1, end - 1), v(seg - 1, end))
+        pushTri(b0, b1, v(seg - 1, end - 1))
+        pushTri(b1, v(seg - 1, end), v(seg - 1, end - 1))
       }
     }
 

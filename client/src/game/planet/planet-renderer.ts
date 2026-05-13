@@ -42,7 +42,7 @@ import { createOceanMaterial } from './ocean'
 import { OceanGpuIfftSpectrum } from './ocean-gpu-ifft'
 import { OceanIfftSpectrum } from './ocean-ifft'
 import { CloudMaskTexture } from './cloud-mask'
-import { CLOUD_RENDER_LAYER } from '../render-layers'
+import { CLOUD_OCCLUDER_RENDER_LAYER, CLOUD_RENDER_LAYER } from '../render-layers'
 
 const SYNC_CHUNK_BUILD_BUDGET_MS = 4
 const WORKER_DISPATCH_BUDGET_MS = 0.8
@@ -55,6 +55,10 @@ const CLOUD_BILLBOARD_MAX_INSTANCES = 1600
 const CLOUD_BILLBOARD_SURFACE_BUDGET = 0.42
 const CLOUD_BILLBOARD_BUDGET_NEAR_DISTANCE = WORLD_SCALE.localDetailFar * 1.25
 const CLOUD_BILLBOARD_BUDGET_FULL_DISTANCE = WORLD_SCALE.localDetailFar * 8
+const CLOUD_BILLBOARD_MEDIUM_QUALITY_MULTIPLIER = 0.72
+const CLOUD_BILLBOARD_LOW_QUALITY_MULTIPLIER = 0.45
+const CLOUD_SHELL_WIDTH_SEGMENTS = 96
+const CLOUD_SHELL_HEIGHT_SEGMENTS = 48
 const OCEAN_GEODESIC_DETAIL = 32
 const OCEAN_DETAIL_IFFT_FULL_DISTANCE = 900
 const OCEAN_DETAIL_IFFT_HALF_DISTANCE = 1800
@@ -556,6 +560,7 @@ export class PlanetRenderer {
     })
     this.fallbackSphere = new THREE.Mesh(fallbackGeo, this.fallbackMaterial)
     this.fallbackSphere.frustumCulled = false
+    this.fallbackSphere.layers.enable(CLOUD_OCCLUDER_RENDER_LAYER)
     this.group.add(this.fallbackSphere)
 
     this.createOceanLayer(params, waterLevel)
@@ -563,7 +568,7 @@ export class PlanetRenderer {
     if (params.planetType !== 'gas' && this.cloudOpacity > 0.001) {
       const cloudRadius = planetRadius * (1 + THREE.MathUtils.clamp(this.cloudHeight, 0.001, 0.20))
       this.cloudMeshBaseRadius = cloudRadius
-      const cloudGeo = new THREE.SphereGeometry(cloudRadius, 128, 72)
+      const cloudGeo = new THREE.SphereGeometry(cloudRadius, CLOUD_SHELL_WIDTH_SEGMENTS, CLOUD_SHELL_HEIGHT_SEGMENTS)
       this.cloudMaterial = createCloudMaterial({
         seed: this.noiseProfile.seed,
         cloudMask: this.cloudMask.texture,
@@ -756,6 +761,10 @@ export class PlanetRenderer {
     return (this.time * Math.max(this.cloudSpeed, 0) * 0.006) % 1
   }
 
+  private hasActiveClouds(): boolean {
+    return this.debugShowClouds && this.cloudOpacity > 0.001
+  }
+
   private getGrassGroundAoStrength(): number {
     if (!this.grassSettings.enabled || this.terrainParams.planetType !== 'rocky') return 0
     return THREE.MathUtils.clamp(this.grassSettings.density * 0.34, 0, 0.46)
@@ -874,7 +883,7 @@ export class PlanetRenderer {
   setGrass(settings: FluffyGrassSettings) {
     const next: FluffyGrassSettings = {
       enabled: settings.enabled,
-      density: THREE.MathUtils.clamp(settings.density, 0, 1.5),
+      density: THREE.MathUtils.clamp(settings.density, 0, 3),
       height: Math.max(0.05, settings.height),
       windStrength: THREE.MathUtils.clamp(settings.windStrength, 0, 2),
       distance: Math.max(1, settings.distance),
@@ -922,7 +931,7 @@ export class PlanetRenderer {
       this.grassMaterial,
       this.farGrassMaterial,
     ]
-    const effectiveShadow = this.debugShowClouds ? this.cloudShadow : 0
+    const effectiveShadow = this.hasActiveClouds() ? this.cloudShadow : 0
 
     for (const material of materials) {
       this.setFloatUniform(material, 'uCloudCoverage', this.cloudCoverage)
@@ -953,8 +962,18 @@ export class PlanetRenderer {
   }
 
   private updateCloudQuality(surfaceDistance: number) {
-    void surfaceDistance
-    this.setCloudQuality(2)
+    const cloudAltitude = this.planetRadius * THREE.MathUtils.clamp(this.cloudHeight, 0.001, 0.20)
+    const orbitLowQualityDistance = Math.max(WORLD_SCALE.localDetailFar * 12, this.planetRadius * 0.09)
+    const highQualityLayerBand = Math.max(WORLD_SCALE.localDetailFar * 4, cloudAltitude * 0.70)
+    const distanceToCloudLayer = Math.abs(Math.max(0, surfaceDistance) - cloudAltitude)
+
+    if (surfaceDistance > orbitLowQualityDistance) {
+      this.setCloudQuality(0)
+    } else if (distanceToCloudLayer < highQualityLayerBand) {
+      this.setCloudQuality(2)
+    } else {
+      this.setCloudQuality(1)
+    }
   }
 
   private setCloudQuality(nextQuality: number) {
@@ -1005,7 +1024,27 @@ export class PlanetRenderer {
       CLOUD_BILLBOARD_BUDGET_NEAR_DISTANCE,
       CLOUD_BILLBOARD_BUDGET_FULL_DISTANCE,
     )
-    return THREE.MathUtils.lerp(CLOUD_BILLBOARD_SURFACE_BUDGET, 1, t)
+    const distanceBudget = THREE.MathUtils.lerp(CLOUD_BILLBOARD_SURFACE_BUDGET, 1, t)
+    const qualityBudget = this.cloudQuality < 0.5
+      ? CLOUD_BILLBOARD_LOW_QUALITY_MULTIPLIER
+      : this.cloudQuality < 1.5
+        ? CLOUD_BILLBOARD_MEDIUM_QUALITY_MULTIPLIER
+        : 1
+    return distanceBudget * qualityBudget
+  }
+
+  private updateCloudRenderSide(localCamPos: THREE.Vector3) {
+    if (!this.cloudMaterial) return
+
+    const cloudRadius = this.planetRadius * (1 + THREE.MathUtils.clamp(this.cloudHeight, 0.001, 0.20))
+    const nextSide = localCamPos.lengthSq() < cloudRadius * cloudRadius
+      ? THREE.BackSide
+      : THREE.FrontSide
+
+    if (this.cloudMaterial.side !== nextSide) {
+      this.cloudMaterial.side = nextSide
+      this.cloudMaterial.needsUpdate = true
+    }
   }
 
   private updateCloudBillboards(localCamPos: THREE.Vector3, surfaceDistance: number) {
@@ -1367,7 +1406,10 @@ export class PlanetRenderer {
     this.chunkPriorityCache.clear()
 
     const surfaceDist = this.getLocalSurfaceDistance(localCamPos)
-    this.updateCloudQuality(surfaceDist)
+    if (this.hasActiveClouds()) {
+      this.updateCloudQuality(surfaceDist)
+      this.updateCloudRenderSide(localCamPos)
+    }
     this.updateSurfaceLightingBlend(surfaceDist)
 
     // Update sun position uniform
@@ -1911,6 +1953,7 @@ export class PlanetRenderer {
       { bottom: false, top: false, left: false, right: false },
       geometryData,
     )
+    chunk.mesh.layers.enable(CLOUD_OCCLUDER_RENDER_LAYER)
     this.attachGrassLayer(chunk)
     return chunk
   }
@@ -2086,6 +2129,7 @@ export class PlanetRenderer {
     this.oceanMesh = new THREE.Mesh(oceanGeo, this.oceanMaterial)
     this.oceanMesh.frustumCulled = false
     this.oceanMesh.renderOrder = 2
+    this.oceanMesh.layers.enable(CLOUD_OCCLUDER_RENDER_LAYER)
     this.group.add(this.oceanMesh)
   }
 
