@@ -471,8 +471,16 @@ export class GameEngine {
     this.sunLight?.position.copy(position)
   }
 
+  getSunPosition(target = new THREE.Vector3()): THREE.Vector3 {
+    return this.sunLight ? target.copy(this.sunLight.position) : target.set(0, 0, 0)
+  }
+
   setSunColor(color: string) {
     this.sunLight?.color.set(color)
+  }
+
+  getSunColor(target = new THREE.Color()): THREE.Color {
+    return this.sunLight ? target.copy(this.sunLight.color) : target.set(0xffffff)
   }
 
   setBloomEnabled(enabled: boolean) {

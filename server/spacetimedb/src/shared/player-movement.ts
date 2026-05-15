@@ -54,6 +54,8 @@ export interface WalkerStepResult {
 
 const WORLD_FORWARD = { x: 0, y: 0, z: -1 }
 const WORLD_RIGHT = { x: 1, y: 0, z: 0 }
+const WALKER_PITCH_LIMIT = Math.PI / 3
+const GROUND_SNAP_DISTANCE = 0.22
 
 export function defaultWalkerParams(terrain: PlanetTerrainParams): WalkerParams {
   return {
@@ -105,7 +107,7 @@ export function simulatePlanetWalker(
     localPosition: { ...previous.localPosition },
     velocity: { ...previous.velocity },
     yaw: previous.yaw + input.yawDelta * params.mouseSensitivity,
-    pitch: clamp(previous.pitch + input.pitchDelta * params.mouseSensitivity, -1.35, 1.35),
+    pitch: clamp(previous.pitch + input.pitchDelta * params.mouseSensitivity, -WALKER_PITCH_LIMIT, WALKER_PITCH_LIMIT),
     grounded: previous.grounded,
   }
 
@@ -139,12 +141,12 @@ export function simulatePlanetWalker(
   const groundRadius = sampleStableGroundRadius(up, state, params)
   const eyeRadius = groundRadius + params.eyeHeight + params.groundClearance
   const currentRadius = length(state.localPosition)
+  const radialSpeed = dot(state.velocity, up)
 
-  if (currentRadius <= eyeRadius) {
+  if (currentRadius <= eyeRadius || (previous.grounded && radialSpeed <= 0.5 && currentRadius <= eyeRadius + GROUND_SNAP_DISTANCE)) {
     state.localPosition = scale(up, eyeRadius)
-    const radial = dot(state.velocity, up)
-    if (radial < 0) {
-      state.velocity = sub(state.velocity, scale(up, radial))
+    if (radialSpeed < 0) {
+      state.velocity = sub(state.velocity, scale(up, radialSpeed))
     }
     state.grounded = true
   } else {
