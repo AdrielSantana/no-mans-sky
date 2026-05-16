@@ -22,12 +22,18 @@ declare global {
   }
 }
 
+function getEffectiveWaterLevel(params: EditorParams): number {
+  return params.waterEnabled ? params.waterLevel : 0
+}
+
 function createPlanet(scene: THREE.Scene, renderer: THREE.WebGLRenderer, params: EditorParams): PlanetRenderer {
+  const waterLevel = getEffectiveWaterLevel(params)
+
   return new PlanetRenderer(scene, params.planetRadius, {
     seed: BigInt(params.seed),
     planetType: params.planetType,
     terrainScale: params.terrainScale,
-    waterLevel: params.waterLevel,
+    waterLevel,
     oceanDeepColor: params.oceanDeepColor,
     oceanShallowColor: params.oceanShallowColor,
     oceanFoamColor: params.oceanFoamColor,
@@ -149,7 +155,8 @@ function buildPlanetKey(params: EditorParams): string {
     planetType: params.planetType,
     planetRadius: params.planetRadius,
     terrainScale: params.terrainScale,
-    waterLevel: params.waterLevel,
+    waterEnabled: params.waterEnabled,
+    waterLevel: getEffectiveWaterLevel(params),
     oceanDeepColor: params.oceanDeepColor,
     oceanShallowColor: params.oceanShallowColor,
     oceanFoamColor: params.oceanFoamColor,

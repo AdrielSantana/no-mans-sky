@@ -3,6 +3,7 @@ export interface EditorParams {
   planetType: string
   planetRadius: number
   terrainScale: number
+  waterEnabled: boolean
   waterLevel: number
   oceanDeepColor: string
   oceanShallowColor: string
@@ -137,6 +138,7 @@ export const DEFAULT_PARAMS: EditorParams = {
   planetType: 'rocky',
   planetRadius: 50000,
   terrainScale: 0.065,
+  waterEnabled: true,
   waterLevel: 0.45,
   oceanDeepColor: '#073a58',
   oceanShallowColor: '#3aa4a7',

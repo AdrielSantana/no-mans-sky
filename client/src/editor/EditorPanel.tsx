@@ -435,6 +435,17 @@ export function EditorPanel({ params, onChange }: Props) {
       <div className="editor-section">
         <div className="editor-section-title">Surface</div>
         <div className="editor-row">
+          <label style={{ display: 'flex', alignItems: 'center', gap: 6, cursor: 'pointer' }}>
+            <input
+              type="checkbox"
+              checked={params.waterEnabled}
+              onChange={e => set('waterEnabled', e.target.checked)}
+              style={{ accentColor: '#2dd4a7' }}
+            />
+            <span className="editor-label" style={{ width: 'auto' }}>Water</span>
+          </label>
+        </div>
+        <div className="editor-row">
           <span className="editor-label">Water Level</span>
           <input
             className="editor-slider"
@@ -443,6 +454,7 @@ export function EditorPanel({ params, onChange }: Props) {
             max={RANGES.waterLevel.max}
             step={RANGES.waterLevel.step}
             value={params.waterLevel}
+            disabled={!params.waterEnabled}
             onChange={e => set('waterLevel', Number(e.target.value))}
           />
           <span className="editor-value">{params.waterLevel.toFixed(2)}</span>
