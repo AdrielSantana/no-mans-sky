@@ -20,11 +20,17 @@ export interface PlanetWalkerTarget {
 }
 
 const THIRD_PERSON_CAMERA_DISTANCE = 4.8
-const THIRD_PERSON_CAMERA_HEIGHT = 1.1
+const THIRD_PERSON_CAMERA_HEIGHT = 0.85
+const THIRD_PERSON_LOOK_TARGET_HEIGHT = 0.25
 const THIRD_PERSON_CAMERA_SHOULDER = 0
+const THIRD_PERSON_CAMERA_BOOM_LENGTH = Math.hypot(
+  THIRD_PERSON_CAMERA_DISTANCE,
+  THIRD_PERSON_CAMERA_HEIGHT,
+  THIRD_PERSON_CAMERA_SHOULDER,
+)
 const CAMERA_COLLISION_RADIUS = 0.32
+const CAMERA_SURFACE_CLEARANCE = 0.28
 const AVATAR_TURN_LERP = 16
-const JUMP_WINDUP_SECONDS = 0.5
 
 function toVec3Like(v: THREE.Vector3): Vec3Like {
   return { x: v.x, y: v.y, z: v.z }
@@ -47,9 +53,6 @@ export class PlanetWalkerController {
   private avatarForward = new THREE.Vector3(0, 0, 1)
   private avatarRight = new THREE.Vector3(1, 0, 0)
   private pendingJumpRequest = false
-  private jumpWindupTimer = 0
-  private jumpLaunchQueued = false
-  private readonly cameraRaycaster = new THREE.Raycaster()
   private readonly onKeyDown = (event: KeyboardEvent) => this.handleKeyDown(event)
   private readonly onKeyUp = (event: KeyboardEvent) => this.handleKeyUp(event)
   private readonly onMouseMove = (event: MouseEvent) => this.handleMouseMove(event)
@@ -79,10 +82,9 @@ export class PlanetWalkerController {
   update(dt: number) {
     if (!this.enabled || !this.activeTarget || !this.state) return
 
-    const rawInput = this.consumeInput()
+    const input = this.consumeInput()
     const wasGrounded = this.state.grounded
-    const jumpStarted = this.updateJumpWindup(wasGrounded, dt)
-    const input = { ...rawInput, jump: this.consumeJumpLaunch() }
+    const jumpStarted = wasGrounded && input.jump
     const walkerParams = {
       ...defaultWalkerParams(this.activeTarget.terrain),
       sampleSurfaceRadius: this.activeTarget.sampleSurfaceRadius,
@@ -104,7 +106,8 @@ export class PlanetWalkerController {
     const worldFeet = worldEye.clone().addScaledVector(worldUp, -(walkerParams.eyeHeight + walkerParams.groundClearance))
     const worldVelocity = toThree(result.state.velocity).applyQuaternion(this.activeTarget.worldQuaternion)
     const tangentVelocity = worldVelocity.clone().addScaledVector(worldUp, -worldVelocity.dot(worldUp))
-    this.updateAvatarFacing(tangentVelocity, worldForward, worldRight, worldUp, rawInput, dt)
+    const verticalSpeed = worldVelocity.dot(worldUp)
+    this.updateAvatarFacing(tangentVelocity, worldForward, worldRight, worldUp, input, dt)
 
     this.avatar.update(dt, {
       position: worldFeet,
@@ -113,13 +116,14 @@ export class PlanetWalkerController {
       up: worldUp,
       sunPosition: this.engine.getSunPosition(),
       sunColor: this.engine.getSunColor(),
-      moveX: rawInput.moveX,
-      moveY: rawInput.moveY,
-      yawDelta: rawInput.yawDelta,
-      sprint: rawInput.sprint,
+      moveX: input.moveX,
+      moveY: input.moveY,
+      yawDelta: input.yawDelta,
+      sprint: input.sprint,
       grounded: result.state.grounded,
       jumpStarted,
       speed: tangentVelocity.length(),
+      verticalSpeed,
     })
     this.applyThirdPersonCamera(worldEye, worldForward, worldRight, worldUp, result.state.pitch, dt)
   }
@@ -229,8 +233,6 @@ export class PlanetWalkerController {
     this.pendingYaw = 0
     this.pendingPitch = 0
     this.pendingJumpRequest = false
-    this.jumpWindupTimer = 0
-    this.jumpLaunchQueued = false
     this.engine.setOrbitControlsEnabled(true)
     this.engine.setPixelRatioLimit(2)
     if (document.pointerLockElement === this.engine.getDomElement()) {
@@ -244,44 +246,15 @@ export class PlanetWalkerController {
     const input = {
       moveX,
       moveY,
-      jump: false,
+      jump: this.pendingJumpRequest,
       sprint: this.keys.has('ShiftLeft') || this.keys.has('ShiftRight'),
       yawDelta: this.pendingYaw,
       pitchDelta: this.pendingPitch,
     }
     this.pendingYaw = 0
     this.pendingPitch = 0
-    return input
-  }
-
-  private updateJumpWindup(wasGrounded: boolean, dt: number): boolean {
-    if (!wasGrounded) {
-      this.pendingJumpRequest = false
-      this.jumpWindupTimer = 0
-      this.jumpLaunchQueued = false
-      return false
-    }
-
-    if (this.jumpWindupTimer > 0) {
-      this.jumpWindupTimer = Math.max(0, this.jumpWindupTimer - dt)
-      if (this.jumpWindupTimer <= 0) {
-        this.jumpLaunchQueued = true
-      }
-      this.pendingJumpRequest = false
-      return false
-    }
-
-    if (!this.pendingJumpRequest) return false
-
     this.pendingJumpRequest = false
-    this.jumpWindupTimer = JUMP_WINDUP_SECONDS
-    return true
-  }
-
-  private consumeJumpLaunch(): boolean {
-    const launch = this.jumpLaunchQueued
-    this.jumpLaunchQueued = false
-    return launch
+    return input
   }
 
   private applyThirdPersonCamera(
@@ -301,11 +274,16 @@ export class PlanetWalkerController {
       .normalize()
     const lookTarget = worldEye.clone()
       .addScaledVector(forward, 1.35)
-      .addScaledVector(up, 0.35)
-    const desiredCameraPosition = lookTarget.clone()
+      .addScaledVector(up, THIRD_PERSON_LOOK_TARGET_HEIGHT)
+    const cameraOffset = new THREE.Vector3()
       .addScaledVector(lookDirection, -THIRD_PERSON_CAMERA_DISTANCE)
       .addScaledVector(right, THIRD_PERSON_CAMERA_SHOULDER)
       .addScaledVector(up, THIRD_PERSON_CAMERA_HEIGHT)
+    if (cameraOffset.lengthSq() > 1e-6) {
+      cameraOffset.setLength(THIRD_PERSON_CAMERA_BOOM_LENGTH)
+    }
+    const desiredCameraPosition = lookTarget.clone()
+      .add(cameraOffset)
     const cameraPosition = this.resolveCameraCollision(lookTarget, desiredCameraPosition)
 
     this.engine.camera.position.copy(cameraPosition)
@@ -340,36 +318,25 @@ export class PlanetWalkerController {
     this.avatarForward.crossVectors(this.avatarRight, worldUp).normalize()
   }
 
-  private resolveCameraCollision(lookTarget: THREE.Vector3, desiredCameraPosition: THREE.Vector3): THREE.Vector3 {
-    const offset = desiredCameraPosition.clone().sub(lookTarget)
-    const distance = offset.length()
-    if (distance <= 0.001) return desiredCameraPosition
+  private resolveCameraCollision(_lookTarget: THREE.Vector3, desiredCameraPosition: THREE.Vector3): THREE.Vector3 {
+    if (!this.activeTarget) return desiredCameraPosition
 
-    const direction = offset.divideScalar(distance)
-    this.cameraRaycaster.set(lookTarget, direction)
-    this.cameraRaycaster.near = 0.2
-    this.cameraRaycaster.far = distance
-    const hits = this.cameraRaycaster.intersectObjects(this.engine.scene.children, true)
-    for (const hit of hits) {
-      if (hit.distance <= CAMERA_COLLISION_RADIUS) continue
-      if (this.isIgnoredCameraCollisionObject(hit.object)) continue
-      return lookTarget.clone().addScaledVector(direction, Math.max(0.2, hit.distance - CAMERA_COLLISION_RADIUS))
-    }
-    return desiredCameraPosition
-  }
+    const inverseTargetRotation = this.activeTarget.worldQuaternion.clone().invert()
+    const localCamera = desiredCameraPosition
+      .clone()
+      .sub(this.activeTarget.worldPosition)
+      .applyQuaternion(inverseTargetRotation)
+    if (localCamera.lengthSq() <= 1e-8) return desiredCameraPosition
 
-  private isIgnoredCameraCollisionObject(object: THREE.Object3D): boolean {
-    let cursor: THREE.Object3D | null = object
-    while (cursor) {
-      if (cursor === this.avatar.group) return true
-      if (cursor.type === 'Scene') break
-      cursor = cursor.parent
-    }
-    if (!object.visible) return true
-    if (object instanceof THREE.Mesh) {
-      const materials = Array.isArray(object.material) ? object.material : [object.material]
-      if (materials.some(material => material.depthTest === false || material.depthWrite === false)) return true
-    }
-    return false
+    const localDir = localCamera.clone().normalize()
+    const surfaceRadius = this.activeTarget.sampleSurfaceRadius?.(toVec3Like(localDir))
+      ?? samplePlanetRadius(toVec3Like(localDir), this.activeTarget.terrain)
+    const minCameraRadius = surfaceRadius + CAMERA_COLLISION_RADIUS + CAMERA_SURFACE_CLEARANCE
+    if (localCamera.length() >= minCameraRadius) return desiredCameraPosition
+
+    const correctedLocalCamera = localDir.multiplyScalar(minCameraRadius)
+    return correctedLocalCamera
+      .applyQuaternion(this.activeTarget.worldQuaternion)
+      .add(this.activeTarget.worldPosition)
   }
 }
