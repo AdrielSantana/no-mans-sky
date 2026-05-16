@@ -202,6 +202,9 @@ function buildWalkerTarget(params: EditorParams, renderer: PlanetRenderer): Plan
     id: 'editor-planet',
     worldPosition: new THREE.Vector3(0, 0, 0),
     worldQuaternion: new THREE.Quaternion(),
+    atmosphereColor: params.atmosphereColor,
+    atmosphereDensity: params.atmosphereDensity,
+    cloudShadow: renderer.getCloudShadowSettings(),
     terrain: {
       seed: params.seed,
       planetType: params.planetType,
@@ -368,6 +371,9 @@ export function EditorCanvas({ params }: Props) {
         )
         planetRef.current?.setRotation(rotationAngleRef.current, 0)
         syncWalkerTargetRotation(walkerTargetRef.current, rotationAngleRef.current)
+      }
+      if (walkerTargetRef.current && planetRef.current) {
+        walkerTargetRef.current.cloudShadow = planetRef.current.getCloudShadowSettings()
       }
       walker.update(dt)
       planetRef.current?.update(engine.camera, dt)

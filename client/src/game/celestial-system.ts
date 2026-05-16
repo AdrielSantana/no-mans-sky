@@ -27,6 +27,12 @@ interface BodyRenderState {
   targetAxialTilt: number
 }
 
+interface WalkerPlanetTargetData {
+  terrain: PlanetWalkerTarget['terrain']
+  atmosphereColor: string
+  atmosphereDensity: number
+}
+
 export class CelestialSystem {
   private scene: THREE.Scene
   private engine: GameEngine
@@ -38,7 +44,7 @@ export class CelestialSystem {
   private geometry = new THREE.SphereGeometry(1, 32, 32)
   private planetRenderers = new Map<string, PlanetRenderer>()
   private bodyStates = new Map<string, BodyRenderState>()
-  private walkerTerrainById = new Map<string, PlanetWalkerTarget['terrain']>()
+  private walkerTargetDataById = new Map<string, WalkerPlanetTargetData>()
   private walkerController: PlanetWalkerController
   private debugWireframe = false
   private readonly onKeyDown = (event: KeyboardEvent) => this.handleKeyDown(event)
@@ -116,28 +122,32 @@ export class CelestialSystem {
           terrainScale: params.terrainScale,
         })
         activePlanetIds.add(id)
-        this.walkerTerrainById.set(id, {
-          seed: Number(params.seed),
-          planetType: params.planetType,
-          radius: body.bodySize,
-          terrainScale: params.terrainScale,
-          frequency: profile.frequency,
-          octaves: profile.octaves,
-          lacunarity: profile.lacunarity,
-          gain: profile.gain,
-          warpStrength: profile.warpStrength,
-          continentalScale: profile.continentalScale,
-          mountainScale: profile.mountainScale,
-          plainsScale: profile.plainsScale,
-          hillsScale: profile.hillsScale,
-          mountainBeltScale: profile.mountainBeltScale,
-          reliefVariety: profile.reliefVariety,
-          erosionStrength: profile.erosionStrength,
-          thermalStrength: profile.thermalStrength,
-          detailStrength: profile.detailStrength,
-          microDetailStrength: profile.microDetailStrength,
-          microDetailScale: profile.microDetailScale,
-          microReliefMeters: profile.microReliefMeters,
+        this.walkerTargetDataById.set(id, {
+          atmosphereColor: params.atmosphereColor,
+          atmosphereDensity: params.atmosphereDensity,
+          terrain: {
+            seed: Number(params.seed),
+            planetType: params.planetType,
+            radius: body.bodySize,
+            terrainScale: params.terrainScale,
+            frequency: profile.frequency,
+            octaves: profile.octaves,
+            lacunarity: profile.lacunarity,
+            gain: profile.gain,
+            warpStrength: profile.warpStrength,
+            continentalScale: profile.continentalScale,
+            mountainScale: profile.mountainScale,
+            plainsScale: profile.plainsScale,
+            hillsScale: profile.hillsScale,
+            mountainBeltScale: profile.mountainBeltScale,
+            reliefVariety: profile.reliefVariety,
+            erosionStrength: profile.erosionStrength,
+            thermalStrength: profile.thermalStrength,
+            detailStrength: profile.detailStrength,
+            microDetailStrength: profile.microDetailStrength,
+            microDetailScale: profile.microDetailScale,
+            microReliefMeters: profile.microReliefMeters,
+          },
         })
       } else {
         // No params — simple sphere (backward compatible)
@@ -160,8 +170,8 @@ export class CelestialSystem {
       }
     }
 
-    for (const id of this.walkerTerrainById.keys()) {
-      if (!activePlanetIds.has(id)) this.walkerTerrainById.delete(id)
+    for (const id of this.walkerTargetDataById.keys()) {
+      if (!activePlanetIds.has(id)) this.walkerTargetDataById.delete(id)
     }
     this.removeInactive(activeIds)
   }
@@ -206,7 +216,7 @@ export class CelestialSystem {
         renderer.dispose()
         this.planetRenderers.delete(id)
         this.bodyStates.delete(id)
-        this.walkerTerrainById.delete(id)
+        this.walkerTargetDataById.delete(id)
       }
     }
 
@@ -274,7 +284,7 @@ export class CelestialSystem {
 
   private updateWalkerTargets() {
     const targets: PlanetWalkerTarget[] = []
-    for (const [id, terrain] of this.walkerTerrainById) {
+    for (const [id, targetData] of this.walkerTargetDataById) {
       const state = this.bodyStates.get(id)
       if (!state) continue
       const renderer = this.planetRenderers.get(id)
@@ -282,7 +292,10 @@ export class CelestialSystem {
         id,
         worldPosition: state.currentPosition.clone(),
         worldQuaternion: this.getBodyQuaternion(state),
-        terrain,
+        terrain: targetData.terrain,
+        atmosphereColor: targetData.atmosphereColor,
+        atmosphereDensity: targetData.atmosphereDensity,
+        cloudShadow: renderer?.getCloudShadowSettings(),
         sampleSurfaceRadius: renderer ? dir => renderer.sampleSurfaceRadius(dir) : undefined,
       })
     }
@@ -336,7 +349,7 @@ export class CelestialSystem {
     this.meshes.clear()
     this.planetRenderers.clear()
     this.bodyStates.clear()
-    this.walkerTerrainById.clear()
+    this.walkerTargetDataById.clear()
     this.geometry.dispose()
   }
 }

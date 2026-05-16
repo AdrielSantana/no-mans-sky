@@ -765,6 +765,15 @@ export class PlanetRenderer {
     return this.debugShowClouds && this.cloudOpacity > 0.001
   }
 
+  getCloudShadowSettings() {
+    return {
+      mask: this.cloudMask.texture,
+      maskOffset: this.getCloudMaskOffset(),
+      height: this.cloudHeight,
+      strength: this.hasActiveClouds() ? this.cloudShadow : 0,
+    }
+  }
+
   private getGrassGroundAoStrength(): number {
     if (!this.grassSettings.enabled || this.terrainParams.planetType !== 'rocky') return 0
     return THREE.MathUtils.clamp(this.grassSettings.density * 0.34, 0, 0.46)

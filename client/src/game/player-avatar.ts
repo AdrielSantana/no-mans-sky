@@ -13,6 +13,15 @@ import walkingUrl from "../assets/animations/locomotion_pack/walking.fbx?url";
 type GroundActionName = "idle" | "walk" | "run";
 type AvatarActionName = GroundActionName | "jump" | "fall" | "land";
 
+const DEFAULT_CLOUD_SHADOW_TEXTURE = new THREE.DataTexture(
+  new Uint8Array([255, 255, 255, 255]),
+  1,
+  1,
+  THREE.RGBAFormat
+);
+DEFAULT_CLOUD_SHADOW_TEXTURE.name = "default-player-cloud-shadow";
+DEFAULT_CLOUD_SHADOW_TEXTURE.needsUpdate = true;
+
 export interface PlayerAvatarPose {
   position: THREE.Vector3;
   forward: THREE.Vector3;
@@ -20,6 +29,15 @@ export interface PlayerAvatarPose {
   up: THREE.Vector3;
   sunPosition: THREE.Vector3;
   sunColor: THREE.Color;
+  atmosphereLightColor: THREE.Color;
+  atmosphereInfluence: number;
+  cloudMask: THREE.Texture | null;
+  cloudMaskOffset: number;
+  cloudHeight: number;
+  cloudShadowStrength: number;
+  cloudShadowInfluence: number;
+  cloudLocalSurfaceDirection: THREE.Vector3;
+  cloudLocalSunDirection: THREE.Vector3;
   moveX: number;
   moveY: number;
   yawDelta: number;
@@ -258,7 +276,16 @@ export class PlayerAvatar {
         uMap: { value: texture },
         uSunDirection: { value: new THREE.Vector3(0, 1, 0) },
         uSunColor: { value: new THREE.Color(0xfff2c8) },
+        uAtmosphereLightColor: { value: new THREE.Color(0xc4d5df) },
+        uAtmosphereInfluence: { value: 1 },
         uPlanetUp: { value: new THREE.Vector3(0, 1, 0) },
+        uCloudMask: { value: DEFAULT_CLOUD_SHADOW_TEXTURE },
+        uCloudMaskOffset: { value: 0 },
+        uCloudHeight: { value: 0.045 },
+        uCloudShadowStrength: { value: 0 },
+        uCloudShadowInfluence: { value: 0 },
+        uCloudLocalSurfaceDirection: { value: new THREE.Vector3(0, 1, 0) },
+        uCloudLocalSunDirection: { value: new THREE.Vector3(0, 1, 0) },
       },
       vertexShader: /* glsl */ `
         #include <common>
@@ -267,6 +294,8 @@ export class PlayerAvatar {
 
         uniform vec3 uSunDirection;
         uniform vec3 uSunColor;
+        uniform vec3 uAtmosphereLightColor;
+        uniform float uAtmosphereInfluence;
         uniform vec3 uPlanetUp;
 
         varying vec2 vUv;
@@ -285,18 +314,30 @@ export class PlayerAvatar {
           vec3 upDir = normalize(uPlanetUp);
           vec3 sunDir = normalize(uSunDirection);
 
-          float day = smoothstep(-0.18, 0.12, dot(upDir, sunDir));
+          float upSun = dot(upDir, sunDir);
+          float atmosphereInfluence = clamp(uAtmosphereInfluence, 0.0, 1.0);
+          float day = smoothstep(-0.18, 0.12, upSun);
           float direct = max(dot(worldNormal, sunDir), 0.0);
           float wrap = max(dot(worldNormal, sunDir) * 0.5 + 0.5, 0.0);
           float sky = 0.16 + 0.22 * max(dot(worldNormal, upDir) * 0.5 + 0.5, 0.0);
           float groundBounce = 0.10 * max(dot(worldNormal, -upDir) * 0.5 + 0.5, 0.0) * day;
+          float lowSun = pow(1.0 - clamp(upSun * 0.92 + 0.08, 0.0, 1.0), 1.8)
+            * smoothstep(-0.24, 0.50, upSun);
+          float terminator = smoothstep(-0.34, 0.18, upSun) * (1.0 - smoothstep(0.22, 0.72, upSun));
 
-          vec3 nightAmbient = vec3(0.120, 0.130, 0.155);
+          vec3 nightAmbient = vec3(0.018, 0.024, 0.038);
           vec3 dayAmbient = vec3(0.18, 0.19, 0.20);
-          vec3 ambient = mix(nightAmbient, dayAmbient, day) * sky;
-          vec3 sunlight = uSunColor * (direct * 1.12 + wrap * 0.22) * day;
+          vec3 ambientTint = mix(vec3(1.0), uAtmosphereLightColor, atmosphereInfluence * (day * 0.20 + terminator * 0.08));
+          vec3 ambient = mix(nightAmbient, dayAmbient, day) * sky * ambientTint;
+          vec3 sunsetTint = mix(vec3(1.0, 0.34, 0.10), uSunColor, 0.36);
+          sunsetTint = mix(sunsetTint, uAtmosphereLightColor, 0.18);
+          vec3 atmosphericSunTint = mix(vec3(1.0), uAtmosphereLightColor, 0.70);
+          atmosphericSunTint = mix(atmosphericSunTint, sunsetTint, lowSun * 0.59);
+          vec3 sunTint = mix(uSunColor, atmosphericSunTint, atmosphereInfluence);
+          vec3 sunlight = sunTint * (direct * 1.12 + wrap * 0.22) * day;
           vec3 terrain = vec3(0.23, 0.25, 0.20) * groundBounce;
-          vLight = max(ambient + sunlight + terrain, vec3(0.12));
+          vec3 minimumLight = mix(vec3(0.010, 0.014, 0.022), vec3(0.055), day);
+          vLight = max(ambient + sunlight + terrain, minimumLight);
 
           gl_Position = projectionMatrix * viewMatrix * worldPos;
           #include <logdepthbuf_vertex>
@@ -306,13 +347,47 @@ export class PlayerAvatar {
         #include <logdepthbuf_pars_fragment>
 
         uniform sampler2D uMap;
+        uniform sampler2D uCloudMask;
+        uniform float uCloudMaskOffset;
+        uniform float uCloudHeight;
+        uniform float uCloudShadowStrength;
+        uniform float uCloudShadowInfluence;
+        uniform vec3 uCloudLocalSurfaceDirection;
+        uniform vec3 uCloudLocalSunDirection;
 
         varying vec2 vUv;
         varying vec3 vLight;
 
+        vec2 cloudMaskUv(vec3 dir) {
+          vec3 n = normalize(dir);
+          float lon = atan(n.x, n.z);
+          float lat = asin(clamp(n.y, -1.0, 1.0));
+          return vec2(
+            fract(lon / 6.28318530718 + 0.5 + uCloudMaskOffset),
+            clamp(0.5 - lat / 3.14159265359, 0.0, 1.0)
+          );
+        }
+
+        float playerCloudShadowMask() {
+          if (uCloudShadowStrength <= 0.001 || uCloudShadowInfluence <= 0.001) return 0.0;
+          vec3 surfaceDir = normalize(uCloudLocalSurfaceDirection);
+          vec3 sunDir = normalize(uCloudLocalSunDirection);
+          float daylight = smoothstep(-0.08, 0.62, dot(surfaceDir, sunDir));
+          float offset = clamp(uCloudHeight, 0.0, 0.20) * 2.8 + 0.018;
+          vec3 projectedDir = normalize(surfaceDir + sunDir * offset);
+          float macroMask = texture2D(uCloudMask, cloudMaskUv(projectedDir)).r;
+          float shadow = pow(smoothstep(0.05, 0.96, macroMask), 0.58);
+          float strength = clamp(uCloudShadowStrength * 0.42, 0.0, 2.2);
+          return shadow * daylight * strength * clamp(uCloudShadowInfluence, 0.0, 1.0);
+        }
+
         void main() {
           vec3 texel = texture2D(uMap, vUv).rgb;
-          gl_FragColor = vec4(texel * vLight, 1.0);
+          vec3 color = texel * vLight;
+          float cloudShadow = playerCloudShadowMask();
+          vec3 coolShadow = color * vec3(0.11, 0.14, 0.19);
+          color = mix(color, coolShadow, clamp(cloudShadow, 0.0, 0.96));
+          gl_FragColor = vec4(color, 1.0);
           #include <logdepthbuf_fragment>
         }
       `,
@@ -410,7 +485,27 @@ export class PlayerAvatar {
     }
     this.avatarMaterial.uniforms.uSunDirection.value.copy(sunDirection);
     this.avatarMaterial.uniforms.uSunColor.value.copy(pose.sunColor);
+    this.avatarMaterial.uniforms.uAtmosphereLightColor.value.copy(
+      pose.atmosphereLightColor
+    );
+    this.avatarMaterial.uniforms.uAtmosphereInfluence.value =
+      pose.atmosphereInfluence;
     this.avatarMaterial.uniforms.uPlanetUp.value.copy(pose.up);
+    if (pose.cloudMask) {
+      this.avatarMaterial.uniforms.uCloudMask.value = pose.cloudMask;
+    }
+    this.avatarMaterial.uniforms.uCloudMaskOffset.value = pose.cloudMaskOffset;
+    this.avatarMaterial.uniforms.uCloudHeight.value = pose.cloudHeight;
+    this.avatarMaterial.uniforms.uCloudShadowStrength.value =
+      pose.cloudShadowStrength;
+    this.avatarMaterial.uniforms.uCloudShadowInfluence.value =
+      pose.cloudShadowInfluence;
+    this.avatarMaterial.uniforms.uCloudLocalSurfaceDirection.value.copy(
+      pose.cloudLocalSurfaceDirection
+    );
+    this.avatarMaterial.uniforms.uCloudLocalSunDirection.value.copy(
+      pose.cloudLocalSunDirection
+    );
   }
 
   private updateProceduralFallback(dt: number, pose: PlayerAvatarPose) {

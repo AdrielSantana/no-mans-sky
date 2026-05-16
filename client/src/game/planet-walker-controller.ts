@@ -16,6 +16,14 @@ export interface PlanetWalkerTarget {
   worldPosition: THREE.Vector3
   worldQuaternion: THREE.Quaternion
   terrain: PlanetTerrainParams
+  atmosphereColor: string
+  atmosphereDensity: number
+  cloudShadow?: {
+    mask: THREE.Texture
+    maskOffset: number
+    height: number
+    strength: number
+  }
   sampleSurfaceRadius?: (dir: Vec3Like) => number
 }
 
@@ -31,6 +39,8 @@ const THIRD_PERSON_CAMERA_BOOM_LENGTH = Math.hypot(
 const CAMERA_COLLISION_RADIUS = 0.32
 const CAMERA_SURFACE_CLEARANCE = 0.28
 const AVATAR_TURN_LERP = 16
+const ATMOSPHERE_RADIUS_SCALE = 1.08
+const ATMOSPHERE_LIGHT_SUN_BLEND = 0.56
 
 function toVec3Like(v: THREE.Vector3): Vec3Like {
   return { x: v.x, y: v.y, z: v.z }
@@ -38,6 +48,15 @@ function toVec3Like(v: THREE.Vector3): Vec3Like {
 
 function toThree(v: Vec3Like): THREE.Vector3 {
   return new THREE.Vector3(v.x, v.y, v.z)
+}
+
+function lengthVec3Like(v: Vec3Like): number {
+  return Math.sqrt(v.x * v.x + v.y * v.y + v.z * v.z)
+}
+
+function smoothstep01(value: number): number {
+  const t = THREE.MathUtils.clamp(value, 0, 1)
+  return t * t * (3 - 2 * t)
 }
 
 export class PlanetWalkerController {
@@ -52,6 +71,12 @@ export class PlanetWalkerController {
   private avatar: PlayerAvatar
   private avatarForward = new THREE.Vector3(0, 0, 1)
   private avatarRight = new THREE.Vector3(1, 0, 0)
+  private avatarSunColor = new THREE.Color()
+  private avatarSunPosition = new THREE.Vector3()
+  private avatarAtmosphereLightColor = new THREE.Color(0xc4d5df)
+  private avatarCloudLocalSurfaceDirection = new THREE.Vector3(0, 1, 0)
+  private avatarCloudLocalSunDirection = new THREE.Vector3(0, 1, 0)
+  private inverseTargetQuaternion = new THREE.Quaternion()
   private pendingJumpRequest = false
   private readonly onKeyDown = (event: KeyboardEvent) => this.handleKeyDown(event)
   private readonly onKeyUp = (event: KeyboardEvent) => this.handleKeyUp(event)
@@ -107,6 +132,28 @@ export class PlanetWalkerController {
     const worldVelocity = toThree(result.state.velocity).applyQuaternion(this.activeTarget.worldQuaternion)
     const tangentVelocity = worldVelocity.clone().addScaledVector(worldUp, -worldVelocity.dot(worldUp))
     const verticalSpeed = worldVelocity.dot(worldUp)
+    const sunColor = this.engine.getSunColor(this.avatarSunColor)
+    const sunPosition = this.engine.getSunPosition(this.avatarSunPosition)
+    const atmosphereLightColor = this.avatarAtmosphereLightColor
+      .set(this.activeTarget.atmosphereColor)
+      .lerp(sunColor, ATMOSPHERE_LIGHT_SUN_BLEND)
+    const localRadius = lengthVec3Like(result.eyePosition)
+    const atmosphereInfluence = this.computeAtmosphereInfluence(result.up, localRadius)
+    const cloudShadow = this.activeTarget.cloudShadow
+    const cloudShadowInfluence = cloudShadow
+      ? this.computeCloudShadowInfluence(result.up, localRadius, cloudShadow.height, cloudShadow.strength)
+      : 0
+    this.avatarCloudLocalSurfaceDirection.set(result.up.x, result.up.y, result.up.z)
+    this.inverseTargetQuaternion.copy(this.activeTarget.worldQuaternion).invert()
+    this.avatarCloudLocalSunDirection
+      .copy(sunPosition)
+      .sub(this.activeTarget.worldPosition)
+      .applyQuaternion(this.inverseTargetQuaternion)
+    if (this.avatarCloudLocalSunDirection.lengthSq() > 1e-6) {
+      this.avatarCloudLocalSunDirection.normalize()
+    } else {
+      this.avatarCloudLocalSunDirection.set(0, 1, 0)
+    }
     this.updateAvatarFacing(tangentVelocity, worldForward, worldRight, worldUp, input, dt)
 
     this.avatar.update(dt, {
@@ -114,8 +161,17 @@ export class PlanetWalkerController {
       forward: this.avatarForward,
       right: this.avatarRight,
       up: worldUp,
-      sunPosition: this.engine.getSunPosition(),
-      sunColor: this.engine.getSunColor(),
+      sunPosition,
+      sunColor,
+      atmosphereLightColor,
+      atmosphereInfluence,
+      cloudMask: cloudShadow?.mask ?? null,
+      cloudMaskOffset: cloudShadow?.maskOffset ?? 0,
+      cloudHeight: cloudShadow?.height ?? 0.045,
+      cloudShadowStrength: cloudShadow?.strength ?? 0,
+      cloudShadowInfluence,
+      cloudLocalSurfaceDirection: this.avatarCloudLocalSurfaceDirection,
+      cloudLocalSunDirection: this.avatarCloudLocalSunDirection,
       moveX: input.moveX,
       moveY: input.moveY,
       yawDelta: input.yawDelta,
@@ -316,6 +372,36 @@ export class PlanetWalkerController {
 
     this.avatarRight.crossVectors(worldUp, this.avatarForward).normalize()
     this.avatarForward.crossVectors(this.avatarRight, worldUp).normalize()
+  }
+
+  private computeAtmosphereInfluence(localUp: Vec3Like, localRadius: number): number {
+    if (!this.activeTarget || this.activeTarget.atmosphereDensity <= 0.001) return 0
+
+    const surfaceRadius = this.activeTarget.sampleSurfaceRadius?.(localUp)
+      ?? samplePlanetRadius(localUp, this.activeTarget.terrain)
+    const atmosphereRadius = this.activeTarget.terrain.radius * ATMOSPHERE_RADIUS_SCALE
+    if (atmosphereRadius <= surfaceRadius || localRadius >= atmosphereRadius) return 0
+
+    const altitude01 = (localRadius - surfaceRadius) / (atmosphereRadius - surfaceRadius)
+    const density = THREE.MathUtils.clamp(this.activeTarget.atmosphereDensity, 0, 1)
+    return (1 - smoothstep01(altitude01)) * density
+  }
+
+  private computeCloudShadowInfluence(
+    localUp: Vec3Like,
+    localRadius: number,
+    cloudHeight: number,
+    cloudShadowStrength: number,
+  ): number {
+    if (!this.activeTarget || cloudShadowStrength <= 0.001) return 0
+
+    const surfaceRadius = this.activeTarget.sampleSurfaceRadius?.(localUp)
+      ?? samplePlanetRadius(localUp, this.activeTarget.terrain)
+    const cloudRadius = this.activeTarget.terrain.radius * (1 + THREE.MathUtils.clamp(cloudHeight, 0.001, 0.20))
+    if (cloudRadius <= surfaceRadius || localRadius >= cloudRadius) return 0
+
+    const altitude01 = (localRadius - surfaceRadius) / (cloudRadius - surfaceRadius)
+    return 1 - smoothstep01((altitude01 - 0.75) / 0.25)
   }
 
   private resolveCameraCollision(_lookTarget: THREE.Vector3, desiredCameraPosition: THREE.Vector3): THREE.Vector3 {
