@@ -785,6 +785,63 @@ export function EditorPanel({ params, onChange }: Props) {
       </div>
 
       <div className="editor-section">
+        <div className="editor-section-title">Props</div>
+        <div className="editor-row">
+          <label style={{ display: 'flex', alignItems: 'center', gap: 6, cursor: 'pointer' }}>
+            <input
+              type="checkbox"
+              checked={params.propsEnabled}
+              onChange={e => set('propsEnabled', e.target.checked)}
+              style={{ accentColor: '#2dd4a7' }}
+            />
+            <span className="editor-label" style={{ width: 'auto' }}>Trees & Rocks</span>
+          </label>
+        </div>
+        <div className="editor-row">
+          <span className="editor-label">Trees</span>
+          <input
+            className="editor-slider"
+            type="range"
+            min={RANGES.treeDensity.min}
+            max={RANGES.treeDensity.max}
+            step={RANGES.treeDensity.step}
+            value={params.treeDensity}
+            disabled={!params.propsEnabled}
+            onChange={e => set('treeDensity', Number(e.target.value))}
+          />
+          <span className="editor-value">{params.treeDensity.toFixed(2)}</span>
+        </div>
+        <div className="editor-row">
+          <span className="editor-label">Rocks</span>
+          <input
+            className="editor-slider"
+            type="range"
+            min={RANGES.rockDensity.min}
+            max={RANGES.rockDensity.max}
+            step={RANGES.rockDensity.step}
+            value={params.rockDensity}
+            disabled={!params.propsEnabled}
+            onChange={e => set('rockDensity', Number(e.target.value))}
+          />
+          <span className="editor-value">{params.rockDensity.toFixed(2)}</span>
+        </div>
+        <div className="editor-row">
+          <span className="editor-label">Distance</span>
+          <input
+            className="editor-slider"
+            type="range"
+            min={RANGES.propDistance.min}
+            max={RANGES.propDistance.max}
+            step={RANGES.propDistance.step}
+            value={params.propDistance}
+            disabled={!params.propsEnabled}
+            onChange={e => set('propDistance', Number(e.target.value))}
+          />
+          <span className="editor-value">{params.propDistance.toFixed(0)}m</span>
+        </div>
+      </div>
+
+      <div className="editor-section">
         <div className="editor-section-title">Atmosphere</div>
         <div className="editor-row">
           <span className="editor-label">Color</span>

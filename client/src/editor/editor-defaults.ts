@@ -55,6 +55,10 @@ export interface EditorParams {
   grassDistance: number
   grassColorA: string
   grassColorB: string
+  propsEnabled: boolean
+  treeDensity: number
+  rockDensity: number
+  propDistance: number
   sunColor: string
   sunAzimuth: number
   sunElevation: number
@@ -190,6 +194,10 @@ export const DEFAULT_PARAMS: EditorParams = {
   grassDistance: 1500,
   grassColorA: '#1f6f2e',
   grassColorB: '#64b94a',
+  propsEnabled: true,
+  treeDensity: 0.45,
+  rockDensity: 0.35,
+  propDistance: 2200,
   sunColor: '#fff2c8',
   sunAzimuth: 315,
   sunElevation: 28,
@@ -277,6 +285,9 @@ export const RANGES = {
   grassHeight: { min: 0.15, max: 8, step: 0.05 },
   grassWindStrength: { min: 0, max: 2, step: 0.01 },
   grassDistance: { min: 20, max: 2500, step: 10 },
+  treeDensity: { min: 0, max: 1.5, step: 0.01 },
+  rockDensity: { min: 0, max: 1.5, step: 0.01 },
+  propDistance: { min: 100, max: 6000, step: 25 },
   sunAzimuth: { min: 0, max: 360, step: 1 },
   sunElevation: { min: -20, max: 80, step: 1 },
   planetRotationSpeed: { min: -30, max: 30, step: 0.1 },
