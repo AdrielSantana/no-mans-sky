@@ -153,6 +153,12 @@ function buildSunPosition(params: EditorParams): THREE.Vector3 {
   ).multiplyScalar(distance)
 }
 
+// Only parameters that change the *structure* of the planet belong here —
+// height field, radius, LOD layout, water level, ocean shore mask. Anything
+// that is purely a uniform (terrain albedo, texture blending, atmosphere
+// colour) is applied imperatively in the effect below, because a key change
+// tears the planet down and rebuilds it, and the ocean shore mask alone costs
+// ~2.7s of synchronous main thread.
 function buildPlanetKey(params: EditorParams): string {
   return JSON.stringify({
     seed: params.seed,
@@ -174,13 +180,6 @@ function buildPlanetKey(params: EditorParams): string {
     oceanChoppiness: params.oceanChoppiness,
     oceanFoamStrength: params.oceanFoamStrength,
     oceanSpecularStrength: params.oceanSpecularStrength,
-    colorA: params.colorA,
-    colorB: params.colorB,
-    textureScale: params.textureScale,
-    textureBlend: params.textureBlend,
-    textureNearDistance: params.textureNearDistance,
-    textureFadeDistance: params.textureFadeDistance,
-    atmosphereColor: params.atmosphereColor,
     atmosphereDensity: params.atmosphereDensity,
     octaves: params.octaves,
     lacunarity: params.lacunarity,
@@ -431,6 +430,15 @@ export function EditorCanvas({ params }: Props) {
     planetRef.current?.setSunColor(params.sunColor)
     planetRef.current?.setCloudColor(params.cloudColor)
     planetRef.current?.setTerrainAoStrength(params.terrainAoStrength)
+    planetRef.current?.setTerrainAppearance({
+      colorA: params.colorA,
+      colorB: params.colorB,
+      textureScale: params.textureScale,
+      textureBlend: params.textureBlend,
+      textureNearDistance: params.textureNearDistance,
+      textureFadeDistance: params.textureFadeDistance,
+    })
+    planetRef.current?.setAtmosphereColor(params.atmosphereColor)
     planetRef.current?.setClouds({
       coverage: params.cloudCoverage,
       opacity: params.cloudOpacity,

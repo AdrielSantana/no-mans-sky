@@ -21,6 +21,15 @@ export interface QuadtreeNode {
   x: number // 0..2^lod - 1
   y: number // 0..2^lod - 1
   children: QuadtreeNode[] | null // null = leaf
+  // Cached `nodeKey(face, lod, x, y)`. The identity of a node never changes, so
+  // building this string once at creation removes tens of thousands of
+  // temporary strings per frame from the LOD traversal.
+  key: string
+  // Whether this node's area is fully covered by built chunks — either its own
+  // chunk exists, or every descendant is covered. Recomputed once per frame by
+  // PlanetRenderer.markCovered instead of being re-derived independently by
+  // each of the four traversals that need it.
+  covered: boolean
 }
 
 // ── LOD distance thresholds ───────────────────────────────
@@ -42,18 +51,24 @@ export const MAX_LOD = LOD_DISTANCE_MULTIPLIERS.length - 1
 
 // ── Cube-to-sphere mapping ────────────────────────────────
 // Maps (face, u, v) where u,v ∈ [-1,1] to a point on the unit sphere
-const _v = new THREE.Vector3()
-
-export function cubeToSphere(face: CubeFace, u: number, v: number): THREE.Vector3 {
+// Writes into `target` when given one. The previous version kept a module
+// scratch and then returned `_v.clone()`, which defeated the scratch entirely:
+// getNodeCenter is called four times per node per frame on the hot LOD path.
+export function cubeToSphere(
+  face: CubeFace,
+  u: number,
+  v: number,
+  target: THREE.Vector3 = new THREE.Vector3(),
+): THREE.Vector3 {
   switch (face) {
-    case CubeFace.PX: _v.set(1, v, u); break
-    case CubeFace.NX: _v.set(-1, v, -u); break
-    case CubeFace.PY: _v.set(u, 1, v); break
-    case CubeFace.NY: _v.set(u, -1, -v); break
-    case CubeFace.PZ: _v.set(u, v, 1); break
-    case CubeFace.NZ: _v.set(-u, v, -1); break
+    case CubeFace.PX: target.set(1, v, u); break
+    case CubeFace.NX: target.set(-1, v, -u); break
+    case CubeFace.PY: target.set(u, 1, v); break
+    case CubeFace.NY: target.set(u, -1, -v); break
+    case CubeFace.PZ: target.set(u, v, 1); break
+    case CubeFace.NZ: target.set(-u, v, -1); break
   }
-  return _v.clone().normalize()
+  return target.normalize()
 }
 
 // Get the 4 corners of a quadtree node on its cube face
@@ -67,67 +82,38 @@ export function getNodeBounds(node: QuadtreeNode): { u0: number; v0: number; u1:
   return { u0, v0, u1, v1 }
 }
 
-// Get center of a node on the unit sphere
-export function getNodeCenter(node: QuadtreeNode): THREE.Vector3 {
-  const { u0, v0, u1, v1 } = getNodeBounds(node)
-  return cubeToSphere(node.face, (u0 + u1) * 0.5, (v0 + v1) * 0.5)
-}
-
-export function getNodeBoundingRadius(node: QuadtreeNode, planetRadius: number): number {
-  const { u0, v0, u1, v1 } = getNodeBounds(node)
-  const center = getNodeCenter(node)
-  let maxDist = 0
-
-  for (const [u, v] of [[u0, v0], [u1, v0], [u0, v1], [u1, v1]]) {
-    maxDist = Math.max(maxDist, center.distanceTo(cubeToSphere(node.face, u, v)))
-  }
-
-  return maxDist * planetRadius
-}
-
-// ── Chunk-to-camera distance ──────────────────────────────
-const _worldCenter = new THREE.Vector3()
-
-export function getChunkDistToCamera(
+// Get center of a node on the unit sphere. Derives u,v directly rather than
+// going through getNodeBounds, which allocated a bounds object per call.
+export function getNodeCenter(
   node: QuadtreeNode,
-  cameraPos: THREE.Vector3,
-  planetWorldPos: THREE.Vector3,
-  planetRadius: number,
-): number {
-  const center = getNodeCenter(node)
-  _worldCenter.copy(center).multiplyScalar(planetRadius).add(planetWorldPos)
-  return Math.max(0, cameraPos.distanceTo(_worldCenter) - getNodeBoundingRadius(node, planetRadius))
+  target: THREE.Vector3 = new THREE.Vector3(),
+): THREE.Vector3 {
+  const size = 1 / (1 << node.lod)
+  const u = (node.x * 2 + 1) * size - 1
+  const v = (node.y * 2 + 1) * size - 1
+  return cubeToSphere(node.face, u, v, target)
 }
 
 // ── Quadtree operations ───────────────────────────────────
 
 export function createRoot(face: CubeFace): QuadtreeNode {
-  return { face, lod: 0, x: 0, y: 0, children: null }
+  return { face, lod: 0, x: 0, y: 0, children: null, key: nodeKey(face, 0, 0, 0), covered: false }
 }
 
 export function createChildren(node: QuadtreeNode): QuadtreeNode[] {
   const childLod = node.lod + 1
   const cx = node.x * 2
   const cy = node.y * 2
+  const face = node.face
   return [
-    { face: node.face, lod: childLod, x: cx,     y: cy,     children: null },
-    { face: node.face, lod: childLod, x: cx + 1, y: cy,     children: null },
-    { face: node.face, lod: childLod, x: cx,     y: cy + 1, children: null },
-    { face: node.face, lod: childLod, x: cx + 1, y: cy + 1, children: null },
+    { face, lod: childLod, x: cx,     y: cy,     children: null, key: nodeKey(face, childLod, cx,     cy),     covered: false },
+    { face, lod: childLod, x: cx + 1, y: cy,     children: null, key: nodeKey(face, childLod, cx + 1, cy),     covered: false },
+    { face, lod: childLod, x: cx,     y: cy + 1, children: null, key: nodeKey(face, childLod, cx,     cy + 1), covered: false },
+    { face, lod: childLod, x: cx + 1, y: cy + 1, children: null, key: nodeKey(face, childLod, cx + 1, cy + 1), covered: false },
   ]
 }
 
 // Unique key for a quadtree node
 export function nodeKey(face: CubeFace, lod: number, x: number, y: number): string {
   return `${face}_${lod}_${x}_${y}`
-}
-
-// Collect all leaf nodes from a quadtree
-export function collectLeaves(node: QuadtreeNode): QuadtreeNode[] {
-  if (!node.children) return [node]
-  const leaves: QuadtreeNode[] = []
-  for (const child of node.children) {
-    leaves.push(...collectLeaves(child))
-  }
-  return leaves
 }
