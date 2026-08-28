@@ -9,6 +9,10 @@ import { createSkybox } from './skybox'
 import { WORLD_SCALE } from './world-scale'
 import { CLOUD_RENDER_LAYER } from './render-layers'
 
+// Upper bound on a single frame's delta. Returning from a hidden tab hands
+// Clock.getDelta() the whole elapsed wall time.
+const MAX_FRAME_DELTA = 1 / 15
+const RESIZE_DEBOUNCE_MS = 120
 const CLOUD_RENDER_SCALE = 0.5
 const CLOUD_OBJECT_REFRESH_INTERVAL = 30
 
@@ -55,7 +59,19 @@ class CloudCompositePass extends Pass {
     colorWrite: false,
     depthWrite: true,
     depthTest: true,
-    side: THREE.FrontSide,
+    // DoubleSide, not FrontSide. PlanetRenderer.updateCloudRenderSide flips the
+    // cloud shell to BackSide as soon as the camera is inside it — i.e. any time
+    // you are walking on the surface. With a FrontSide override the shell's
+    // outward-facing polygons are all facing away, so this pre-pass wrote no
+    // depth at all, tCloudDepth stayed at the cleared 1.0, and the composite
+    // then read every pixel with geometry as "cloud is behind the scene" and
+    // multiplied the cloud alpha to zero. The result was a cloud deck that got
+    // cut off with a hard edge along the terrain horizon and only survived
+    // against empty sky.
+    //
+    // DoubleSide is a no-op from outside the shell: a ray from outside hits the
+    // near (front-facing) surface first either way, and the depth test keeps it.
+    side: THREE.DoubleSide,
   })
 
   constructor(scene: THREE.Scene, camera: THREE.Camera) {
@@ -395,6 +411,12 @@ export class GameEngine {
   private cloudPass: CloudCompositePass | null = null
   private underwaterPass: UnderwaterPass | null = null
   private elapsedTime = 0
+  private lastWidth = 0
+  private lastHeight = 0
+  private resizeTimer: number | null = null
+  private resizeObserver: ResizeObserver | null = null
+  private contextLost = false
+  private frameCallback: ((dt: number) => void) | null = null
 
   constructor(container: HTMLElement) {
     this.container = container
@@ -402,7 +424,15 @@ export class GameEngine {
     const height = container.clientHeight
 
     // Renderer
-    this.renderer = new THREE.WebGLRenderer({ antialias: true, logarithmicDepthBuffer: true })
+    // antialias is deliberately off: the whole scene is rasterised into the
+    // composer's render targets, which are created without `samples`. The only
+    // draw reaching the default framebuffer is OutputPass's fullscreen quad,
+    // where MSAA has no edges to resolve — so `antialias: true` allocated a
+    // multisampled backbuffer and resolved it every frame for nothing.
+    // Geometry AA, if wanted, belongs in a post-tonemap pass (see the pass
+    // chain below); it cannot be bolted onto one composer target because
+    // RenderPass draws into readBuffer and the swap parity is dynamic.
+    this.renderer = new THREE.WebGLRenderer({ antialias: false, logarithmicDepthBuffer: true })
     this.renderer.setSize(width, height)
     this.renderer.setPixelRatio(this.pixelRatioLimit)
     this.renderer.toneMapping = THREE.NeutralToneMapping
@@ -455,8 +485,16 @@ export class GameEngine {
 
     this.setupLights()
 
-    this.boundResize = this.handleResize.bind(this)
+    this.boundResize = this.scheduleResize.bind(this)
     window.addEventListener('resize', this.boundResize)
+    // A window resize event is not the only way the canvas changes size — the
+    // editor panel can change the container's width on its own.
+    if (typeof ResizeObserver !== 'undefined') {
+      this.resizeObserver = new ResizeObserver(this.boundResize)
+      this.resizeObserver.observe(container)
+    }
+    this.renderer.domElement.addEventListener('webglcontextlost', this.handleContextLost)
+    this.renderer.domElement.addEventListener('webglcontextrestored', this.handleContextRestored)
   }
 
   private setupLights() {
@@ -594,18 +632,63 @@ export class GameEngine {
   private handleResize() {
     const w = this.container.clientWidth
     const h = this.container.clientHeight
+    // A zero height gives aspect = Infinity and a NaN projection matrix, which
+    // renders nothing and does not recover on its own.
+    if (w <= 0 || h <= 0) return
+    if (w === this.lastWidth && h === this.lastHeight) return
+    this.lastWidth = w
+    this.lastHeight = h
     this.camera.aspect = w / h
     this.camera.updateProjectionMatrix()
     this.renderer.setSize(w, h)
+    // composer.setSize rebuilds every bloom render target, so this must not run
+    // on every resize event while a window drag is in flight.
     this.composer.setSize(w, h)
   }
 
+  private scheduleResize() {
+    if (this.resizeTimer !== null) return
+    this.resizeTimer = window.setTimeout(() => {
+      this.resizeTimer = null
+      this.handleResize()
+    }, RESIZE_DEBOUNCE_MS)
+  }
+
+  private handleContextLost = (event: Event) => {
+    // Without preventDefault the context is never restored and the canvas stays
+    // black forever while rAF keeps burning CPU.
+    event.preventDefault()
+    this.contextLost = true
+    this.stop()
+  }
+
+  private handleContextRestored = () => {
+    this.contextLost = false
+    this.lastWidth = 0
+    this.lastHeight = 0
+    this.handleResize()
+    if (this.frameCallback) this.start(this.frameCallback)
+  }
+
   start(onFrame?: (dt: number) => void) {
+    if (onFrame) this.frameCallback = onFrame
+    if (this.contextLost) return
     this.clock.start()
+    // three resets renderer.info inside every renderer.render() call. A composer
+    // frame makes at least six (RenderPass, the cloud pass's two, the bloom and
+    // underwater quads, OutputPass), and the last one is always a fullscreen
+    // quad — so the perf HUD read a permanent "1 draw call, 2 triangles" no
+    // matter what the scene held. Taking over the reset makes the counters
+    // accumulate over the whole frame, which is what the HUD means to show.
+    this.renderer.info.autoReset = false
     const loop = () => {
       this.animationId = requestAnimationFrame(loop)
-      const dt = this.clock.getDelta()
+      // Clamp: Clock.getDelta() returns the entire time spent in a hidden tab,
+      // which would teleport clouds, waves and grass wind on the first frame
+      // back. The walker controller already clamps its own step.
+      const dt = Math.min(this.clock.getDelta(), MAX_FRAME_DELTA)
       this.elapsedTime += dt
+      this.renderer.info.reset()
       this.controls.update()
       onFrame?.(dt)
       this.underwaterPass?.setTime(this.elapsedTime)
@@ -624,10 +707,22 @@ export class GameEngine {
   dispose() {
     this.stop()
     window.removeEventListener('resize', this.boundResize)
+    this.resizeObserver?.disconnect()
+    this.resizeObserver = null
+    if (this.resizeTimer !== null) {
+      window.clearTimeout(this.resizeTimer)
+      this.resizeTimer = null
+    }
+    this.renderer.domElement.removeEventListener('webglcontextlost', this.handleContextLost)
+    this.renderer.domElement.removeEventListener('webglcontextrestored', this.handleContextRestored)
     this.controls.dispose()
     this.cloudPass?.dispose()
     this.underwaterPass?.dispose()
     this.outputPass?.dispose()
+    // EffectComposer.dispose only releases rt1/rt2 and its copy pass. The bloom
+    // pass owns eleven render targets and ~9 materials that only its own
+    // dispose() frees.
+    this.bloomPass?.dispose()
     this.composer.dispose()
     this.renderer.dispose()
     this.container.removeChild(this.renderer.domElement)
