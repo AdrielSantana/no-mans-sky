@@ -43,6 +43,24 @@ function terrainSurfacePoint(
   return [dir.x * radius, dir.y * radius, dir.z * radius]
 }
 
+// Hoisted out of computeMacroAoAtDirection: it used to rebuild an array of six
+// tuples on every vertex.
+const MACRO_AO_AXES = new Float64Array([
+  1, 0, 0,
+  0, 1, 0,
+  0, 0, 1,
+  0.70710678, 0.70710678, 0,
+  0.70710678, 0, 0.70710678,
+  0, 0.70710678, 0.70710678,
+])
+
+// Per-vertex scratch for the AO passes. Micro and macro AO never run
+// concurrently for the same vertex, so one pair of buffers serves both.
+const _aoPairsA = new Float64Array(6)
+const _aoPairsB = new Float64Array(6)
+const _aoProjected = new Float64Array(3)
+const _aoSampleDir = { x: 0, y: 0, z: 0 }
+
 function normalizeVec(x: number, y: number, z: number): [number, number, number] {
   const len = Math.sqrt(x * x + y * y + z * z)
   return len > 1e-8 ? [x / len, y / len, z / len] : [0, 1, 0]
@@ -208,26 +226,42 @@ function tangentFrame(dir: { x: number; y: number; z: number }): {
   return { tangent, bitangent }
 }
 
+// Writes the projected axis into `out` and reports whether it was degenerate,
+// instead of returning a fresh tuple (or null) per call. Called six times per
+// vertex on the macro AO path.
 function projectedTangentDirection(
   dir: { x: number; y: number; z: number },
-  axis: [number, number, number],
-): [number, number, number] | null {
-  const dot = dir.x * axis[0] + dir.y * axis[1] + dir.z * axis[2]
-  const px = axis[0] - dir.x * dot
-  const py = axis[1] - dir.y * dot
-  const pz = axis[2] - dir.z * dot
-  if (px * px + py * py + pz * pz < 1e-4) return null
-  const [x, y, z] = normalizeVec(
-    px,
-    py,
-    pz,
-  )
-  return [x, y, z]
+  axisX: number,
+  axisY: number,
+  axisZ: number,
+  out: Float64Array,
+): boolean {
+  const dot = dir.x * axisX + dir.y * axisY + dir.z * axisZ
+  const px = axisX - dir.x * dot
+  const py = axisY - dir.y * dot
+  const pz = axisZ - dir.z * dot
+  if (px * px + py * py + pz * pz < 1e-4) return false
+  const len = Math.sqrt(px * px + py * py + pz * pz)
+  if (len > 1e-8) {
+    out[0] = px / len
+    out[1] = py / len
+    out[2] = pz / len
+  } else {
+    out[0] = 0
+    out[1] = 1
+    out[2] = 0
+  }
+  return true
 }
 
+// Takes two parallel buffers plus a count rather than an array of [a, b]
+// tuples: this runs once per vertex per AO term, and the tuples were ~7 heap
+// allocations each time.
 function sampleDirectionalAo(
   center: number,
-  samplePairs: Array<[number, number]>,
+  pairsA: Float64Array,
+  pairsB: Float64Array,
+  pairCount: number,
   terrainMeters: number,
   expectedRelief: number,
   concavityStart: number,
@@ -240,7 +274,9 @@ function sampleDirectionalAo(
   let maxConcavityMeters = 0
   let concavitySum = 0
 
-  for (const [a, b] of samplePairs) {
+  for (let i = 0; i < pairCount; i++) {
+    const a = pairsA[i]
+    const b = pairsB[i]
     localMin = Math.min(localMin, a, b)
     localMax = Math.max(localMax, a, b)
     const pairConcavityMeters = Math.max(0, (a + b) * 0.5 - center) * terrainMeters
@@ -248,7 +284,7 @@ function sampleDirectionalAo(
     concavitySum += pairConcavityMeters
   }
 
-  const avgConcavityMeters = concavitySum / Math.max(1, samplePairs.length)
+  const avgConcavityMeters = concavitySum / Math.max(1, pairCount)
   const localRangeMeters = Math.max(0, localMax - localMin) * terrainMeters
   const avgCavity = smoothstep(expectedRelief * concavityStart, expectedRelief * concavityEnd, avgConcavityMeters)
   const peakCavity = smoothstep(expectedRelief * concavityStart * 1.4, expectedRelief * concavityEnd * 1.2, maxConcavityMeters)
@@ -279,18 +315,18 @@ function computeMicroAoAtDirection(
     const sampleDir = offsetDirection(dir, tangent, bitangent, tx, ty, meters / Math.max(terrain.radius, 1))
     return samplePlanetMicroHeight(sampleDir, terrain, macroHeight)
   }
-  const samplePairs: Array<[number, number]> = [
-    [sample(-1, 0, fineStep), sample(1, 0, fineStep)],
-    [sample(0, -1, fineStep), sample(0, 1, fineStep)],
-    [sample(-1, 0, fissureStep), sample(1, 0, fissureStep)],
-    [sample(0, -1, fissureStep), sample(0, 1, fissureStep)],
-    [sample(-1, -1, ledgeStep), sample(1, 1, ledgeStep)],
-    [sample(1, -1, ledgeStep), sample(-1, 1, ledgeStep)],
-  ]
+  _aoPairsA[0] = sample(-1, 0, fineStep);     _aoPairsB[0] = sample(1, 0, fineStep)
+  _aoPairsA[1] = sample(0, -1, fineStep);     _aoPairsB[1] = sample(0, 1, fineStep)
+  _aoPairsA[2] = sample(-1, 0, fissureStep);  _aoPairsB[2] = sample(1, 0, fissureStep)
+  _aoPairsA[3] = sample(0, -1, fissureStep);  _aoPairsB[3] = sample(0, 1, fissureStep)
+  _aoPairsA[4] = sample(-1, -1, ledgeStep);   _aoPairsB[4] = sample(1, 1, ledgeStep)
+  _aoPairsA[5] = sample(1, -1, ledgeStep);    _aoPairsB[5] = sample(-1, 1, ledgeStep)
 
   return sampleDirectionalAo(
     microHeight,
-    samplePairs,
+    _aoPairsA,
+    _aoPairsB,
+    6,
     terrainMeters,
     expectedRelief,
     0.07,
@@ -310,37 +346,39 @@ function computeMacroAoAtDirection(
   const terrainMeters = Math.max(terrain.terrainScale * terrain.radius, 0.001)
   const expectedRelief = Math.max(terrainMeters * 0.018, 8)
   const step = Math.max(terrain.radius * 0.010, 28) / Math.max(terrain.radius, 1)
-  const sample = (axis: [number, number, number], direction: number) => {
-    const sampleDir = {
-      x: dir.x + axis[0] * direction * step,
-      y: dir.y + axis[1] * direction * step,
-      z: dir.z + axis[2] * direction * step,
+  const sample = (ax: number, ay: number, az: number, direction: number) => {
+    const sx = dir.x + ax * direction * step
+    const sy = dir.y + ay * direction * step
+    const sz = dir.z + az * direction * step
+    const len = Math.sqrt(sx * sx + sy * sy + sz * sz)
+    if (len > 1e-8) {
+      _aoSampleDir.x = sx / len
+      _aoSampleDir.y = sy / len
+      _aoSampleDir.z = sz / len
+    } else {
+      _aoSampleDir.x = 0
+      _aoSampleDir.y = 1
+      _aoSampleDir.z = 0
     }
-    const [x, y, z] = normalizeVec(sampleDir.x, sampleDir.y, sampleDir.z)
-    sampleDir.x = x
-    sampleDir.y = y
-    sampleDir.z = z
-    return samplePlanetHeight(sampleDir, terrain)
+    return samplePlanetHeight(_aoSampleDir, terrain)
   }
-  const samplePairs: Array<[number, number]> = []
-  const axes: Array<[number, number, number]> = [
-    [1, 0, 0],
-    [0, 1, 0],
-    [0, 0, 1],
-    [0.70710678, 0.70710678, 0],
-    [0.70710678, 0, 0.70710678],
-    [0, 0.70710678, 0.70710678],
-  ]
 
-  for (const axis of axes) {
-    const projected = projectedTangentDirection(dir, axis)
-    if (!projected) continue
-    samplePairs.push([sample(projected, -1), sample(projected, 1)])
+  let pairCount = 0
+  for (let a = 0; a < MACRO_AO_AXES.length; a += 3) {
+    if (!projectedTangentDirection(dir, MACRO_AO_AXES[a], MACRO_AO_AXES[a + 1], MACRO_AO_AXES[a + 2], _aoProjected)) continue
+    const px = _aoProjected[0]
+    const py = _aoProjected[1]
+    const pz = _aoProjected[2]
+    _aoPairsA[pairCount] = sample(px, py, pz, -1)
+    _aoPairsB[pairCount] = sample(px, py, pz, 1)
+    pairCount++
   }
 
   return sampleDirectionalAo(
     macroHeight,
-    samplePairs,
+    _aoPairsA,
+    _aoPairsB,
+    pairCount,
     terrainMeters,
     expectedRelief,
     0.10,
