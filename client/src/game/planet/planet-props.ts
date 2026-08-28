@@ -90,8 +90,26 @@ const TREE_PATCH_SCALE_METERS = 190
 const ROCK_PATCH_SCALE_METERS = 110
 const PROP_SHADER_VERSION = 6
 const SUN_SHADOW_SAMPLE_FACTORS = [0.04, 0.08, 0.16, 0.30, 0.52, 0.86, 1.35, 2.10, 3.25, 5.0, 7.5]
+
+// The distance weight depends only on the factor, so it is precomputed once
+// instead of two smoothsteps per sample per instance. Zero-weight samples are
+// dropped outright: the first factor (0.04) sits exactly on the lower edge of
+// smoothstep(0.04, 0.42, ...), so its weight is exactly 0 and its contribution
+// to `blocker` — a running max — is a guaranteed no-op. It was costing a full
+// samplePlanetHeightDetailed (~11µs) per instance to add nothing. Dropping it
+// is byte-identical output for 1/11 of the raymarch.
+const SUN_SHADOW_SAMPLES: { factor: number; weight: number }[] = SUN_SHADOW_SAMPLE_FACTORS
+  .map(factor => ({
+    factor,
+    weight: smoothstep(0.04, 0.42, factor) * (1 - smoothstep(7.0, 8.5, factor)),
+  }))
+  .filter(sample => sample.weight > 0)
 const SUN_SHADOW_CLEARANCE = 4.0
+const PROP_TEXTURE_ANISOTROPY = 16
 const TEMP_PROP_SAMPLE_DIR = new THREE.Vector3()
+const TEMP_SUN_DIR = new THREE.Vector3()
+// ~1.4 degrees of sun travel before a layer's horizon shadows are recomputed.
+const SUN_DIRECTION_EPSILON_DOT = 0.9997
 
 function sampleDirection(
   radial: THREE.Vector3,
@@ -186,7 +204,17 @@ function sourceMaterialColor(material: THREE.Material, fallback: THREE.Color): T
 
 function sourceMaterialMap(material: THREE.Material): THREE.Texture {
   const map = 'map' in material ? material.map : null
-  return map instanceof THREE.Texture ? map : DEFAULT_PROP_TEXTURE
+  if (!(map instanceof THREE.Texture)) return DEFAULT_PROP_TEXTURE
+  // GLTFLoader never sets anisotropy, so prop textures were sampled at 1x while
+  // the terrain runs at 16. The GLB samplers already ask for
+  // LinearMipmapLinear — the mips exist, they were just being filtered
+  // isotropically, which smears and shimmers tree trunks and rock faces at
+  // grazing angles. Runs four times at load, before the first render, so no
+  // needsUpdate is required. WebGLTextures clamps to the hardware maximum.
+  if (map.anisotropy < PROP_TEXTURE_ANISOTROPY) {
+    map.anisotropy = PROP_TEXTURE_ANISOTROPY
+  }
+  return map
 }
 
 function sourceMaterialUsesMap(material: THREE.Material): boolean {
@@ -576,13 +604,27 @@ export class PlanetPropLayer {
     this.group.visible = totalInstances > 0
   }
 
+  // Cheap predicate so the caller can decide whether to spend its per-frame
+  // budget on this layer, without doing the raymarch to find out.
+  needsSunLightUpdate(localSunDirection: THREE.Vector3): boolean {
+    if (this.instanceCount <= 0) return false
+    const lengthSq = localSunDirection.lengthSq()
+    if (lengthSq <= 1e-8) return false
+    if (!Number.isFinite(this.lastSunDirection.x)) return true
+    const inv = 1 / Math.sqrt(lengthSq)
+    const dot = (this.lastSunDirection.x * localSunDirection.x
+      + this.lastSunDirection.y * localSunDirection.y
+      + this.lastSunDirection.z * localSunDirection.z) * inv
+    return dot <= SUN_DIRECTION_EPSILON_DOT
+  }
+
   updateSunLight(localSunDirection: THREE.Vector3) {
     if (this.instanceCount <= 0) return
 
-    const sunDir = localSunDirection.clone()
+    const sunDir = TEMP_SUN_DIR.copy(localSunDirection)
     if (sunDir.lengthSq() <= 1e-8) return
     sunDir.normalize()
-    if (Number.isFinite(this.lastSunDirection.x) && this.lastSunDirection.dot(sunDir) > 0.9997) return
+    if (Number.isFinite(this.lastSunDirection.x) && this.lastSunDirection.dot(sunDir) > SUN_DIRECTION_EPSILON_DOT) return
     this.lastSunDirection.copy(sunDir)
 
     let changed = false
@@ -687,7 +729,7 @@ export class PlanetPropLayer {
     let blocker = 0
     const stylizedSunSlope = sunSlope * 0.42 - 0.035
 
-    for (const factor of SUN_SHADOW_SAMPLE_FACTORS) {
+    for (const { factor, weight } of SUN_SHADOW_SAMPLES) {
       const distance = terrainMeters * factor
       const angle = distance / Math.max(this.terrain.radius, 1)
       const sinAngle = Math.sin(angle)
@@ -698,8 +740,7 @@ export class PlanetPropLayer {
       const vertical = sampleRadius * cosAngle - originRadius - SUN_SHADOW_CLEARANCE
       const horizontal = Math.max(sampleRadius * sinAngle, 1e-3)
       const obstacleSlope = vertical / horizontal
-      const distanceWeight = smoothstep(0.04, 0.42, factor) * (1 - smoothstep(7.0, 8.5, factor))
-      blocker = Math.max(blocker, smoothstep(-0.015, 0.080, obstacleSlope - stylizedSunSlope) * distanceWeight)
+      blocker = Math.max(blocker, smoothstep(-0.015, 0.080, obstacleSlope - stylizedSunSlope) * weight)
       if (blocker >= 0.995) break
     }
 
