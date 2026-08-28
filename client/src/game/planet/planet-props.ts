@@ -88,7 +88,7 @@ const MIN_TREE_SLOPE_DOT = 0.70
 const MIN_ROCK_SLOPE_DOT = 0.38
 const TREE_PATCH_SCALE_METERS = 190
 const ROCK_PATCH_SCALE_METERS = 110
-const PROP_SHADER_VERSION = 6
+const PROP_SHADER_VERSION = 7
 const SUN_SHADOW_SAMPLE_FACTORS = [0.04, 0.08, 0.16, 0.30, 0.52, 0.86, 1.35, 2.10, 3.25, 5.0, 7.5]
 
 // The distance weight depends only on the factor, so it is precomputed once
@@ -222,21 +222,34 @@ function sourceMaterialUsesMap(material: THREE.Material): boolean {
   return map instanceof THREE.Texture
 }
 
-function sourceMaterialAlphaTest(material: THREE.Material, kind: PlanetPropModel['kind']): number {
-  const materialAlphaTest = 'alphaTest' in material && typeof material.alphaTest === 'number'
+// Honours whatever the asset declares and nothing more.
+//
+// This used to force alphaTest to at least 0.08 on any mapped tree, on the
+// assumption that trees carry alpha-cut foliage cards. They do not: the tree
+// models are trunk and branches only, their glTF materials declare
+// alphaMode OPAQUE, and their baseColor textures are JPEG — a format with no
+// alpha channel at all. So `alpha` was always 1.0, `alpha < 0.08` was never
+// true, and the discard never fired. It cost nothing visually and disabled
+// early-Z on the heaviest geometry in the scene.
+function sourceMaterialAlphaTest(material: THREE.Material): number {
+  return 'alphaTest' in material && typeof material.alphaTest === 'number'
     ? material.alphaTest
     : 0
-  if (kind === 'tree' && sourceMaterialUsesMap(material)) return Math.max(materialAlphaTest, 0.08)
-  return materialAlphaTest
 }
 
 function createPropShaderMaterial(source: THREE.Material, kind: PlanetPropModel['kind']): THREE.ShaderMaterial {
   const hasMap = sourceMaterialUsesMap(source)
   const fallbackColor = kind === 'tree' ? new THREE.Color(0x6c7a48) : new THREE.Color(0x68645e)
   const baseColor = hasMap ? new THREE.Color(0xffffff) : sourceMaterialColor(source, fallbackColor)
-  const alphaTest = sourceMaterialAlphaTest(source, kind)
+  const alphaTest = sourceMaterialAlphaTest(source)
 
   const material = new THREE.ShaderMaterial({
+    // Compile the discard out entirely when nothing needs it. Zeroing the
+    // uniform is not enough: the presence of `discard` in the fragment shader
+    // is what forfeits early-Z, whether or not the branch is ever taken.
+    defines: {
+      PROP_ALPHA_TEST: alphaTest > 0 ? 1 : 0,
+    },
     uniforms: {
       uMap: { value: sourceMaterialMap(source) },
       uUseMap: { value: hasMap },
@@ -401,12 +414,13 @@ function createPropShaderMaterial(source: THREE.Material, kind: PlanetPropModel[
       void main() {
         vec4 texel = texture2D(uMap, vUv);
         vec3 albedo = uBaseColor;
-        float alpha = 1.0;
         if (uUseMap) {
           albedo *= texel.rgb;
-          alpha = texel.a;
         }
-        if (alpha < uAlphaTest) discard;
+        #if PROP_ALPHA_TEST == 1
+          float alpha = uUseMap ? texel.a : 1.0;
+          if (alpha < uAlphaTest) discard;
+        #endif
 
         vec3 color = albedo * vLight;
         color *= propTerrainAo();
@@ -417,7 +431,19 @@ function createPropShaderMaterial(source: THREE.Material, kind: PlanetPropModel[
         #include <logdepthbuf_fragment>
       }
     `,
-    side: kind === 'tree' ? THREE.DoubleSide : source.side,
+    // FrontSide for both kinds. The GLBs declare doubleSided: true, which is a
+    // modelling-tool default rather than a requirement — verified by welding
+    // each mesh by position and counting edges used by a single triangle:
+    // rock_1 is fully closed, oak_tree has 3 boundary edges out of ~26k and
+    // winter_tree 20, and all three have zero non-manifold edges. That is a
+    // closed solid with the trunk base left open (and buried), not a surface
+    // built from flat cards — a leaf card would contribute four boundary edges
+    // each. Backfaces here are never visible, so DoubleSide was rasterising
+    // ~17.5k triangles per tree twice.
+    //
+    // If foliage cards are ever added to these models, this needs to become a
+    // per-submesh decision.
+    side: THREE.FrontSide,
     transparent: false,
     alphaToCoverage: alphaTest > 0,
     depthWrite: true,

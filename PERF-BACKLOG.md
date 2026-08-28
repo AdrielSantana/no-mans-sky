@@ -12,23 +12,46 @@ GPU sumiram. O HUD (`?perf`) agora reporta `draw`/`tri` de verdade.
 
 ## 1. Props — o subsistema mais pesado que sobrou
 
-Confirmado em uso: continua pesado. O que foi feito cobriu só a periferia
-(gate de distância na construção e o corte de 9,1% do raymarch). O custo
-central está intacto.
+Confirmado em uso: continua pesado. Backface culling e o alpha-test inútil já
+foram corrigidos (1.1); o que resta é contagem de triângulos e VRAM.
 
-### 1.1 Fill-rate das árvores — `planet-props.ts:392`, `:557`
-`oak_tree` tem 17.509 triângulos e `winter_tree` 20.482, renderizados em
-`DoubleSide` com `alphaTest`. Uma árvore a 650 m cobre 10-60 px de altura de
-tela rasterizando 17,5k triângulos **duas vezes**, com alpha-test derrubando
-early-Z. É patologia de fill, não de vértice.
+### 1.1 Backface culling e alpha-test — FEITO
+As árvores são **tronco e galhos, sem folhas** (escolha deliberada do autor).
+Isso invalidou a análise original, que assumia cards de folhagem alpha-cut.
 
-- **LOD tiers autorados como GLBs separados.** Decimação em runtime destrói a
-  silhueta dos cards de folhagem. Mantenha a estrutura de `InstancedMesh` por
-  chunk — é ela que faz o frustum culling funcionar (`:564`, `:570`). Alterne
-  por `.visible`, não por `.count`, usando o `dist` já calculado em
-  `updateChunkPropVisibility`.
-- **`DoubleSide` incondicional.** Tronco e galhos não precisam; só os cards de
-  folha. Requer separar os GLBs em submeshes — hoje são uma primitiva única.
+Verificado nos assets:
+- `alphaMode: OPAQUE` nos dois GLB de árvore
+- baseColor é **JPEG**, formato sem canal alpha — `texel.a` é sempre 1.0
+- soldando os vértices por posição: `rock_1` fechada (0 arestas de borda),
+  `oak_tree` 3 e `winter_tree` 20 em ~26k, **zero arestas não-manifold** nas
+  três. Sólidos fechados com o fundo do tronco aberto, não superfícies de
+  cards — cada card contribuiria com 4 arestas de borda.
+
+Consequências, ambas corrigidas:
+- `sourceMaterialAlphaTest` forçava `alphaTest >= 0.08` em qualquer árvore com
+  mapa. Como o alpha é sempre 1.0, o `discard` nunca disparava — custo zero
+  visual, mas a presença do `discard` no fragment shader **desativa early-Z**.
+  Agora o discard sai do shader por `#define PROP_ALPHA_TEST` quando não há
+  alpha test. Zerar o uniform não bastaria.
+- `side` era `DoubleSide` hardcoded para árvores (e vinha `DoubleSide` do GLB
+  para rochas), rasterizando ~17,5k triângulos por árvore **duas vezes** em
+  backfaces nunca visíveis. Agora `FrontSide` nos dois.
+
+**Se algum dia forem adicionados cards de folhagem a esses modelos, isto tem
+de voltar a ser uma decisão por submesh.**
+
+### 1.1b LOD tiers — ainda pendente, e agora mais fácil
+Continua sendo 17.509 / 20.482 triângulos por árvore renderizados a até 648 m
+(game) cobrindo 10-60 px de altura de tela.
+
+A ressalva original — "decimação em runtime destrói a silhueta dos cards de
+folhagem" — **não se aplica**: não há cards. Tronco e galhos são sólidos
+fechados, então decimação em runtime é viável e tiers autorados deixam de ser
+obrigatórios.
+
+Mantenha a estrutura de `InstancedMesh` por chunk (é ela que faz o frustum
+culling funcionar) e alterne por `.visible`, não por `.count`, usando o `dist`
+já calculado em `updateChunkPropVisibility`.
 
 ### 1.2 Raymarch de sombra ainda é síncrono — `planet-props.ts:680-707`
 `computeHorizonSunLight` roda 10 amostras de `samplePlanetHeightDetailed` por
@@ -44,8 +67,9 @@ antes das otimizações de ruído; hoje ~3,4 ms.
   instância, então duas árvores no mesmo chunk em alturas diferentes precisam
   sombrear diferente.
 
-### 1.3 Texturas 2048² — `planet-props.ts:469-472`
-Ver secção 3.
+### 1.3 Texturas 2048² — `planet-props.ts`
+Ver secção 3. Melhor retorno por risco de tudo que sobrou: 85 → 21 MB de VRAM
+sem tocar em código.
 
 ---
 
