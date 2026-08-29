@@ -45,12 +45,15 @@ de voltar a ser uma decisão por submesh.**
 Tiers gerados offline com `gltf-transform weld` + `simplify --ratio 0.30
 --error 0.02`, determinístico e sem custo de runtime:
 
-| modelo | tier 0 | tier 1 |
-|---|---|---|
-| `oak_tree` | 17.509 tris | 5.249 tris |
-| `winter_tree` | 20.482 tris | 6.142 tris |
+Escadas autoradas, quatro tiers cada, 7,07 MB de VRAM por árvore:
 
-Rochas ficaram sem LOD — 3,1k triângulos não justificam.
+| modelo | tier 0 | tier 1 | tier 2 | tier 3 |
+|---|---|---|---|---|
+| `oak_tree` | 3.990 | 1.044 | 309 | 91 |
+| `winter_tree` | 3.774 | 1.024 | 302 | 88 |
+
+Texturas por tier: 1024² / 512² / 256² / 128².
+Rochas ainda sem LOD — 3,1k triângulos não justificam.
 
 Detalhes que importam se mexer nisso:
 - **Os LOD herdam a matriz `normalize` do modelo base.** `loadPropModel` deriva
@@ -82,8 +85,13 @@ dá lixo. Já tiers produzidos decimando um mesh (`gltf-transform simplify`)
 preservam os UVs e devem reusar o material base.
 
 Não dá pra detectar isso do arquivo com confiança, então é declarado por asset
-em `PropLodSpec.ownMaterial`. O carvalho usa `true` nos três tiers; o LOD
-auto-gerado do `winter_tree` usa `false`.
+em `PropLodSpec.ownMaterial`. As duas árvores usam `true` em todos os tiers; um
+tier decimado do mesh base usaria `false`.
+
+**Importação:** use `node scripts/import-prop-lods.mjs <diretório>`. Ele ordena
+por contagem de triângulo (não pelo nome), remove os mapas que o shader não lê,
+poda, redimensiona por tier e **só apaga os originais depois que as quatro
+saídas validam**.
 
 Consequência: `updatePlanetPropMaterials` tem de percorrer **todos** os tiers,
 senão props distantes ficam sem posição do sol, sombra de nuvem e tinta de

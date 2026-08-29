@@ -1,6 +1,5 @@
 import * as THREE from 'three'
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js'
-import winterTreeUrl from '../../assets/models/trees/winter_tree.glb?url'
 import rock1Url from '../../assets/models/rocks/rock_1.glb?url'
 import rock2Url from '../../assets/models/rocks/rock_2.glb?url'
 // Geometry-only LOD tiers. Their embedded textures were shrunk to 8x8 because
@@ -9,7 +8,10 @@ import oakLod0Url from '../../assets/models/trees/oak_tree/lod_0.glb?url'
 import oakLod1Url from '../../assets/models/trees/oak_tree/lod_1.glb?url'
 import oakLod2Url from '../../assets/models/trees/oak_tree/lod_2.glb?url'
 import oakLod3Url from '../../assets/models/trees/oak_tree/lod_3.glb?url'
-import winterTreeLod1Url from '../../assets/models/trees/winter_tree_lod1.glb?url'
+import winterLod0Url from '../../assets/models/trees/winter_tree/lod_0.glb?url'
+import winterLod1Url from '../../assets/models/trees/winter_tree/lod_1.glb?url'
+import winterLod2Url from '../../assets/models/trees/winter_tree/lod_2.glb?url'
+import winterLod3Url from '../../assets/models/trees/winter_tree/lod_3.glb?url'
 import {
   type PlanetTerrainParams,
 } from '../../../../server/spacetimedb/src/shared/planet-terrain'
@@ -575,16 +577,18 @@ export function loadPlanetPropAssets(): Promise<PlanetPropAssets> {
 
   const loader = new GLTFLoader()
   assetPromise = Promise.all([
-    // Oak ships four independently generated tiers, each with its own baked
-    // atlas -- hence ownMaterial. Winter's single tier is a decimation of the
-    // base mesh and keeps its UVs, so it reuses the base material.
+    // Both trees ship four independently generated tiers, each with its own
+    // baked atlas -- hence ownMaterial on every one. A tier produced by
+    // decimating the base mesh instead would keep the base UVs and set false.
     loadPropModel(loader, 'oak-tree', 'tree', oakLod0Url, [
       { url: oakLod1Url, ownMaterial: true },
       { url: oakLod2Url, ownMaterial: true },
       { url: oakLod3Url, ownMaterial: true },
     ]),
-    loadPropModel(loader, 'winter-tree', 'tree', winterTreeUrl, [
-      { url: winterTreeLod1Url, ownMaterial: false },
+    loadPropModel(loader, 'winter-tree', 'tree', winterLod0Url, [
+      { url: winterLod1Url, ownMaterial: true },
+      { url: winterLod2Url, ownMaterial: true },
+      { url: winterLod3Url, ownMaterial: true },
     ]),
     loadPropModel(loader, 'rock-1', 'rock', rock1Url),
     loadPropModel(loader, 'rock-2', 'rock', rock2Url),
