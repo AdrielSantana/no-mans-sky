@@ -34,6 +34,9 @@ export interface PlanetPropAssets {
 interface PlanetPropModel {
   id: string
   kind: 'tree' | 'rock'
+  // World height range in metres, per model. The mesh is normalised to unit
+  // height at load, so the instance scale *is* the world height.
+  heightRange: readonly [number, number]
   parts: PlanetPropPart[]
 }
 
@@ -126,6 +129,12 @@ const PROP_TEXTURE_ANISOTROPY = 16
 // turning rocks off does not move a single tree. buildKindPlacements already
 // returns early on an empty model list.
 const ROCKS_ENABLED = false
+
+// World height in metres. Rocks keep their own range in buildKindPlacements and
+// this entry only exists so the signature is uniform.
+const OAK_HEIGHT_RANGE = [6, 13] as const
+const WINTER_TREE_HEIGHT_RANGE = [11, 22] as const
+const ROCK_HEIGHT_RANGE = [0.9, 5.5] as const
 let _sunLightScratch = new Float32Array(0)
 const _sunInput: PropSunLightInput = {
   planetDirs: new Float32Array(0),
@@ -499,6 +508,7 @@ async function loadPropModel(
   id: string,
   kind: PlanetPropModel['kind'],
   url: string,
+  heightRange: readonly [number, number],
   lodSpecs: PropLodSpec[] = [],
 ): Promise<PlanetPropModel> {
   const gltf = await loader.loadAsync(url)
@@ -521,7 +531,7 @@ async function loadPropModel(
   })
 
   if (rawParts.length === 0 || modelBox.isEmpty()) {
-    return { id, kind, parts: [] }
+    return { id, kind, heightRange, parts: [] }
   }
 
   const size = new THREE.Vector3()
@@ -571,7 +581,7 @@ async function loadPropModel(
     }
   }
 
-  return { id, kind, parts: rawParts }
+  return { id, kind, heightRange, parts: rawParts }
 }
 
 export function getPlanetPropAssets(): PlanetPropAssets | null {
@@ -587,12 +597,13 @@ export function loadPlanetPropAssets(): Promise<PlanetPropAssets> {
     // Both trees ship four independently generated tiers, each with its own
     // baked atlas -- hence ownMaterial on every one. A tier produced by
     // decimating the base mesh instead would keep the base UVs and set false.
-    loadPropModel(loader, 'oak-tree', 'tree', oakLod0Url, [
+    // Oaks read broad and shorter, the dry pine tall and narrow. Tune here.
+    loadPropModel(loader, 'oak-tree', 'tree', oakLod0Url, OAK_HEIGHT_RANGE, [
       { url: oakLod1Url, ownMaterial: true },
       { url: oakLod2Url, ownMaterial: true },
       { url: oakLod3Url, ownMaterial: true },
     ]),
-    loadPropModel(loader, 'winter-tree', 'tree', winterLod0Url, [
+    loadPropModel(loader, 'winter-tree', 'tree', winterLod0Url, WINTER_TREE_HEIGHT_RANGE, [
       { url: winterLod1Url, ownMaterial: true },
       { url: winterLod2Url, ownMaterial: true },
       { url: winterLod3Url, ownMaterial: true },
@@ -605,9 +616,9 @@ export function loadPlanetPropAssets(): Promise<PlanetPropAssets> {
   const rockPromises = ROCKS_ENABLED
     ? [
         import('../../assets/models/rocks/rock_1.glb?url')
-          .then(module => loadPropModel(loader, 'rock-1', 'rock', module.default)),
+          .then(module => loadPropModel(loader, 'rock-1', 'rock', module.default, ROCK_HEIGHT_RANGE)),
         import('../../assets/models/rocks/rock_2.glb?url')
-          .then(module => loadPropModel(loader, 'rock-2', 'rock', module.default)),
+          .then(module => loadPropModel(loader, 'rock-2', 'rock', module.default, ROCK_HEIGHT_RANGE)),
       ]
     : []
 
@@ -1030,7 +1041,11 @@ export class PlanetPropLayer {
       if (!modelPlacement) continue
 
       if (kind === 'tree') {
-        const treeHeight = 7.5 + rng() * 12.5
+        // Per model rather than one shared range, so an oak and a pine are not
+        // the same size. Still exactly one rng() draw, so placement and model
+        // choice are untouched.
+        const [minHeight, maxHeight] = model.heightRange
+        const treeHeight = minHeight + rng() * (maxHeight - minHeight)
         placementUp.copy(radial).lerp(normal, 0.18).normalize()
         position.addScaledVector(placementUp, 0.08)
         scale.set(treeHeight, treeHeight, treeHeight)
