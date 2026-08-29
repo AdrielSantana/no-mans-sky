@@ -217,7 +217,8 @@ Isso é seguro só porque os nomes não colidem: fonte usa `position`/`normal`/
 ### 1.6 Folhagem — o que ficou de fora
 
 - **O atlas é o mesmo para as duas espécies.** Um conífero quer ramo de agulha,
-  não tufo de folha larga. Hoje o winter tree só se diferencia pela cor.
+  não tufo de folha larga. Na folhagem, o winter tree só se diferencia pela cor
+  — o tronco e a raiz já são outra malha.
 - **`alphaToCoverage` continua inerte** porque o renderer roda `antialias: false`.
   Com MSAA ligado, folhagem seria o primeiro lugar a se beneficiar.
 - **Sem sombra de folha no chão.** As props recebem sombra do terreno e das
@@ -236,8 +237,8 @@ uma coisa só, eram três, medidas em cima das malhas de verdade:
    pro céu, não perpendicular ao morro), então o eixo dela e o do chão discordam
    por um ângulo `a` e a borda de baixo do disco sobe `raio * sin(a)`. Oak de
    13 m numa encosta de 20°: **0,73 m de luz do dia embaixo da raiz.** O winter
-   tree, um cilindro de base 0,037, mal aparecia — o problema era quase todo do
-   oak. Foi essa assimetria que apontou pra saia de raiz como causa.
+   tree da época, um cilindro de base 0,037, mal aparecia — o problema era quase
+   todo do oak. Foi essa assimetria que apontou pra saia de raiz como causa.
 2. **O pivô estava na copa.** `normalize` centrava o modelo em x/z pelo
    *bounding box*, que segue a copa: no oak isso põe a origem a 0,05 da altura
    de distância do próprio tronco. O `spin` aleatório então jogava esse offset
@@ -272,8 +273,8 @@ Medido varrendo o `spin` em 24 ângulos sobre a saia inteira:
 |---|---|---|---|---|---|---|
 | oak 13 m | 20° | 0,73 m | 0,12 m | 1,03 m | **0,00 m** | **0,24 m** |
 | oak 13 m | 30° | 1,03 m | 0,24 m | 1,45 m | **0,00 m** | **0,32 m** |
-| winter 22 m | 20° | 0,42 m | 0,00 m | 0,55 m | **0,00 m** | **0,21 m** |
-| winter 22 m | 30° | 0,59 m | 0,00 m | 0,76 m | **0,00 m** | **0,25 m** |
+| winter 22 m | 20° | 0,95 m | 0,08 m | 1,31 m | **0,00 m** | **0,30 m** |
+| winter 22 m | 30° | 1,37 m | 0,22 m | 1,83 m | **0,00 m** | **0,39 m** |
 
 Sanidade do harness: em 0° de encosta a folga "antes" dá exatamente 0,08 m — a
 levantada antiga. O enterro que sobra no skirt é a saia morro acima passando
@@ -281,6 +282,16 @@ abaixo do plano, que é o certo: é a árvore abraçando a encosta.
 
 Sobrou só `PROP_GROUND_BIAS` (0,006 da altura) pra base nunca ficar exatamente
 coplanar com o terreno.
+
+**O pine ganhou raiz depois disso, e nessa ordem.** O winter tree foi
+regerado com saia (raio da base 0,037 → 0,102), o que sob o código antigo teria
+sido *pior* que o oak: 0,95 m de folga a 20°, 1,37 m a 30°. É o skirt que torna
+o modelo com raiz viável — sem ele, dar raiz a um conífero de 22 m só aumentaria
+o buraco. A escada nova é 4202/1025/407/91 triângulos e o anel de contato
+sobrevive à decimação (largura da base 0,203–0,212 nos quatro tiers), que era o
+risco real: o skirt só ancora o que estiver no `y` mais baixo da malha.
+Folhagem sem ajuste nenhum — `extractBranchAnchors` deu 321 anchors / 963 cards
+contra 295 / 885 do modelo antigo.
 
 Vale pra rock também quando voltar (`ROCKS_ENABLED`) sem nada a mais: o skirt
 não é condicionado a `kind`.
