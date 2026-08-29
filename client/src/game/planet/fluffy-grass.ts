@@ -50,6 +50,11 @@ const MAX_INSTANCES_PER_CHUNK = 2400
 const MIN_SURFACE_SLOPE_DOT = 0.62
 const MIN_GRASS_ALPHA = 0.12
 const PATCH_SCALE_METERS = 72
+// Deliberately tiny rather than a "close enough to zero" figure. Sterile chunks
+// measure exactly 0, so this still culls all of them, while leaving plenty of
+// headroom for chunks that only just carry grass — a false negative here is a
+// bald patch on the ground, which is far worse than a wasted scatter pass.
+const GRASS_COVERAGE_EPSILON = 1e-4
 
 function clamp(value: number, min: number, max: number): number {
   return Math.max(min, Math.min(max, value))
@@ -252,10 +257,47 @@ export function createFluffyGrassMaterial(
         float waveB = sin(dot(instancePlanetLocal, windDirB) * 0.075 + uTime * 2.10 + 1.7);
         float gustEnvelope = smoothstep(-0.35, 0.95, sin(dot(instancePlanetLocal, windDirA) * 0.012 - uTime * 0.55));
         float localFlutter = sin(instanceSeed * 6.2831853 + uTime * 3.6 + position.y * 3.0) * 0.16;
-        float gust = (waveA * 0.72 + waveB * 0.28) * (0.45 + gustEnvelope * 0.75) + localFlutter;
+        float gust = (waveA * 0.72 + waveB * 0.28) * (0.45 + gustEnvelope * 0.75);
         float bend = vTip * vTip * uWindStrength * gust * 0.30;
-        transformed.x += bend;
-        transformed.z += bend * 0.24 * cos(dot(instancePlanetLocal, windDirB) * 0.030 + uTime * 0.80);
+        float flutter = vTip * vTip * uWindStrength * localFlutter * 0.30;
+
+        // The gust magnitude is spatially coherent, but the bend used to be
+        // applied along the blade's own local X/Z — and buildInstances gives
+        // every blade a random yaw about the radial. Neighbouring blades under
+        // one gust therefore bent in unrelated directions, so the field
+        // shimmered instead of leaning. Resolve the wind into the blade's local
+        // axes so a gust pushes the whole patch the same way.
+        //
+        // instanceMatrix columns 0 and 2 are the blade's local X and Z in
+        // planet space and carry the same scale (width, height, width), so
+        // normalising them gives the tangent basis directly — no extra
+        // attribute needed.
+        float bendX = 1.0;
+        float bendZ = 0.0;
+        #ifdef USE_INSTANCING
+          vec3 bladeUp = normalize(instancePlanetLocal);
+          vec3 bladeAxisX = normalize(instanceMatrix[0].xyz);
+          vec3 bladeAxisZ = normalize(instanceMatrix[2].xyz);
+          // Project the wind onto the tangent plane. Near the two points where
+          // windDirA is parallel to the radial the projection collapses, which
+          // would freeze the grass — fall back to the second wind direction
+          // there.
+          vec3 windTangent = windDirA - bladeUp * dot(windDirA, bladeUp);
+          if (dot(windTangent, windTangent) < 0.0025) {
+            windTangent = windDirB - bladeUp * dot(windDirB, bladeUp);
+          }
+          if (dot(windTangent, windTangent) > 1e-8) {
+            windTangent = normalize(windTangent);
+            bendX = dot(windTangent, bladeAxisX);
+            bendZ = dot(windTangent, bladeAxisZ);
+          }
+        #endif
+
+        // Coherent gust along the wind; per-blade flutter on the perpendicular
+        // axis so the patch still has individual life rather than reading as
+        // one rigid sheet.
+        transformed.x += bend * bendX - flutter * bendZ;
+        transformed.z += bend * bendZ + flutter * bendX;
         #endif
 
         #ifdef USE_INSTANCING
@@ -436,6 +478,12 @@ export class FluffyGrassLayer {
   dispose() {
     this.mesh.parent?.remove(this.mesh)
     this.mesh.geometry.dispose()
+    // instanceMatrix lives on the InstancedMesh, not the geometry, and its GL
+    // buffer is only released by the mesh's own dispose event. Chunk layers are
+    // torn down continuously while walking, so skipping this leaked ~127KB
+    // (near) + 38KB (far) per chunk. The material is shared and owned by
+    // PlanetRenderer — do not dispose it here.
+    this.mesh.dispose()
   }
 
   private buildInstances(params: FluffyGrassLayerParams): {
@@ -458,6 +506,18 @@ export class FluffyGrassLayer {
     }
 
     const { surface, node, settings } = params
+
+    if (!this.hasAnyGrassCoverage(surface, params.seaHeight)) {
+      return {
+        count: 0,
+        matrices: [],
+        seeds: new Float32Array(0),
+        normals: new Float32Array(0),
+        microAo: new Float32Array(0),
+        macroAo: new Float32Array(0),
+      }
+    }
+
     const gridSize = surface.gridSize
     const cellCount = (gridSize - 1) * (gridSize - 1)
     const far = params.variant === 'far'
@@ -490,25 +550,10 @@ export class FluffyGrassLayer {
       radial.copy(position).normalize()
 
       const height = this.sampleHeight(surface, ix, iy, tx, ty)
-      const slopeDot = normal.dot(radial)
-      const heightNorm = smoothstep(-1, 1, height)
-      const latitude = Math.abs(radial.y)
-      const moisture = saturate(height * 0.75 + 0.5)
-      const slope = saturate(1 - slopeDot)
-      const coast = smoothstep(params.seaHeight - 0.014, params.seaHeight + 0.014, height)
-        * (1 - smoothstep(params.seaHeight + 0.026, params.seaHeight + 0.060, height))
-      const rockMask = saturate(slope * 0.75 + smoothstep(0.60, 0.72, heightNorm))
-      const snowMask = smoothstep(0.74, 0.84, heightNorm + latitude * 0.18) * smoothstep(0.54, 0.78, latitude)
-      const grassBiomeMask = smoothstep(0.34, 0.62, moisture)
-        * (1 - coast)
-        * (1 - rockMask)
-        * (1 - snowMask)
-        * (1 - smoothstep(0.58, 0.70, heightNorm))
-      const aboveSeaMask = smoothstep(params.seaHeight + 0.018, params.seaHeight + 0.075, height)
-      const slopeMask = smoothstep(MIN_SURFACE_SLOPE_DOT, 0.88, slopeDot)
+      const baseMask = this.evaluateBaseMask(height, normal, radial, params.seaHeight)
       const patchMask = smoothstep(far ? 0.43 : 0.46, far ? 0.57 : 0.60, patchNoise(position, params.seed))
       const patchEdgeJitter = smoothstep(0.12, 0.72, rng() * 0.34 + patchMask * 0.82)
-      const mask = aboveSeaMask * grassBiomeMask * slopeMask * patchMask
+      const mask = baseMask * patchMask
       if (rng() > mask * patchEdgeJitter) continue
 
       const width = settings.height * (far ? 2.6 + rng() * 2.2 : 0.52 + rng() * 0.42)
@@ -540,6 +585,78 @@ export class FluffyGrassLayer {
       microAo: microAo.slice(0, matrices.length),
       macroAo: macroAo.slice(0, matrices.length),
     }
+  }
+
+  // The terrain half of the grass mask: everything except the patch noise.
+  // Shared by the scatter loop and the coverage prepass so the two can never
+  // drift apart.
+  private evaluateBaseMask(
+    height: number,
+    normal: THREE.Vector3,
+    radial: THREE.Vector3,
+    seaHeight: number,
+  ): number {
+    const slopeDot = normal.dot(radial)
+    const heightNorm = smoothstep(-1, 1, height)
+    const latitude = Math.abs(radial.y)
+    const moisture = saturate(height * 0.75 + 0.5)
+    const slope = saturate(1 - slopeDot)
+    const coast = smoothstep(seaHeight - 0.014, seaHeight + 0.014, height)
+      * (1 - smoothstep(seaHeight + 0.026, seaHeight + 0.060, height))
+    const rockMask = saturate(slope * 0.75 + smoothstep(0.60, 0.72, heightNorm))
+    const snowMask = smoothstep(0.74, 0.84, heightNorm + latitude * 0.18) * smoothstep(0.54, 0.78, latitude)
+    const grassBiomeMask = smoothstep(0.34, 0.62, moisture)
+      * (1 - coast)
+      * (1 - rockMask)
+      * (1 - snowMask)
+      * (1 - smoothstep(0.58, 0.70, heightNorm))
+    const aboveSeaMask = smoothstep(seaHeight + 0.018, seaHeight + 0.075, height)
+    const slopeMask = smoothstep(MIN_SURFACE_SLOPE_DOT, 0.88, slopeDot)
+    return aboveSeaMask * grassBiomeMask * slopeMask
+  }
+
+  // Cheap upper-bound check before the scatter loop.
+  //
+  // maxAttempts reaches ~25,900 (near) + ~10,600 (far) per chunk, and every
+  // iteration evaluates patchNoise — 3 octaves, 8 hashes each — *before* the
+  // single acceptance test. On an all-ocean, all-snow or steep-rock chunk the
+  // mask is 0 everywhere, so all of them run and produce nothing: ~8.2ms of
+  // main thread inside a 2.5ms integration budget, for a layer that is then
+  // discarded.
+  //
+  // Samples grid vertices *and* cell centres. Vertices alone are not a sound
+  // bound: slopeDot comes from a normalised bilinear blend of the corner
+  // normals, and averaging two oppositely-tilted normals can read flatter than
+  // either corner. Cell centres are where that effect peaks.
+  //
+  // Crucially this never touches the rng, so chunks that do have grass keep a
+  // byte-identical scatter.
+  private hasAnyGrassCoverage(surface: TerrainChunkSurfaceData, seaHeight: number): boolean {
+    const gridSize = surface.gridSize
+    const position = new THREE.Vector3()
+    const normal = new THREE.Vector3()
+    const radial = new THREE.Vector3()
+
+    for (let iy = 0; iy < gridSize; iy++) {
+      for (let ix = 0; ix < gridSize; ix++) {
+        const i = iy * gridSize + ix
+        position.set(surface.positions[i * 3], surface.positions[i * 3 + 1], surface.positions[i * 3 + 2])
+        normal.set(surface.normals[i * 3], surface.normals[i * 3 + 1], surface.normals[i * 3 + 2]).normalize()
+        radial.copy(position).normalize()
+        if (this.evaluateBaseMask(surface.heights[i], normal, radial, seaHeight) > GRASS_COVERAGE_EPSILON) return true
+      }
+    }
+
+    for (let iy = 0; iy < gridSize - 1; iy++) {
+      for (let ix = 0; ix < gridSize - 1; ix++) {
+        this.sampleSurface(surface, ix, iy, 0.5, 0.5, position, normal)
+        radial.copy(position).normalize()
+        const height = this.sampleHeight(surface, ix, iy, 0.5, 0.5)
+        if (this.evaluateBaseMask(height, normal, radial, seaHeight) > GRASS_COVERAGE_EPSILON) return true
+      }
+    }
+
+    return false
   }
 
   private sampleSurface(

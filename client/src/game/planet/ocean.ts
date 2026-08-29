@@ -227,7 +227,13 @@ export function createOceanMaterial(params: OceanMaterialParams): THREE.ShaderMa
     float waterDepth = max(uSeaHeight - terrainHeight, 0.0);
     float shoreCalm = smoothstep(0.005, 0.055, waterDepth);
     OceanIfftSampleData ifft = oceanIfftSampleData(sphereDir);
-    float legacyWave = oceanWaveField(sphereDir, uTime);
+    // Both mixes below weight this by uIfftEnabled, which is 1 at construction
+    // and never written anywhere in the client, so the legacy field is always
+    // multiplied out. Evaluating it cost ~35 snoise4D per vertex across a
+    // 65,340-vertex non-indexed icosphere — ~2.3M discarded simplex taps per
+    // frame per ocean planet. The branch is uniform-coherent, so the taken
+    // operand is the only one evaluated.
+    float legacyWave = uIfftEnabled > 0.5 ? 0.0 : oceanWaveField(sphereDir, uTime);
     vWave = mix(legacyWave, ifft.height, uIfftEnabled);
     vIfftFoam = ifft.foam * uIfftEnabled;
     vIfftSlope = length(ifft.slope) * uIfftEnabled;

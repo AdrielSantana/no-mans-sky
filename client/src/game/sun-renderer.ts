@@ -4,6 +4,14 @@ import { SIMPLEX_4D } from './shaders/noise.glsl'
 const SUN_DETAIL_ON_DISTANCE_MULTIPLIER = 60
 const SUN_DETAIL_OFF_DISTANCE_MULTIPLIER = 75
 
+// The perlin cubemap's noise field advances at 1% of wall clock: uTime is
+// time * 0.1 and uTemporalFrequency is 0.1, so w moves 1.7e-4 per frame at
+// 60fps — below the 8-bit quantisation step of the render target. Re-baking
+// every frame costs 6 faces x 512px x 11 simplex-4D evaluations to produce a
+// texture that did not change. The plasma's apparent motion comes from the
+// layer rotation in sunSphereVS, which still runs every frame for free.
+const SUN_CUBEMAP_BAKE_INTERVAL = 0.1
+
 // ── Visibility helper ────────────────────────────────────
 const VISIBILITY_GLSL = /* glsl */ `
 uniform float uVisibility;
@@ -436,6 +444,8 @@ export class SunRenderer {
   private perlinMat: THREE.ShaderMaterial
   private cubeRT: THREE.WebGLCubeRenderTarget
   private cubeCam: THREE.CubeCamera
+  private bakeAccumulator = Infinity
+  private hasBakedPerlin = false
 
   // Sun sphere
   private sunMaterial: THREE.ShaderMaterial
@@ -785,15 +795,8 @@ export class SunRenderer {
   update(deltaTime: number) {
     this.time += deltaTime
 
-    // Bake perlin cubemap
-    this.perlinMat.uniforms.uTime.value = this.time * 0.1
-    this.cubeCam.update(this.renderer, this.perlinScene)
-
-    // Sun sphere
-    this.sunMaterial.uniforms.uTime.value = this.time * 0.04
-    this.sunMaterial.uniforms.uLightView.value.copy(this.lightDirWorld)
-
-    // Update camera-dependent uniforms
+    // Camera-dependent uniforms come first: the cubemap bake is gated on the
+    // detail LOD that updateDetailLod resolves.
     this.camera.updateMatrixWorld(true)
     const view = new THREE.Matrix4().copy(this.camera.matrixWorld).invert()
     const vp = new THREE.Matrix4().multiplyMatrices(this.camera.projectionMatrix, view)
@@ -801,6 +804,22 @@ export class SunRenderer {
     this.camera.getWorldPosition(camPos)
     const camUp = new THREE.Vector3(0, 1, 0).applyQuaternion(this.camera.quaternion).normalize()
     this.updateDetailLod(camPos)
+
+    // Bake perlin cubemap on a cadence rather than every frame. The first bake
+    // is unconditional — the constructor never bakes, so skipping it would
+    // leave frame 1 sampling a black cubemap.
+    this.bakeAccumulator += deltaTime
+    const dueForBake = this.showDetailEffects && this.bakeAccumulator >= SUN_CUBEMAP_BAKE_INTERVAL
+    if (!this.hasBakedPerlin || dueForBake) {
+      this.bakeAccumulator = 0
+      this.hasBakedPerlin = true
+      this.perlinMat.uniforms.uTime.value = this.time * 0.1
+      this.cubeCam.update(this.renderer, this.perlinScene)
+    }
+
+    // Sun sphere
+    this.sunMaterial.uniforms.uTime.value = this.time * 0.04
+    this.sunMaterial.uniforms.uLightView.value.copy(this.lightDirWorld)
 
     // Glow
     this.glowMaterial.uniforms.uViewProjection.value.copy(vp)

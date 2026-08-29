@@ -59,6 +59,16 @@ export interface EditorParams {
   treeDensity: number
   rockDensity: number
   propDistance: number
+  // Procedural leaves. The tree models are trunk and branches only, so every
+  // one of these drives geometry that is generated in the engine.
+  foliageDensity: number
+  foliageSize: number
+  foliageFlutter: number
+  foliageTranslucency: number
+  oakLeafShade: string
+  oakLeafSun: string
+  pineLeafShade: string
+  pineLeafSun: string
   sunColor: string
   sunAzimuth: number
   sunElevation: number
@@ -198,6 +208,14 @@ export const DEFAULT_PARAMS: EditorParams = {
   treeDensity: 0.45,
   rockDensity: 0.35,
   propDistance: 2200,
+  foliageDensity: 1,
+  foliageSize: 0.105,
+  foliageFlutter: 1,
+  foliageTranslucency: 0.85,
+  oakLeafShade: '#3d6a26',
+  oakLeafSun: '#8cb14f',
+  pineLeafShade: '#24402e',
+  pineLeafSun: '#517d52',
   sunColor: '#fff2c8',
   sunAzimuth: 315,
   sunElevation: 28,
@@ -288,6 +306,12 @@ export const RANGES = {
   treeDensity: { min: 0, max: 1.5, step: 0.01 },
   rockDensity: { min: 0, max: 1.5, step: 0.01 },
   propDistance: { min: 100, max: 6000, step: 25 },
+  foliageDensity: { min: 0, max: 1, step: 0.01 },
+  // Card size as a fraction of tree height. Past ~0.15 a card stops reading as
+  // a clump of leaves and starts reading as one enormous leaf.
+  foliageSize: { min: 0, max: 0.2, step: 0.002 },
+  foliageFlutter: { min: 0, max: 3, step: 0.05 },
+  foliageTranslucency: { min: 0, max: 2, step: 0.05 },
   sunAzimuth: { min: 0, max: 360, step: 1 },
   sunElevation: { min: -20, max: 80, step: 1 },
   planetRotationSpeed: { min: -30, max: 30, step: 0.1 },

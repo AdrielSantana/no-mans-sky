@@ -17,19 +17,29 @@ import {
   createPlanetFarMaterial,
   createPlanetMaterial,
   createPlanetFallbackMaterial,
+  getPlanetTextureScale,
   getSeaHeight,
   PlanetGenerator,
 } from './planet-generator'
 import { WORLD_SCALE } from '../world-scale'
 import {
   samplePlanetHeight,
-  samplePlanetHeightDetailed,
   samplePlanetRadius,
   samplePlanetRadiusDetailed,
   type PlanetTerrainParams,
 } from '../../../../server/spacetimedb/src/shared/planet-terrain'
 import type { Vec3Like } from '../../../../server/spacetimedb/src/shared/vector'
-import type { TerrainWorkerBuildResponse, TerrainWorkerResponse } from './terrain-worker-types'
+import type {
+  TerrainWorkerBuildResponse,
+  TerrainWorkerOceanRequest,
+  TerrainWorkerPropSunRequest,
+  TerrainWorkerResponse,
+} from './terrain-worker-types'
+import {
+  buildOceanShoreMask,
+  buildOceanVertexHeights,
+  type OceanShoreMaskParams,
+} from './ocean-sampling'
 import type { TerrainChunkGeometryData } from './terrain-geometry'
 import {
   FluffyGrassLayer,
@@ -42,10 +52,16 @@ import {
   PlanetPropLayer,
   getPlanetPropAssets,
   loadPlanetPropAssets,
+  setPlanetPropFoliagePalettes,
   updatePlanetPropMaterials,
   type PlanetPropAssets,
   type PlanetPropSettings,
 } from './planet-props'
+import {
+  DEFAULT_FOLIAGE_SETTINGS,
+  type FoliagePalette,
+  type FoliageSettings,
+} from './tree-foliage'
 import { createOceanMaterial } from './ocean'
 import { OceanGpuIfftSpectrum } from './ocean-gpu-ifft'
 import { OceanIfftSpectrum } from './ocean-ifft'
@@ -59,6 +75,51 @@ const MAX_TERRAIN_WORKERS = 8
 const DETAILED_MATERIAL_MIN_LOD = 6
 const DETAILED_MATERIAL_DISTANCE = WORLD_SCALE.localDetailFar
 const LOD_COLLAPSE_HYSTERESIS = 1.35
+const SCATTER_SETTLE_MS = 150
+const PROP_BUILD_DISTANCE_MARGIN = 1.15
+const CLOUD_CAP_ANGLE_MARGIN = 1.15
+const CLOUD_CAP_ANGLE_MIN = 0.12
+const CLOUD_CAP_ANGLE_MAX = 0.92
+// Per-frame ceiling on prop horizon-shadow recomputation. The staleness gate is
+// per layer and the local sun direction sweeps continuously, so every visible
+// layer used to cross the 1.4-degree threshold on the same frame — measured at
+// ~175ms with 40 layers. Spreading the work costs at most a couple of frames of
+// lag on a shadow direction that only moves 1.4 degrees anyway.
+const PROP_SUN_LIGHT_BUDGET_MS = 2
+const MAX_OCEAN_WORKERS = 3
+// Distance ladder for prop detail tiers, as fractions of the prop show
+// distance (648 in game). Entry i is the boundary between tier i and tier i+1,
+// so this array is one shorter than the number of tiers.
+//
+// A 15m tree covers roughly 156px of screen height at 100m, 69px at 227m and
+// 24px at 648m, while the full model rasterises 17.5k-20.5k triangles --
+// and because instance count grows with the square of distance, most trees on
+// screen are in the far bands.
+//
+// Extra tiers drop in without a code change: models carrying fewer tiers are
+// clamped per part inside PlanetPropLayer.setLodTier, so adding a fraction here
+// before the assets exist is harmless.
+// 0.35/0.62/0.86 of 648m => ~227m, ~402m, ~557m. Sized against on-screen
+// height: a 15m tree is ~68px at 227m, ~39px at 402m and ~28px at 557m.
+const PROP_LOD_DISTANCE_FRACTIONS = [0.35, 0.62, 0.86]
+const PROP_LOD_HYSTERESIS = 0.12
+// Cap on prop sun-light jobs queued on the dedicated worker. It processes
+// messages serially, so an unbounded queue would just accumulate results that
+// are already stale by the time they land.
+const MAX_PROP_SUN_IN_FLIGHT = 6
+
+// Scratches for the per-node LOD traversal. getNodeCenter used to allocate a
+// Vector3 on every call and is hit four times per node per frame; these are
+// separate vectors on purpose, so a nested call can never clobber a caller's
+// value even though today both happen to resolve the same node.
+const _nodeDir = new THREE.Vector3()
+const _radiusDir = new THREE.Vector3()
+const _horizonDir = new THREE.Vector3()
+const _camDir = new THREE.Vector3()
+const _stitchScratch: StitchSteps = { bottom: 0, top: 0, left: 0, right: 0 }
+const _propSunDir = new THREE.Vector3()
+// Same 1.4-degree threshold the layer uses to decide it needs refreshing.
+const PROP_SUN_STALE_DOT = 0.9997
 const CLOUD_BILLBOARD_MAX_INSTANCES = 1600
 const CLOUD_BILLBOARD_SURFACE_BUDGET = 0.42
 const CLOUD_BILLBOARD_BUDGET_NEAR_DISTANCE = WORLD_SCALE.localDetailFar * 1.25
@@ -237,6 +298,11 @@ export class PlanetRenderer {
   private oceanDetailIfftFrame = 0
   private oceanMesh: THREE.Mesh | null = null
   private oceanShoreMask: THREE.DataTexture | null = null
+  private oceanDataReady = false
+  private oceanWorkers: Worker[] = []
+  private oceanPendingSlices = 0
+  private oceanJobId = 0
+  private oceanGeometry: THREE.BufferGeometry | null = null
   private oceanSeaRadius = 0
   private oceanMeshFacetInset = 0
   private oceanWaveHeight = DEFAULT_OCEAN_WAVE_HEIGHT
@@ -273,6 +339,15 @@ export class PlanetRenderer {
   private propAssets: PlanetPropAssets | null = getPlanetPropAssets()
   private propAssetLoadRequested = false
   private propLayers = new Map<string, PlanetPropLayer>()
+  // Scatter rebuilds are deferred behind a settle timer. Editor sliders fire on
+  // pointermove with steps (0.01 / 0.05) well above the rebuild thresholds
+  // (0.001), and a rebuild clears and regenerates every grass/prop layer on
+  // every chunk — order 1e6 iterations and 1e5 Matrix4 allocations per tick.
+  // These cannot simply move into EditorCanvas's existing setTimeout: that
+  // timer only fires when buildPlanetKey changes, and the key deliberately
+  // excludes every grass and prop parameter, so the sliders would go inert.
+  private grassScatterDirtyAt = -1
+  private propScatterDirtyAt = -1
   private propSettings: PlanetPropSettings = {
     enabled: false,
     treeDensity: 0,
@@ -280,6 +355,24 @@ export class PlanetRenderer {
     distance: 0,
   }
   private propMinLod = 0
+  // Leaves are generated and driven entirely here rather than baked into the
+  // tree assets, so every one of these is live: change it and the canopy
+  // responds on the next frame with no reload and no rebuild.
+  private foliageSettings: FoliageSettings = { ...DEFAULT_FOLIAGE_SETTINGS }
+  // Keyed by model id. Empty means every species keeps the palette it was
+  // built with; entries override it live.
+  private foliagePalettes: Record<string, FoliagePalette> = {}
+  // Last known camera position in planet-local space, so prop attachment can
+  // gate on distance from paths that do not receive it (createChunk,
+  // rebuildPropLayers).
+  private lastLocalCamPos = new THREE.Vector3()
+  private hasLocalCamPos = false
+  private propSunLightSpentMs = 0
+  private propSunWorker: Worker | null = null
+  private propSunWorkerFailed = false
+  private propSunJobId = 0
+  private propSunJobs = new Map<number, { chunkKey: string; sunX: number; sunY: number; sunZ: number }>()
+  private propSunInFlightChunks = new Set<string>()
   private propVisibleInstances = 0
   private sunPosition = new THREE.Vector3(0, 0, 0)
   private cloudLocalSunDirection = new THREE.Vector3(0, 1, 0)
@@ -316,6 +409,9 @@ export class PlanetRenderer {
   private lodDistances: number[]
   private requestedTerrainWorkers: number
   private nodeSurfaceRadiusCache = new Map<string, number>()
+  // Occupancy of the visible chunk set, bucketed by face * (maxLod + 1) + lod.
+  // Rebuilt once per frame by rebuildStitchSets.
+  private stitchSets: Set<number>[] = []
   private chunkPriorityCache = new Map<string, number>()
   private time = 0
   private renderer: THREE.WebGLRenderer | null = null
@@ -779,6 +875,53 @@ export class PlanetRenderer {
     if (uniform) uniform.value = value
   }
 
+  private setColorUniform(material: THREE.ShaderMaterial | null, name: string, value: string) {
+    const uniform = material?.uniforms[name]
+    if (uniform?.value instanceof THREE.Color) uniform.value.set(value)
+  }
+
+  // Terrain albedo and texture blending are pure uniform state — none of it
+  // touches the height field, the quadtree or the ocean shore mask. Routing
+  // these through a setter keeps them out of the editor's planet rebuild key,
+  // where dragging a colour slider used to tear down and rebuild the whole
+  // planet, ocean shore mask included.
+  setTerrainAppearance(settings: {
+    colorA: string
+    colorB: string
+    textureScale: number
+    textureBlend: number
+    textureNearDistance: number
+    textureFadeDistance: number
+  }) {
+    const textureScale = getPlanetTextureScale(settings.textureScale, this.planetRadius)
+    const materials = [this.material, ...this.farLodMaterials, this.fallbackMaterial]
+    for (const material of materials) {
+      this.setColorUniform(material, 'uColorA', settings.colorA)
+      this.setColorUniform(material, 'uColorB', settings.colorB)
+      this.setFloatUniform(material, 'uTextureScale', textureScale)
+      this.setFloatUniform(material, 'uTextureBlend', settings.textureBlend)
+      this.setFloatUniform(material, 'uTextureNearDistance', settings.textureNearDistance)
+      this.setFloatUniform(material, 'uTextureFadeDistance', settings.textureFadeDistance)
+    }
+  }
+
+  // Every material that tints by the atmosphere names the uniform
+  // uAtmosphereColor and feeds it a plain THREE.Color, so this is a straight
+  // uniform write. setColorUniform skips materials that lack it.
+  setAtmosphereColor(color: string) {
+    const materials = [
+      this.material,
+      ...this.farLodMaterials,
+      this.fallbackMaterial,
+      this.atmosphereMaterial,
+      this.cloudMaterial,
+      this.cloudBillboardMaterial,
+    ]
+    for (const material of materials) {
+      this.setColorUniform(material, 'uAtmosphereColor', color)
+    }
+  }
+
   private getCloudMaskSettings() {
     return {
       seed: this.noiseProfile.seed,
@@ -941,6 +1084,7 @@ export class PlanetRenderer {
     this.grassSettings = next
 
     if (!next.enabled || this.terrainParams.planetType !== 'rocky') {
+      this.grassScatterDirtyAt = -1
       this.clearGrassLayers()
       this.updateGrassGroundAoUniforms()
       return
@@ -959,7 +1103,7 @@ export class PlanetRenderer {
     this.updateCloudUniforms()
 
     if (rebuild) {
-      this.rebuildGrassLayers()
+      this.grassScatterDirtyAt = performance.now()
     }
   }
 
@@ -977,12 +1121,59 @@ export class PlanetRenderer {
     this.propSettings = next
 
     if (!next.enabled || this.terrainParams.planetType !== 'rocky') {
+      this.propScatterDirtyAt = -1
       this.clearPropLayers()
       return
     }
 
     this.ensurePropAssets()
     if (rebuild) {
+      this.propScatterDirtyAt = performance.now()
+    }
+  }
+
+  // Live foliage tuning. None of this touches placement or geometry -- the
+  // cards already exist on every tree and the shader reads these each frame --
+  // so it is safe to drive from a slider without rebuilding a single chunk.
+  setFoliageSettings(settings: Partial<FoliageSettings>) {
+    this.foliageSettings = {
+      ...this.foliageSettings,
+      ...settings,
+      density: THREE.MathUtils.clamp(settings.density ?? this.foliageSettings.density, 0, 1),
+      size: THREE.MathUtils.clamp(settings.size ?? this.foliageSettings.size, 0, 0.6),
+      sizeVariance: THREE.MathUtils.clamp(settings.sizeVariance ?? this.foliageSettings.sizeVariance, 0, 1),
+      colorVariance: THREE.MathUtils.clamp(settings.colorVariance ?? this.foliageSettings.colorVariance, 0, 1),
+      translucency: THREE.MathUtils.clamp(settings.translucency ?? this.foliageSettings.translucency, 0, 3),
+      flutter: THREE.MathUtils.clamp(settings.flutter ?? this.foliageSettings.flutter, 0, 4),
+    }
+    // `enabled` is the one setting that is not just a uniform: zero density
+    // collapses every card to a degenerate quad, which the rasteriser drops
+    // before it costs a fragment.
+    if (!this.foliageSettings.enabled) this.foliageSettings.density = 0
+  }
+
+  getFoliageSettings(): FoliageSettings {
+    return { ...this.foliageSettings }
+  }
+
+  // Per-species leaf colour. Applied on the next frame; safe to call before the
+  // prop assets have finished loading.
+  setFoliagePalettes(palettes: Record<string, FoliagePalette>) {
+    this.foliagePalettes = { ...this.foliagePalettes, ...palettes }
+    if (this.propAssets) setPlanetPropFoliagePalettes(this.propAssets, this.foliagePalettes)
+  }
+
+  // Drains the deferred scatter rebuilds once the slider has settled. Called at
+  // the top of update(); asset load still rebuilds immediately, since that is a
+  // one-shot and the props should appear as soon as they arrive.
+  private consumePendingScatterRebuilds() {
+    const now = performance.now()
+    if (this.grassScatterDirtyAt >= 0 && now - this.grassScatterDirtyAt >= SCATTER_SETTLE_MS) {
+      this.grassScatterDirtyAt = -1
+      this.rebuildGrassLayers()
+    }
+    if (this.propScatterDirtyAt >= 0 && now - this.propScatterDirtyAt >= SCATTER_SETTLE_MS) {
+      this.propScatterDirtyAt = -1
       this.rebuildPropLayers()
     }
   }
@@ -1173,7 +1364,28 @@ export class PlanetRenderer {
       configuredCount,
       Math.max(1, Math.round(configuredCount * billboardBudget)),
     )
-    const capAngle = 0.92
+    // Derived from geometry rather than the previous hardcoded 0.92 rad.
+    // The cap the player can actually see is the planet's horizon angle plus
+    // how far past it the cloud shell stays visible:
+    //   acos(Rp / rCam) + acos(Rp / Rcloud)
+    // Standing on the surface at radius 50000 with cloudHeight 0.045 that is
+    // 0.294 rad — 0.92 covered roughly nine times the solid angle, so ~90% of
+    // the billboards sat below the horizon. They are not free: the cloud layer
+    // renders into its own half-res target with no terrain depth, so each one
+    // was fully rasterised and blended before being masked out in the
+    // composite. Since angularStep scales with capAngle, the same candidate
+    // budget now concentrates into the visible cap — denser clouds where you
+    // can see them, for less fill.
+    //
+    // Ceilinged at the old constant so this can only ever do less work.
+    const camRadius = Math.max(localCamPos.length(), this.planetRadius)
+    const horizonAngle = Math.acos(THREE.MathUtils.clamp(this.planetRadius / camRadius, -1, 1))
+    const shellAngle = Math.acos(THREE.MathUtils.clamp(this.planetRadius / cloudRadius, -1, 1))
+    const capAngle = THREE.MathUtils.clamp(
+      (horizonAngle + shellAngle) * CLOUD_CAP_ANGLE_MARGIN,
+      CLOUD_CAP_ANGLE_MIN,
+      CLOUD_CAP_ANGLE_MAX,
+    )
     const baseSize = this.planetRadius * 0.092 * THREE.MathUtils.lerp(1.12, 1.0, billboardBudget)
     const threshold = THREE.MathUtils.lerp(0.13, 0.06, billboardBudget)
     const maskOffset = this.getCloudMaskOffset()
@@ -1330,6 +1542,12 @@ export class PlanetRenderer {
 
       worker.onmessage = (event: MessageEvent<TerrainWorkerResponse>) => {
         const response = event.data
+        // Ocean jobs go to their own dedicated worker; these slots only ever
+        // see chunk traffic. Narrowing here keeps the union honest.
+        if (
+          response.type === 'ocean-built' || response.type === 'ocean-error'
+          || response.type === 'prop-sun-built' || response.type === 'prop-sun-error'
+        ) return
         slot.busy = false
         slot.key = null
         slot.jobId = null
@@ -1460,13 +1678,20 @@ export class PlanetRenderer {
     let meshes = 0
     let instances = 0
     let visibleLayers = 0
+    // Visible layers per detail tier, so PROP_LOD1_DISTANCE_FRACTION can be
+    // tuned against what is actually on screen.
+    const lodTiers: number[] = []
     let sunCount = 0
     let sunMin = 1
     let sunMax = 0
     let sunSum = 0
 
     for (const [chunkKey, layer] of this.propLayers) {
-      if (layer.group.visible) visibleLayers++
+      if (layer.group.visible) {
+        visibleLayers++
+        const tier = layer.lodTierIndex
+        lodTiers[tier] = (lodTiers[tier] ?? 0) + 1
+      }
       const sunStats = layer.getSunLightStats()
       if (sunStats.count > 0) {
         sunCount += sunStats.count
@@ -1501,6 +1726,7 @@ export class PlanetRenderer {
       assetLoadRequested: this.propAssetLoadRequested,
       layers: this.propLayers.size,
       visibleLayers,
+      visibleLayersByLod: Array.from(lodTiers, count => count ?? 0),
       meshes,
       instances,
       visibleInstances: this.propVisibleInstances,
@@ -1518,6 +1744,8 @@ export class PlanetRenderer {
 
   update(camera: THREE.Camera, _dt: number) {
     this.time += _dt
+    this.propSunLightSpentMs = 0
+    this.consumePendingScatterRebuilds()
     this.generatedChunksLastFrame = 0
     this.chunkGenerationMsLastFrame = 0
     this.chunkIntegrationMsLastFrame = 0
@@ -1561,6 +1789,8 @@ export class PlanetRenderer {
     this.group.getWorldQuaternion(planetQuat)
     const inversePlanetQuat = planetQuat.clone().invert()
     const localCamPos = camPos.clone().sub(planetPos).applyQuaternion(inversePlanetQuat)
+    this.lastLocalCamPos.copy(localCamPos)
+    this.hasLocalCamPos = true
     this.underwaterViewState = this.computeUnderwaterViewState(localCamPos)
     this.updateOceanViewSide(this.underwaterViewState)
     this.cloudLocalSunDirection.copy(this.sunPosition).sub(planetPos).applyQuaternion(inversePlanetQuat)
@@ -1590,7 +1820,14 @@ export class PlanetRenderer {
         cloudHeight: this.cloudHeight,
         cloudShadowStrength: this.hasActiveClouds() ? this.cloudShadow : 0,
         cloudLocalSunDirection: this.cloudLocalSunDirection,
+        time: this.time,
+        // The trees answer the same wind the grass does -- same directions,
+        // same frequencies, same strength -- so a gust leans a whole clearing
+        // at once instead of each layer running its own private weather.
+        windStrength: this.grassSettings.windStrength,
+        foliage: this.foliageSettings,
       })
+      setPlanetPropFoliagePalettes(this.propAssets, this.foliagePalettes)
     }
     this.chunkPriorityCache.clear()
 
@@ -1652,7 +1889,6 @@ export class PlanetRenderer {
     if (this.atmosphereMaterial) {
       this.group.getWorldPosition(this.atmosphereMaterial.uniforms.uPlanetCenter.value)
     }
-    this.updateCloudBillboards(localCamPos, surfaceDist)
     // Decide: show fallback sphere or quadtree terrain
     const useTerrain = surfaceDist < this.lodDistances[1]
 
@@ -1673,6 +1909,11 @@ export class PlanetRenderer {
       return
     }
 
+    // Only worth scanning the 2401-cell cloud mask once we know terrain is
+    // actually in use — the !useTerrain branch above hides the billboard mesh
+    // outright, and that branch is also the worst case for the scan.
+    this.updateCloudBillboards(localCamPos, surfaceDist)
+
     this.fallbackSphere.material = this.debugSimpleTerrain || !this.debugFallbackTerrainShader
       ? this.simpleTerrainMaterial
       : this.fallbackMaterial
@@ -1685,6 +1926,11 @@ export class PlanetRenderer {
     }
 
     // 2. Queue chunks that are needed for the next stable transition.
+    //    updateQuadtree just created children with a default `covered` of
+    //    false, so coverage has to be refreshed before collectLoadKeys reads it.
+    for (const root of this.quadtrees) {
+      this.markCovered(root)
+    }
     const loadKeys = new Set<string>()
     for (const root of this.quadtrees) {
       this.collectLoadKeys(root, loadKeys)
@@ -1711,6 +1957,12 @@ export class PlanetRenderer {
     }
 
     // 4.5 Recompute visibility after generation so promotions happen atomically.
+    //     A second coverage pass is mandatory here: integrateCompletedChunkBuilds
+    //     added chunks and applyPendingCollapses dropped subtrees, so the flags
+    //     from the pass above are stale for both reasons.
+    for (const root of this.quadtrees) {
+      this.markCovered(root)
+    }
     const renderKeys = new Set<string>()
     const retainKeys = new Set<string>()
     for (const root of this.quadtrees) {
@@ -1761,8 +2013,7 @@ export class PlanetRenderer {
       this.isChunkRelevantForDetail(node, localCamPos)
 
     if (shouldSub) {
-      const key = nodeKey(node.face, node.lod, node.x, node.y)
-      this.pendingCollapseKeys.delete(key)
+      this.pendingCollapseKeys.delete(node.key)
 
       if (!node.children) {
         node.children = createChildren(node)
@@ -1772,7 +2023,7 @@ export class PlanetRenderer {
       }
     } else {
       if (node.children) {
-        const key = nodeKey(node.face, node.lod, node.x, node.y)
+        const key = node.key
         if (this.chunks.has(key)) {
           this.removeChildrenChunks(node)
           node.children = null
@@ -1787,7 +2038,7 @@ export class PlanetRenderer {
   private applyPendingCollapses(node: QuadtreeNode) {
     if (!node.children) return
 
-    const key = nodeKey(node.face, node.lod, node.x, node.y)
+    const key = node.key
     if (this.pendingCollapseKeys.has(key) && this.chunks.has(key)) {
       this.removeChildrenChunks(node)
       node.children = null
@@ -1801,18 +2052,17 @@ export class PlanetRenderer {
   }
 
   private getLocalChunkDistToCamera(node: QuadtreeNode, localCamPos: THREE.Vector3): number {
-    const dir = getNodeCenter(node)
     const surfaceRadius = this.getNodeSurfaceRadius(node)
-    const center = dir.multiplyScalar(surfaceRadius)
+    const center = getNodeCenter(node, _nodeDir).multiplyScalar(surfaceRadius)
     return Math.max(0, localCamPos.distanceTo(center) - this.getNodeBoundingRadius(node, surfaceRadius))
   }
 
   private getNodeSurfaceRadius(node: QuadtreeNode): number {
-    const key = nodeKey(node.face, node.lod, node.x, node.y)
+    const key = node.key
     const cached = this.nodeSurfaceRadiusCache.get(key)
     if (cached !== undefined) return cached
 
-    const radius = samplePlanetRadius(getNodeCenter(node), this.terrainParams)
+    const radius = samplePlanetRadius(getNodeCenter(node, _radiusDir), this.terrainParams)
     this.nodeSurfaceRadiusCache.set(key, radius)
     return radius
   }
@@ -1833,7 +2083,7 @@ export class PlanetRenderer {
   private isChunkRelevantForDetail(node: QuadtreeNode, localCamPos: THREE.Vector3): boolean {
     if (localCamPos.lengthSq() === 0) return true
 
-    const facing = getNodeCenter(node).dot(localCamPos.clone().normalize())
+    const facing = getNodeCenter(node, _nodeDir).dot(_camDir.copy(localCamPos).normalize())
     return facing > -0.15
   }
 
@@ -1841,7 +2091,7 @@ export class PlanetRenderer {
     // Camera inside or on the surface — nothing is below horizon
     if (localCamPos.lengthSq() <= this.planetRadius * this.planetRadius) return false
 
-    const chunkDir = getNodeCenter(node)
+    const chunkDir = getNodeCenter(node, _horizonDir)
     const boundingRadius = this.getNodeBoundingRadius(node)
     const camDist = localCamPos.length()
 
@@ -1903,27 +2153,40 @@ export class PlanetRenderer {
       : { face: CubeFace.NZ, u: -dir.x / az, v: dir.y / az }
   }
 
-  private isNodeCovered(node: QuadtreeNode): boolean {
-    const key = nodeKey(node.face, node.lod, node.x, node.y)
-    if (this.chunks.has(key)) return true
-    return !!node.children && node.children.every(child => this.isNodeCovered(child))
+  // Recomputes `covered` for a whole quadtree in one post-order pass.
+  //
+  // This replaces isNodeCovered, which rebuilt a key string per visit and, on a
+  // miss, re-walked the entire subtree — and was called independently by
+  // collectLoadKeys (twice per child), collectRenderKeys, collectRetainKeys and
+  // hasQuadtreeTerrainCoverage, so the same answer was derived four-plus times.
+  //
+  // Always recurses into children even when this node is covered by its own
+  // chunk: collectLoadKeys reads `child.covered` for children of covered
+  // parents, so a stale flag anywhere in the tree would change the load set.
+  private markCovered(node: QuadtreeNode): boolean {
+    let childrenCovered = false
+    if (node.children) {
+      childrenCovered = true
+      for (const child of node.children) {
+        if (!this.markCovered(child)) childrenCovered = false
+      }
+    }
+    node.covered = this.chunks.has(node.key) || (node.children !== null && childrenCovered)
+    return node.covered
   }
 
   private collectLoadKeys(node: QuadtreeNode, out: Set<string>) {
-    const key = nodeKey(node.face, node.lod, node.x, node.y)
-
     if (!node.children) {
-      if (!this.chunks.has(key)) out.add(key)
+      if (!this.chunks.has(node.key)) out.add(node.key)
       return
     }
 
-    const childrenCovered = node.children.every(child => this.isNodeCovered(child))
-    if (!childrenCovered && !this.chunks.has(key)) out.add(key)
+    const childrenCovered = node.children.every(child => child.covered)
+    if (!childrenCovered && !this.chunks.has(node.key)) out.add(node.key)
 
     for (const child of node.children) {
-      const childKey = nodeKey(child.face, child.lod, child.x, child.y)
-      if (!this.isNodeCovered(child) && !this.chunks.has(childKey)) {
-        out.add(childKey)
+      if (!child.covered && !this.chunks.has(child.key)) {
+        out.add(child.key)
       } else {
         this.collectLoadKeys(child, out)
       }
@@ -1931,38 +2194,34 @@ export class PlanetRenderer {
   }
 
   private collectRenderKeys(node: QuadtreeNode, out: Set<string>) {
-    const key = nodeKey(node.face, node.lod, node.x, node.y)
-
     if (!node.children) {
-      if (this.chunks.has(key)) out.add(key)
+      if (this.chunks.has(node.key)) out.add(node.key)
       return
     }
 
-    const childrenCovered = node.children.every(child => this.isNodeCovered(child))
+    const childrenCovered = node.children.every(child => child.covered)
     if (childrenCovered) {
       for (const child of node.children) this.collectRenderKeys(child, out)
-    } else if (this.chunks.has(key)) {
-      out.add(key)
+    } else if (this.chunks.has(node.key)) {
+      out.add(node.key)
     } else {
       for (const child of node.children) this.collectRenderKeys(child, out)
     }
   }
 
   private collectRetainKeys(node: QuadtreeNode, out: Set<string>) {
-    const key = nodeKey(node.face, node.lod, node.x, node.y)
-
     if (!node.children) {
-      out.add(key)
+      out.add(node.key)
       return
     }
 
-    const childrenCovered = node.children.every(child => this.isNodeCovered(child))
-    if (!childrenCovered) out.add(key)
+    const childrenCovered = node.children.every(child => child.covered)
+    if (!childrenCovered) out.add(node.key)
     for (const child of node.children) this.collectRetainKeys(child, out)
   }
 
   private hasQuadtreeTerrainCoverage(): boolean {
-    return this.quadtrees.every(root => this.isNodeCovered(root))
+    return this.quadtrees.every(root => root.covered)
   }
 
   private isChunkBuildPending(key: string): boolean {
@@ -1982,7 +2241,10 @@ export class PlanetRenderer {
       return null
     }
 
-    return { face, lod, x, y, children: null }
+    // These synthetic nodes are not part of any quadtree, but they flow into
+    // createChunk and the worker request, both of which now read node.key —
+    // leaving it undefined here would silently break chunk lookup.
+    return { face, lod, x, y, children: null, key, covered: false }
   }
 
   private integrateCompletedChunkBuilds(localCamPos: THREE.Vector3) {
@@ -2107,7 +2369,7 @@ export class PlanetRenderer {
     if (!node.children) return
     for (const child of node.children) {
       this.removeChildrenChunks(child)
-      const key = nodeKey(child.face, child.lod, child.x, child.y)
+      const key = child.key
       const chunk = this.chunks.get(key)
       if (chunk) {
         this.group.remove(chunk.mesh)
@@ -2189,14 +2451,33 @@ export class PlanetRenderer {
     }
   }
 
+  // Prop layers are built lazily. The LOD gate alone does not match how they
+  // are *shown*: visibility is by distance (propSettings.distance, 648 in game),
+  // while the LOD-3 threshold at radius 650 sits at 1007 units — so a large
+  // fraction of layers were cloned, uploaded and sun-lit for chunks that could
+  // never render. Each one costs a deep geometry clone (up to ~1.8MB per chunk),
+  // five instanced attributes, a bounding-sphere pass and the horizon raymarch.
+  // Chunks that come into range get their layer from updateChunkPropVisibility.
+  private shouldHavePropLayer(chunk: TerrainChunk): boolean {
+    if (!this.propSettings.enabled || !this.propAssets || this.terrainParams.planetType !== 'rocky') return false
+    if (chunk.node.lod < this.propMinLod) return false
+    if (!this.hasLocalCamPos) return true
+    // Build slightly outside the show distance so crossing the boundary does not
+    // pop, and so a camera hovering on the edge does not rebuild every frame.
+    return this.getLocalChunkDistToCamera(chunk.node, this.lastLocalCamPos)
+      < this.propSettings.distance * PROP_BUILD_DISTANCE_MARGIN
+  }
+
   private attachPropLayer(chunk: TerrainChunk) {
-    if (!this.propSettings.enabled || !this.propAssets || this.terrainParams.planetType !== 'rocky') return
-    if (chunk.node.lod < this.propMinLod) return
+    if (!this.shouldHavePropLayer(chunk)) return
+    if (this.propLayers.has(chunk.key)) return
+    const assets = this.propAssets
+    if (!assets) return
 
     const props = new PlanetPropLayer({
       node: chunk.node,
       surface: chunk.getSurfaceData(),
-      assets: this.propAssets,
+      assets,
       settings: this.propSettings,
       terrain: this.terrainParams,
       seed: this.noiseProfile.seed,
@@ -2208,7 +2489,11 @@ export class PlanetRenderer {
       return
     }
 
-    props.updateSunLight(this.cloudLocalSunDirection)
+    // Approximate lighting only: the horizon raymarch is ~3.4ms per chunk and
+    // this runs inside the 2.5ms chunk integration budget. The layer reports as
+    // stale afterwards, so the budgeted pass in updateChunkPropVisibility does
+    // the real work over the following frames.
+    props.updateSunLight(this.cloudLocalSunDirection, true)
     chunk.mesh.add(props.group)
     this.propLayers.set(chunk.key, props)
   }
@@ -2251,9 +2536,17 @@ export class PlanetRenderer {
     this.oceanSeaRadius = seaRadius
     const oceanGeo = new THREE.IcosahedronGeometry(seaRadius, OCEAN_GEODESIC_DETAIL)
     this.oceanMeshFacetInset = this.measureOceanMeshFacetInset(oceanGeo)
-    this.addOceanTerrainHeightAttribute(oceanGeo)
+    const oceanDirections = this.addOceanTerrainHeightAttribute(oceanGeo)
+    this.oceanGeometry = oceanGeo
+    this.terminateOceanWorkers()
+    this.propSunWorker?.terminate()
+    this.propSunWorker = null
+    this.propSunJobs.clear()
+    this.propSunInFlightChunks.clear()
     this.oceanShoreMask?.dispose()
     this.oceanShoreMask = this.createOceanShoreMaskTexture()
+    this.oceanDataReady = false
+    this.dispatchOceanData(oceanDirections)
     const oceanWaveHeight = params.oceanWaveHeight ?? DEFAULT_OCEAN_WAVE_HEIGHT
     this.oceanWaveHeight = oceanWaveHeight
     const oceanSpectrumParams = {
@@ -2358,48 +2651,179 @@ export class PlanetRenderer {
     this.group.add(this.oceanMesh)
   }
 
-  private addOceanTerrainHeightAttribute(geometry: THREE.BufferGeometry) {
+  // Seeds the attribute with zeros and returns the normalised vertex directions
+  // for the worker. The attribute has to exist up front: ocean.ts declares
+  // `attribute float terrainHeight` and reads it in the vertex shader.
+  private addOceanTerrainHeightAttribute(geometry: THREE.BufferGeometry): Float32Array {
     const positions = geometry.getAttribute('position')
     const heights = new Float32Array(positions.count)
-    const dir = new THREE.Vector3()
+    const directions = new Float32Array(positions.count * 3)
 
     for (let i = 0; i < positions.count; i++) {
-      dir.fromBufferAttribute(positions, i).normalize()
-      heights[i] = samplePlanetHeightDetailed(dir, this.terrainParams, 1)
+      const x = positions.getX(i)
+      const y = positions.getY(i)
+      const z = positions.getZ(i)
+      const length = Math.hypot(x, y, z) || 1
+      directions[i * 3] = x / length
+      directions[i * 3 + 1] = y / length
+      directions[i * 3 + 2] = z / length
     }
 
     geometry.setAttribute('terrainHeight', new THREE.BufferAttribute(heights, 1))
+    return directions
+  }
+
+  // Moves the two heavy loops off the main thread. Together they were ~65,340
+  // icosphere vertices plus 131,072 shore-mask texels, each a full detailed
+  // height sample — measured at ~2.7s of synchronous freeze per water planet in
+  // the constructor, and re-triggered in the editor by any structural change.
+  //
+  // Uses its own one-shot worker rather than the chunk pool: the pool is
+  // created after this point in the constructor, and its slots are keyed by
+  // chunk key and epoch.
+  private dispatchOceanData(directions: Float32Array) {
+    const jobId = ++this.oceanJobId
+    const maskParams = this.oceanShoreMaskParams()
+    const vertexCount = directions.length / 3
+
+    const runSynchronously = () => {
+      this.applyOceanHeights(jobId, buildOceanVertexHeights(directions, this.terrainParams), 0)
+      this.applyOceanShoreMask(jobId, buildOceanShoreMask(this.terrainParams, maskParams), 0)
+      this.finishOceanData(jobId)
+    }
+
+    if (typeof Worker === 'undefined') {
+      runSynchronously()
+      return
+    }
+
+    // Split across several one-shot workers. A single worker took ~2.27s for
+    // the 196k detailed height samples; every texel and every vertex is
+    // independent, so this is the difference between water appearing after two
+    // seconds and after a few hundred milliseconds.
+    //
+    // These are separate from the chunk pool on purpose: that pool is built
+    // later in the constructor and its slots are keyed by chunk key and epoch.
+    const sliceCount = this.resolveOceanSliceCount()
+    this.terminateOceanWorkers()
+    this.oceanPendingSlices = sliceCount
+
+    for (let slice = 0; slice < sliceCount; slice++) {
+      const rowStart = Math.floor((maskParams.height * slice) / sliceCount)
+      const rowEnd = Math.floor((maskParams.height * (slice + 1)) / sliceCount)
+      const vertexStart = Math.floor((vertexCount * slice) / sliceCount)
+      const vertexEnd = Math.floor((vertexCount * (slice + 1)) / sliceCount)
+      const sliceDirections = directions.slice(vertexStart * 3, vertexEnd * 3)
+
+      const worker = new Worker(new URL('./terrain-worker.ts', import.meta.url), { type: 'module' })
+      this.oceanWorkers.push(worker)
+
+      worker.onmessage = (event: MessageEvent<TerrainWorkerResponse>) => {
+        const response = event.data
+        if (response.type === 'ocean-built') {
+          this.applyOceanHeights(response.id, response.heights, response.vertexOffset)
+          this.applyOceanShoreMask(response.id, response.shoreMask, response.rowStart)
+          this.completeOceanSlice(response.id)
+          return
+        }
+        if (response.type === 'ocean-error') {
+          if (import.meta.env.DEV) console.warn(`Ocean worker slice failed: ${response.message}`)
+          this.failOceanJob(jobId, runSynchronously)
+        }
+      }
+
+      worker.onerror = () => {
+        // Better a one-off stall than a planet with no coastline.
+        this.failOceanJob(jobId, runSynchronously)
+      }
+
+      const request: TerrainWorkerOceanRequest = {
+        type: 'ocean',
+        id: jobId,
+        slice,
+        terrain: this.terrainParams,
+        directions: sliceDirections,
+        vertexOffset: vertexStart,
+        shoreMask: maskParams,
+        rowStart,
+        rowEnd,
+      }
+      worker.postMessage(request, [sliceDirections.buffer])
+    }
+  }
+
+  private resolveOceanSliceCount(): number {
+    const threads = typeof navigator === 'undefined'
+      ? 4
+      : Math.max(2, navigator.hardwareConcurrency ?? 4)
+    // Deliberately a small share of the machine. The chunk pool already takes
+    // up to min(8, threads - 1), and oversubscribing turns terrain streaming
+    // slower — which the player sees — to make the water arrive sooner, which
+    // they mostly do not. Measured on this machine: 6 slices left the slowest
+    // slice at 1338ms of contended CPU versus ~380ms of actual work.
+    return Math.max(1, Math.min(MAX_OCEAN_WORKERS, Math.floor(threads / 3)))
+  }
+
+  private terminateOceanWorkers() {
+    for (const worker of this.oceanWorkers) worker.terminate()
+    this.oceanWorkers.length = 0
+    this.oceanPendingSlices = 0
+  }
+
+  private failOceanJob(jobId: number, fallback: () => void) {
+    if (jobId !== this.oceanJobId || this.oceanDataReady) return
+    this.terminateOceanWorkers()
+    fallback()
+  }
+
+  private completeOceanSlice(jobId: number) {
+    if (jobId !== this.oceanJobId) return
+    this.oceanPendingSlices--
+    if (this.oceanPendingSlices > 0) return
+    this.terminateOceanWorkers()
+    this.finishOceanData(jobId)
+  }
+
+  private finishOceanData(jobId: number) {
+    if (jobId !== this.oceanJobId || this.disposed) return
+    this.oceanDataReady = true
+  }
+
+  private applyOceanHeights(jobId: number, heights: Float32Array, vertexOffset: number) {
+    if (jobId !== this.oceanJobId || this.disposed) return
+    const attribute = this.oceanGeometry?.getAttribute('terrainHeight')
+    if (!attribute || vertexOffset + heights.length > attribute.count) return
+    ;(attribute.array as Float32Array).set(heights, vertexOffset)
+    attribute.needsUpdate = true
+  }
+
+  private applyOceanShoreMask(jobId: number, shoreMask: Uint8Array, rowStart: number) {
+    if (jobId !== this.oceanJobId || this.disposed) return
+    const mask = this.oceanShoreMask
+    const maskData = mask?.image?.data as Uint8Array | undefined
+    if (!mask || !maskData) return
+    const byteOffset = rowStart * OCEAN_SHORE_MASK_WIDTH * 4
+    if (byteOffset + shoreMask.length > maskData.length) return
+    maskData.set(shoreMask, byteOffset)
+    mask.needsUpdate = true
+  }
+
+  private oceanShoreMaskParams(): OceanShoreMaskParams {
+    return {
+      width: OCEAN_SHORE_MASK_WIDTH,
+      height: OCEAN_SHORE_MASK_HEIGHT,
+      seaHeight: this.seaHeight,
+      bias: OCEAN_SHORE_MASK_BIAS,
+      surfaceEdge: OCEAN_SHORE_MASK_SURFACE_EDGE,
+      depthScale: OCEAN_SHORE_MASK_DEPTH_SCALE,
+    }
   }
 
   private createOceanShoreMaskTexture(): THREE.DataTexture {
     const width = OCEAN_SHORE_MASK_WIDTH
     const height = OCEAN_SHORE_MASK_HEIGHT
+    // Allocated empty; filled by applyOceanData once the worker replies.
     const data = new Uint8Array(width * height * 4)
-    const dir = new THREE.Vector3()
-
-    for (let y = 0; y < height; y++) {
-      const v = (y + 0.5) / height
-      const latitude = (v - 0.5) * Math.PI
-      const sinLat = Math.sin(latitude)
-      const cosLat = Math.cos(latitude)
-
-      for (let x = 0; x < width; x++) {
-        const u = (x + 0.5) / width
-        const longitude = (u - 0.5) * Math.PI * 2
-        const index = (y * width + x) * 4
-
-        dir.set(Math.cos(longitude) * cosLat, sinLat, Math.sin(longitude) * cosLat)
-        const terrainHeight = samplePlanetHeightDetailed(dir, this.terrainParams, 1)
-        const waterDepth = this.seaHeight - terrainHeight
-        const waterMask = smoothstepNumber(-OCEAN_SHORE_MASK_BIAS, OCEAN_SHORE_MASK_SURFACE_EDGE, waterDepth)
-        const depthMask = THREE.MathUtils.clamp(waterDepth / OCEAN_SHORE_MASK_DEPTH_SCALE, 0, 1)
-
-        data[index] = Math.round(waterMask * 255)
-        data[index + 1] = Math.round(depthMask * 255)
-        data[index + 2] = 0
-        data[index + 3] = 255
-      }
-    }
 
     const texture = new THREE.DataTexture(data, width, height, THREE.RGBAFormat, THREE.UnsignedByteType)
     texture.wrapS = THREE.RepeatWrapping
@@ -2447,7 +2871,10 @@ export class PlanetRenderer {
   private updateOceanRenderState(useTerrain: boolean) {
     if (!this.oceanMesh || !this.oceanMaterial) return
 
-    this.oceanMesh.visible = this.seaHeight >= -1
+    // Stays hidden until the worker returns the per-vertex terrain heights and
+    // the shore mask; without them the mesh would render as a smooth sphere
+    // with no coastline.
+    this.oceanMesh.visible = this.seaHeight >= -1 && this.oceanDataReady
     this.oceanMaterial.depthTest = useTerrain
     this.setFloatUniform(this.oceanMaterial, 'uOceanQuality', 2)
     this.setFloatUniform(this.oceanMaterial, 'uOceanAlpha', 1)
@@ -2664,8 +3091,13 @@ export class PlanetRenderer {
   }
 
   private updateChunkPropVisibility(chunk: TerrainChunk, localCamPos: THREE.Vector3) {
-    const props = this.propLayers.get(chunk.key)
-    if (!props) return
+    let props = this.propLayers.get(chunk.key)
+    if (!props) {
+      // Came into range since the chunk was built — attach now.
+      this.attachPropLayer(chunk)
+      props = this.propLayers.get(chunk.key)
+      if (!props) return
+    }
 
     const dist = this.getLocalChunkDistToCamera(chunk.node, localCamPos)
     const visible = chunk.mesh.visible
@@ -2674,9 +3106,127 @@ export class PlanetRenderer {
       && dist < this.propSettings.distance
     props.setVisible(visible)
     if (visible) {
-      props.updateSunLight(this.cloudLocalSunDirection)
+      props.setLodTier(this.resolvePropLodTier(dist, props.lodTierIndex))
+      if (props.needsSunLightUpdate(this.cloudLocalSunDirection)) {
+        this.requestPropSunLight(chunk.key, props)
+      }
       this.propVisibleInstances += props.instanceCount
     }
+  }
+
+  // Horizon shadowing is ten detailed height samples per instance -- ~3.4ms per
+  // chunk. It depends only on the placement arrays, the sun direction and the
+  // terrain params, so it moves off the main thread wholesale. A single
+  // dedicated worker is enough: results that arrive late are simply discarded
+  // and re-requested, and oversubscribing would starve chunk streaming.
+  private requestPropSunLight(chunkKey: string, layer: PlanetPropLayer) {
+    if (this.propSunInFlightChunks.has(chunkKey)) return
+
+    const worker = this.ensurePropSunWorker()
+    if (!worker || this.propSunInFlightChunks.size >= MAX_PROP_SUN_IN_FLIGHT) {
+      // No worker available (or the queue is full): fall back to the budgeted
+      // main-thread path so lighting still converges.
+      if (this.propSunLightSpentMs < PROP_SUN_LIGHT_BUDGET_MS) {
+        const started = performance.now()
+        layer.updateSunLight(this.cloudLocalSunDirection)
+        this.propSunLightSpentMs += performance.now() - started
+      }
+      return
+    }
+
+    const placements = layer.getSunLightJobPlacements()
+    if (placements.length === 0) return
+
+    const sun = _propSunDir.copy(this.cloudLocalSunDirection)
+    if (sun.lengthSq() <= 1e-8) return
+    sun.normalize()
+
+    const id = ++this.propSunJobId
+    this.propSunJobs.set(id, { chunkKey, sunX: sun.x, sunY: sun.y, sunZ: sun.z })
+    this.propSunInFlightChunks.add(chunkKey)
+
+    const request: TerrainWorkerPropSunRequest = {
+      type: 'prop-sun',
+      id,
+      terrain: this.terrainParams,
+      sunX: sun.x,
+      sunY: sun.y,
+      sunZ: sun.z,
+      placements,
+    }
+    worker.postMessage(request)
+  }
+
+  private ensurePropSunWorker(): Worker | null {
+    if (this.propSunWorker || this.propSunWorkerFailed || typeof Worker === 'undefined') {
+      return this.propSunWorker
+    }
+
+    try {
+      const worker = new Worker(new URL('./terrain-worker.ts', import.meta.url), { type: 'module' })
+      worker.onmessage = (event: MessageEvent<TerrainWorkerResponse>) => {
+        const response = event.data
+        if (response.type === 'prop-sun-built') {
+          this.completePropSunJob(response.id, response.results)
+          return
+        }
+        if (response.type === 'prop-sun-error') {
+          if (import.meta.env.DEV) console.warn(`Prop sun worker failed: ${response.message}`)
+          this.completePropSunJob(response.id, null)
+        }
+      }
+      worker.onerror = () => {
+        // Drop back to the budgeted main-thread path for the rest of the session.
+        this.propSunWorkerFailed = true
+        this.propSunWorker?.terminate()
+        this.propSunWorker = null
+        this.propSunJobs.clear()
+        this.propSunInFlightChunks.clear()
+      }
+      this.propSunWorker = worker
+    } catch {
+      this.propSunWorkerFailed = true
+    }
+
+    return this.propSunWorker
+  }
+
+  private completePropSunJob(id: number, results: Float32Array[] | null) {
+    const job = this.propSunJobs.get(id)
+    if (!job) return
+    this.propSunJobs.delete(id)
+    this.propSunInFlightChunks.delete(job.chunkKey)
+    if (!results || this.disposed) return
+
+    const layer = this.propLayers.get(job.chunkKey)
+    if (!layer) return
+
+    // Discard if the sun moved past the staleness threshold while the job was
+    // in flight -- needsSunLightUpdate will simply ask again next frame.
+    const current = _propSunDir.copy(this.cloudLocalSunDirection)
+    if (current.lengthSq() <= 1e-8) return
+    current.normalize()
+    if (current.x * job.sunX + current.y * job.sunY + current.z * job.sunZ <= PROP_SUN_STALE_DOT) return
+
+    layer.applySunLightResults(results, current)
+  }
+
+  private resolvePropLodTier(dist: number, currentTier: number): number {
+    const distance = this.propSettings.distance
+    let tier = 0
+
+    for (let i = 0; i < PROP_LOD_DISTANCE_FRACTIONS.length; i++) {
+      const threshold = distance * PROP_LOD_DISTANCE_FRACTIONS[i]
+      // Asymmetric bound: a boundary already crossed has to be re-crossed by
+      // the hysteresis margin to step back down, so a chunk sitting on it does
+      // not swap geometry every frame.
+      const bound = i < currentTier
+        ? threshold * (1 - PROP_LOD_HYSTERESIS)
+        : threshold * (1 + PROP_LOD_HYSTERESIS)
+      if (dist > bound) tier = i + 1
+    }
+
+    return tier
   }
 
   private disposeChunk(chunk: TerrainChunk) {
@@ -2698,46 +3248,78 @@ export class PlanetRenderer {
     chunk.dispose()
   }
 
-  private updateVisibleStitching(renderKeys: Set<string>) {
+  // Rebuilds the per-(face, lod) occupancy sets that the stitch probe walks.
+  //
+  // The probe used to rebuild `${face}_${lod}_${x}_${y}` on every step of every
+  // probe, four probes per visible chunk. Its hit rate is ~1.3%, so it almost
+  // always walks to lod 0 and returns 0 — tens of thousands of throwaway
+  // strings per frame to answer "no".
+  //
+  // Keys stay per-lod (`y * 2^lod + x`) rather than bit-packed into one integer
+  // on purpose: 12 bits of y would collide from lod 13 up, and computeAutoLod
+  // reaches lod 14. A collision here means a wrong stitch step, which shows up
+  // as a visible T-junction crack.
+  private rebuildStitchSets(renderKeys: Set<string>) {
+    const buckets = NUM_FACES * (this.maxLod + 1)
+    if (this.stitchSets.length !== buckets) {
+      this.stitchSets = Array.from({ length: buckets }, () => new Set<number>())
+    } else {
+      for (const set of this.stitchSets) set.clear()
+    }
+
     for (const key of renderKeys) {
       const chunk = this.chunks.get(key)
       if (!chunk) continue
-      const steps = this.computeVisibleStitchSteps(chunk.node, renderKeys)
-      chunk.setStitchSteps(steps)
+      const node = chunk.node
+      this.stitchSets[node.face * (this.maxLod + 1) + node.lod].add(node.y * (1 << node.lod) + node.x)
     }
   }
 
-  private computeVisibleStitchSteps(
-    node: QuadtreeNode,
-    renderKeys: Set<string>,
-  ): StitchSteps {
-    if (!this.skirts) return { bottom: 0, top: 0, left: 0, right: 0 }
-
-    return {
-      bottom: this.getVisibleCoarserSameFaceNeighborStep(node, 0, -1, renderKeys),
-      top: this.getVisibleCoarserSameFaceNeighborStep(node, 0, 1, renderKeys),
-      left: this.getVisibleCoarserSameFaceNeighborStep(node, -1, 0, renderKeys),
-      right: this.getVisibleCoarserSameFaceNeighborStep(node, 1, 0, renderKeys),
+  private updateVisibleStitching(renderKeys: Set<string>) {
+    this.rebuildStitchSets(renderKeys)
+    for (const key of renderKeys) {
+      const chunk = this.chunks.get(key)
+      if (!chunk) continue
+      chunk.setStitchSteps(this.computeVisibleStitchSteps(chunk.node))
     }
+  }
+
+  private computeVisibleStitchSteps(node: QuadtreeNode): StitchSteps {
+    // Returns a shared scratch — setStitchSteps copies the fields out. ~99% of
+    // these are discarded unchanged, so allocating one per visible chunk per
+    // frame was pure garbage.
+    const out = _stitchScratch
+    if (!this.skirts) {
+      out.bottom = 0
+      out.top = 0
+      out.left = 0
+      out.right = 0
+      return out
+    }
+
+    out.bottom = this.getVisibleCoarserSameFaceNeighborStep(node, 0, -1)
+    out.top = this.getVisibleCoarserSameFaceNeighborStep(node, 0, 1)
+    out.left = this.getVisibleCoarserSameFaceNeighborStep(node, -1, 0)
+    out.right = this.getVisibleCoarserSameFaceNeighborStep(node, 1, 0)
+    return out
   }
 
   private getVisibleCoarserSameFaceNeighborStep(
     node: QuadtreeNode,
     dx: number,
     dy: number,
-    renderKeys: Set<string>,
   ): number {
     const cells = 1 << node.lod
     const x = node.x + dx
     const y = node.y + dy
     if (x < 0 || y < 0 || x >= cells || y >= cells) return 0
 
+    const stride = this.maxLod + 1
     for (let lod = node.lod - 1; lod >= 0; lod--) {
-      const scale = 1 << (node.lod - lod)
-      const coarseX = Math.floor(x / scale)
-      const coarseY = Math.floor(y / scale)
-      if (renderKeys.has(nodeKey(node.face, lod, coarseX, coarseY))) {
-        return scale
+      const shift = node.lod - lod
+      // x and y are non-negative past the bounds check, so >> matches Math.floor.
+      if (this.stitchSets[node.face * stride + lod].has((y >> shift) * (1 << lod) + (x >> shift))) {
+        return 1 << shift
       }
     }
 
@@ -2868,6 +3450,11 @@ export class PlanetRenderer {
     this.atmosphereMaterial?.dispose()
     this.cloudMesh?.geometry.dispose()
     this.cloudBillboardMesh?.geometry.dispose()
+    // Same class of leak as the grass layers: instanceMatrix (1600 instances)
+    // hangs off the InstancedMesh, not the geometry, and only the mesh's own
+    // dispose releases it. In the editor this runs on every slider change that
+    // alters the planet key.
+    this.cloudBillboardMesh?.dispose()
     this.oceanMesh?.geometry.dispose()
     this.atmosphereMesh?.geometry.dispose()
     if (this.fallbackSphere.material instanceof THREE.ShaderMaterial) {

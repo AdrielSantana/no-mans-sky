@@ -97,11 +97,19 @@ export function createSkybox(): THREE.Mesh {
     vertexShader,
     fragmentShader,
     side: THREE.DoubleSide,
+    // depthWrite stays false: CloudCompositePass reads the scene depth texture
+    // as tSceneDepth and needs sky pixels to read the cleared 1.0.
     depthWrite: false,
-    depthTest: false,
+    // depthTest + a late renderOrder let early-Z reject the sky wherever
+    // terrain already drew. The shader is ~2500 ALU per pixel (two 5-octave
+    // fbm, 8 hash33 each) and its output is entirely view-direction dependent,
+    // so every covered pixel it used to shade was thrown away. The vertex
+    // shader emits z = w, i.e. the far plane, so the LEQUAL test passes
+    // exactly where the depth buffer is still cleared.
+    depthTest: true,
   })
   const mesh = new THREE.Mesh(geometry, material)
   mesh.frustumCulled = false
-  mesh.renderOrder = -1000
+  mesh.renderOrder = 1000
   return mesh
 }

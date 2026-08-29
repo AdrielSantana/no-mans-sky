@@ -91,7 +91,12 @@ export class CloudMaskTexture {
   readonly height: number
   readonly texture: THREE.DataTexture
   private data: Uint8Array
-  private settingsKey = ''
+  // The raw density field, kept alongside the byte mask. coverage and softness
+  // are consumed only by the two smoothsteps in maskFromDensity, so changing
+  // them can reuse this and skip the ~13M Math.sin that building it costs.
+  private density: Float32Array
+  private densityKey = ''
+  private maskKey = ''
   private curved = new THREE.Vector3()
   private tangent = new THREE.Vector3()
   private bitangent = new THREE.Vector3()
@@ -99,8 +104,12 @@ export class CloudMaskTexture {
   constructor(settings: CloudMaskSettings, width = 512, height = 256) {
     this.width = width
     this.height = height
-    this.data = new Uint8Array(width * height * 4)
-    this.texture = new THREE.DataTexture(this.data, width, height, THREE.RGBAFormat)
+    // One byte per texel: every GPU reader samples .r (planet-generator.ts:540,
+    // player-avatar.ts:378, planet-props.ts:367), so the g/b/a channels were
+    // three copies of the same value. 512KB -> 128KB per planet.
+    this.data = new Uint8Array(width * height)
+    this.density = new Float32Array(width * height)
+    this.texture = new THREE.DataTexture(this.data, width, height, THREE.RedFormat)
     this.texture.name = 'shared-cloud-mask'
     this.texture.wrapS = THREE.RepeatWrapping
     this.texture.wrapT = THREE.ClampToEdgeWrapping
@@ -111,40 +120,53 @@ export class CloudMaskTexture {
   }
 
   update(settings: CloudMaskSettings) {
-    const key = [
+    // Split cache. Only the density key drives the expensive pass: cloudDensity
+    // is 5 fbm3 over 12 octaves, 8 sin-based hashes each, across 131,072
+    // texels — ~13M Math.sin and ~117ms. coverage and softness reach the output
+    // solely through maskFromDensity, so dragging either used to pay the whole
+    // 117ms to recompute two smoothsteps.
+    const densityKey = [
       settings.seed,
-      settings.coverage.toFixed(4),
       settings.scale.toFixed(4),
-      settings.softness.toFixed(4),
       settings.storms.toFixed(4),
       settings.bands.toFixed(4),
       settings.detail.toFixed(4),
     ].join(':')
-    if (key === this.settingsKey) return
-    this.settingsKey = key
+    const maskKey = [
+      settings.coverage.toFixed(4),
+      settings.softness.toFixed(4),
+    ].join(':')
 
-    for (let y = 0; y < this.height; y++) {
-      const v = (y + 0.5) / this.height
-      const lat = (0.5 - v) * Math.PI
-      const sinLat = Math.sin(lat)
-      const cosLat = Math.cos(lat)
+    const densityChanged = densityKey !== this.densityKey
+    if (!densityChanged && maskKey === this.maskKey) return
 
-      for (let x = 0; x < this.width; x++) {
-        const u = (x + 0.5) / this.width
-        const lon = (u - 0.5) * TAU
-        const value = this.densityToMask(
-          Math.sin(lon) * cosLat,
-          sinLat,
-          Math.cos(lon) * cosLat,
-          settings,
-        )
-        const byte = Math.round(clamp(value, 0, 1) * 255)
-        const index = (y * this.width + x) * 4
-        this.data[index] = byte
-        this.data[index + 1] = byte
-        this.data[index + 2] = byte
-        this.data[index + 3] = 255
+    if (densityChanged) {
+      this.densityKey = densityKey
+      // Rebuilt in one synchronous pass, never sliced across frames: the
+      // billboard placement in planet-renderer reads this.data every frame and
+      // a half-rebuilt buffer would make the billboards flicker.
+      for (let y = 0; y < this.height; y++) {
+        const v = (y + 0.5) / this.height
+        const lat = (0.5 - v) * Math.PI
+        const sinLat = Math.sin(lat)
+        const cosLat = Math.cos(lat)
+
+        for (let x = 0; x < this.width; x++) {
+          const u = (x + 0.5) / this.width
+          const lon = (u - 0.5) * TAU
+          this.density[y * this.width + x] = this.cloudDensity(
+            Math.sin(lon) * cosLat,
+            sinLat,
+            Math.cos(lon) * cosLat,
+            settings,
+          )
+        }
       }
+    }
+
+    this.maskKey = maskKey
+    for (let i = 0; i < this.data.length; i++) {
+      this.data[i] = Math.round(clamp(this.maskFromDensity(this.density[i], settings), 0, 1) * 255)
     }
 
     this.texture.needsUpdate = true
@@ -182,11 +204,10 @@ export class CloudMaskTexture {
 
   private samplePixel(x: number, y: number): number {
     const wrappedX = ((x % this.width) + this.width) % this.width
-    return this.data[(y * this.width + wrappedX) * 4] / 255
+    return this.data[y * this.width + wrappedX] / 255
   }
 
-  private densityToMask(x: number, y: number, z: number, settings: CloudMaskSettings): number {
-    const density = this.cloudDensity(x, y, z, settings)
+  private maskFromDensity(density: number, settings: CloudMaskSettings): number {
     const coverage = clamp(settings.coverage, 0, 1)
     const threshold = lerp(0.78, 0.24, coverage)
     const softness = Math.max(settings.softness, 0.015)

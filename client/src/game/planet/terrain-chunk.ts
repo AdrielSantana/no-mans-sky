@@ -43,6 +43,15 @@ export class TerrainChunk {
   stitchSteps: StitchSteps = { ...NO_STITCH_STEPS }
   private geometry: THREE.BufferGeometry
   private fullIndices: Uint32Array = new Uint32Array(0)
+  // A single index attribute reused for every stitching configuration. Calling
+  // geometry.setIndex with a fresh BufferAttribute orphaned the previous one:
+  // three only deletes the GL buffer of the index it currently holds, so every
+  // stitch change leaked ~24KB of VRAM. Walking around flips stitching
+  // constantly, so it grew for the whole session. The array is sized to the
+  // unstitched index, which is always the longest variant (stitched builds skip
+  // the border cells and drop the skirt triangles entirely) — the shorter ones
+  // are expressed through drawRange.
+  private indexAttribute: THREE.BufferAttribute | null = null
   private mainPositions: Float32Array<ArrayBufferLike> = new Float32Array(0)
   private mainNormals: Float32Array<ArrayBufferLike> = new Float32Array(0)
   private mainHeights: Float32Array<ArrayBufferLike> = new Float32Array(0)
@@ -78,13 +87,38 @@ export class TerrainChunk {
   setStitchSteps(steps: StitchSteps) {
     if (!this.needsStitchUpdate(steps)) return
 
-    this.stitchSteps = steps
-    this.geometry.setIndex(new THREE.BufferAttribute(this.buildIndexForStitching(steps), 1))
-    this.geometry.computeBoundingSphere()
+    // Copy the fields rather than storing the reference: the caller passes a
+    // shared per-frame scratch, so keeping it would alias every chunk's
+    // stitchSteps onto one object and make needsStitchUpdate always false.
+    this.stitchSteps.bottom = steps.bottom
+    this.stitchSteps.top = steps.top
+    this.stitchSteps.left = steps.left
+    this.stitchSteps.right = steps.right
+    // No computeBoundingSphere here: stitching changes topology only, and the
+    // sphere is derived from positions, which do not move.
+    this.applyIndex(this.buildIndexForStitching(this.stitchSteps))
+  }
+
+  private applyIndex(indices: Uint32Array) {
+    const attribute = this.indexAttribute
+    if (attribute && attribute.array.length >= indices.length) {
+      (attribute.array as Uint32Array).set(indices)
+      attribute.needsUpdate = true
+    } else {
+      // First call, or the defensive case where a stitched variant somehow
+      // exceeds the unstitched length.
+      const array = new Uint32Array(Math.max(indices.length, this.fullIndices.length))
+      array.set(indices)
+      this.indexAttribute = new THREE.BufferAttribute(array, 1)
+      this.geometry.setIndex(this.indexAttribute)
+    }
+    this.geometry.setDrawRange(0, indices.length)
   }
 
   private buildGeometry(data: TerrainChunkGeometryData): THREE.BufferGeometry {
     const geo = new THREE.BufferGeometry()
+    // The attribute belongs to the old geometry; a rebuild needs its own.
+    this.indexAttribute = null
     this.mainPositions = data.mainPositions
     this.mainNormals = data.normals.slice(0, this.mainPositions.length)
     this.mainHeights = data.heights.slice(0, this.gridSize * this.gridSize)
@@ -97,7 +131,8 @@ export class TerrainChunk {
     geo.setAttribute('terrainMicroAo', new THREE.BufferAttribute(data.microAo, 1))
     geo.setAttribute('terrainMacroAo', new THREE.BufferAttribute(data.macroAo, 1))
     geo.setAttribute('terrainGrassPatch', new THREE.BufferAttribute(data.grassPatch, 1))
-    geo.setIndex(new THREE.BufferAttribute(this.buildIndexForStitching(this.stitchSteps), 1))
+    this.geometry = geo
+    this.applyIndex(this.buildIndexForStitching(this.stitchSteps))
     geo.computeBoundingSphere()
 
     return geo

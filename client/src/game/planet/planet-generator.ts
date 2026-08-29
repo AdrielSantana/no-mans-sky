@@ -142,7 +142,7 @@ const TERRAIN_TEXTURES = {
 
 const TEXTURE_RADIUS_REFERENCE = 650
 
-function getPlanetTextureScale(textureScale: number, planetRadius: number, multiplier = 1): number {
+export function getPlanetTextureScale(textureScale: number, planetRadius: number, multiplier = 1): number {
   return textureScale * (planetRadius / TEXTURE_RADIUS_REFERENCE) * multiplier
 }
 

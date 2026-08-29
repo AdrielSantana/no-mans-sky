@@ -1,16 +1,43 @@
 import * as THREE from 'three'
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js'
-import oakTreeUrl from '../../assets/models/trees/oak_tree.glb?url'
-import winterTreeUrl from '../../assets/models/trees/winter_tree.glb?url'
-import rock1Url from '../../assets/models/rocks/rock_1.glb?url'
-import rock2Url from '../../assets/models/rocks/rock_2.glb?url'
+// Geometry-only LOD tiers. Their embedded textures were shrunk to 8x8 because
+// only the geometry is read -- the material always comes from the base model.
+import oakLod0Url from '../../assets/models/trees/oak_tree/lod_0.glb?url'
+import oakLod1Url from '../../assets/models/trees/oak_tree/lod_1.glb?url'
+import oakLod2Url from '../../assets/models/trees/oak_tree/lod_2.glb?url'
+import oakLod3Url from '../../assets/models/trees/oak_tree/lod_3.glb?url'
+import winterLod0Url from '../../assets/models/trees/winter_tree/lod_0.glb?url'
+import winterLod1Url from '../../assets/models/trees/winter_tree/lod_1.glb?url'
+import winterLod2Url from '../../assets/models/trees/winter_tree/lod_2.glb?url'
+import winterLod3Url from '../../assets/models/trees/winter_tree/lod_3.glb?url'
 import {
-  samplePlanetHeightDetailed,
   type PlanetTerrainParams,
 } from '../../../../server/spacetimedb/src/shared/planet-terrain'
 import type { QuadtreeNode } from './quadtree'
 import { nodeKey } from './quadtree'
 import type { TerrainChunkSurfaceData } from './terrain-chunk'
+import { computePropSunLight, type PropSunLightInput } from './prop-sun-light'
+import type { PropSunPlacementInput } from './terrain-worker-types'
+import {
+  PROP_CLOUD_FN_GLSL,
+  PROP_CLOUD_PARS_GLSL,
+  PROP_LIGHT_FN_GLSL,
+  PROP_LIGHT_PARS_GLSL,
+  PROP_WIND_FN_GLSL,
+  PROP_WIND_PARS_GLSL,
+} from './prop-shading'
+import {
+  DEFAULT_FOLIAGE_SETTINGS,
+  FOLIAGE_LOD_FRACTIONS,
+  FOLIAGE_LOD_SIZE_BOOST,
+  buildFoliageGeometry,
+  createFoliageMaterial,
+  extractBranchAnchors,
+  setFoliagePalette,
+  updateFoliageMaterialSettings,
+  type FoliagePalette,
+  type FoliageSettings,
+} from './tree-foliage'
 
 export interface PlanetPropSettings {
   enabled: boolean
@@ -27,12 +54,44 @@ export interface PlanetPropAssets {
 interface PlanetPropModel {
   id: string
   kind: 'tree' | 'rock'
+  // World height range in metres, per model. The mesh is normalised to unit
+  // height at load, so the instance scale *is* the world height.
+  heightRange: readonly [number, number]
   parts: PlanetPropPart[]
+  // Procedural leaves, generated once from the tier-0 mesh. Null for rocks and
+  // for any tree whose branches yielded no usable anchors.
+  foliage: PlanetPropFoliage | null
+}
+
+interface PlanetPropFoliage {
+  geometry: THREE.BufferGeometry
+  material: THREE.ShaderMaterial
+  cardCount: number
+}
+
+interface PlanetPropTier {
+  geometry: THREE.BufferGeometry
+  material: THREE.Material | THREE.Material[]
 }
 
 interface PlanetPropPart {
-  geometry: THREE.BufferGeometry
-  material: THREE.Material | THREE.Material[]
+  // Tier 0 is full detail; later entries are progressively simplified.
+  // Always at least length 1.
+  tiers: PlanetPropTier[]
+}
+
+// Whether a LOD file carries its own baked texture, and therefore its own UV
+// layout, or shares the base model's.
+//
+// This is not cosmetic. Tiers produced by decimating one mesh (gltf-transform
+// simplify) keep the base UVs and must reuse the base material. Tiers exported
+// independently by a generator re-bake their own atlas -- their UVs do not
+// match the base at all, and pairing them with the base texture produces
+// garbage. There is no reliable way to detect which is which from the file, so
+// it is declared per asset.
+interface PropLodSpec {
+  url: string
+  ownMaterial: boolean
 }
 
 interface PlanetPropLighting {
@@ -47,6 +106,9 @@ interface PlanetPropLighting {
   cloudHeight: number
   cloudShadowStrength: number
   cloudLocalSunDirection: THREE.Vector3
+  time: number
+  windStrength: number
+  foliage: FoliageSettings
 }
 
 interface PlanetPropLayerParams {
@@ -88,24 +150,43 @@ const MIN_TREE_SLOPE_DOT = 0.70
 const MIN_ROCK_SLOPE_DOT = 0.38
 const TREE_PATCH_SCALE_METERS = 190
 const ROCK_PATCH_SCALE_METERS = 110
-const PROP_SHADER_VERSION = 6
-const SUN_SHADOW_SAMPLE_FACTORS = [0.04, 0.08, 0.16, 0.30, 0.52, 0.86, 1.35, 2.10, 3.25, 5.0, 7.5]
-const SUN_SHADOW_CLEARANCE = 4.0
-const TEMP_PROP_SAMPLE_DIR = new THREE.Vector3()
+const PROP_SHADER_VERSION = 8
+const PROP_TEXTURE_ANISOTROPY = 16
 
-function sampleDirection(
-  radial: THREE.Vector3,
-  tangent: THREE.Vector3,
-  sinAngle: number,
-  cosAngle: number,
-  out: THREE.Vector3,
-): THREE.Vector3 {
-  return out
-    .copy(radial)
-    .multiplyScalar(cosAngle)
-    .addScaledVector(tangent, sinAngle)
-    .normalize()
+// Rocks are parked while the tree assets are being reworked. Flip this back to
+// true and the loader picks them up again -- nothing else needs touching.
+//
+// Safe to toggle at any time: placement RNG is seeded per kind
+// (`${chunkKey}:${kind}`), so trees and rocks draw from independent streams and
+// turning rocks off does not move a single tree. buildKindPlacements already
+// returns early on an empty model list.
+const ROCKS_ENABLED = false
+
+// World height in metres. Rocks keep their own range in buildKindPlacements and
+// this entry only exists so the signature is uniform.
+const OAK_HEIGHT_RANGE = [6, 13] as const
+const WINTER_TREE_HEIGHT_RANGE = [11, 22] as const
+const ROCK_HEIGHT_RANGE = [0.9, 5.5] as const
+
+// Leaf colour per species. colorA is the shaded inner canopy, colorB the sunlit
+// outer edge; the shader blends between them by height and adds a per-leaf
+// drift. The oak runs warm and bright, the winter conifer cold and dark -- two
+// stands of the same green would flatten the whole treeline into one mass.
+const OAK_FOLIAGE_PALETTE: FoliagePalette = { colorA: 0x3d6a26, colorB: 0x8cb14f }
+const WINTER_TREE_FOLIAGE_PALETTE: FoliagePalette = { colorA: 0x24402e, colorB: 0x517d52 }
+let _sunLightScratch = new Float32Array(0)
+const _sunInput: PropSunLightInput = {
+  planetDirs: new Float32Array(0),
+  terrainNormals: new Float32Array(0),
+  surfaceRadii: new Float32Array(0),
+  sunX: 0,
+  sunY: 0,
+  sunZ: 0,
 }
+const TEMP_SUN_DIR = new THREE.Vector3()
+// ~1.4 degrees of sun travel before a layer's horizon shadows are recomputed.
+const SUN_DIRECTION_EPSILON_DOT = 0.9997
+
 
 const DEFAULT_PROP_TEXTURE = new THREE.DataTexture(
   new Uint8Array([255, 255, 255, 255]),
@@ -186,7 +267,17 @@ function sourceMaterialColor(material: THREE.Material, fallback: THREE.Color): T
 
 function sourceMaterialMap(material: THREE.Material): THREE.Texture {
   const map = 'map' in material ? material.map : null
-  return map instanceof THREE.Texture ? map : DEFAULT_PROP_TEXTURE
+  if (!(map instanceof THREE.Texture)) return DEFAULT_PROP_TEXTURE
+  // GLTFLoader never sets anisotropy, so prop textures were sampled at 1x while
+  // the terrain runs at 16. The GLB samplers already ask for
+  // LinearMipmapLinear — the mips exist, they were just being filtered
+  // isotropically, which smears and shimmers tree trunks and rock faces at
+  // grazing angles. Runs four times at load, before the first render, so no
+  // needsUpdate is required. WebGLTextures clamps to the hardware maximum.
+  if (map.anisotropy < PROP_TEXTURE_ANISOTROPY) {
+    map.anisotropy = PROP_TEXTURE_ANISOTROPY
+  }
+  return map
 }
 
 function sourceMaterialUsesMap(material: THREE.Material): boolean {
@@ -194,21 +285,38 @@ function sourceMaterialUsesMap(material: THREE.Material): boolean {
   return map instanceof THREE.Texture
 }
 
-function sourceMaterialAlphaTest(material: THREE.Material, kind: PlanetPropModel['kind']): number {
-  const materialAlphaTest = 'alphaTest' in material && typeof material.alphaTest === 'number'
+// Honours whatever the asset declares and nothing more.
+//
+// This used to force alphaTest to at least 0.08 on any mapped tree, on the
+// assumption that trees carry alpha-cut foliage cards. They do not: the tree
+// models are trunk and branches only, their glTF materials declare
+// alphaMode OPAQUE, and their baseColor textures are JPEG — a format with no
+// alpha channel at all. So `alpha` was always 1.0, `alpha < 0.08` was never
+// true, and the discard never fired. It cost nothing visually and disabled
+// early-Z on the heaviest geometry in the scene.
+function sourceMaterialAlphaTest(material: THREE.Material): number {
+  return 'alphaTest' in material && typeof material.alphaTest === 'number'
     ? material.alphaTest
     : 0
-  if (kind === 'tree' && sourceMaterialUsesMap(material)) return Math.max(materialAlphaTest, 0.08)
-  return materialAlphaTest
 }
 
 function createPropShaderMaterial(source: THREE.Material, kind: PlanetPropModel['kind']): THREE.ShaderMaterial {
   const hasMap = sourceMaterialUsesMap(source)
   const fallbackColor = kind === 'tree' ? new THREE.Color(0x6c7a48) : new THREE.Color(0x68645e)
   const baseColor = hasMap ? new THREE.Color(0xffffff) : sourceMaterialColor(source, fallbackColor)
-  const alphaTest = sourceMaterialAlphaTest(source, kind)
+  const alphaTest = sourceMaterialAlphaTest(source)
 
   const material = new THREE.ShaderMaterial({
+    // Compile the discard out entirely when nothing needs it. Zeroing the
+    // uniform is not enough: the presence of `discard` in the fragment shader
+    // is what forfeits early-Z, whether or not the branch is ever taken.
+    defines: {
+      PROP_ALPHA_TEST: alphaTest > 0 ? 1 : 0,
+      // Compiled out for rocks: a boulder has no lever arm and swaying it by
+      // y^2 would make it wobble.
+      PROP_WIND: kind === 'tree' ? 1 : 0,
+      PROP_TRANSLUCENT: 0,
+    },
     uniforms: {
       uMap: { value: sourceMaterialMap(source) },
       uUseMap: { value: hasMap },
@@ -226,16 +334,18 @@ function createPropShaderMaterial(source: THREE.Material, kind: PlanetPropModel[
       uCloudMaskOffset: { value: 0 },
       uCloudLocalSunDirection: { value: new THREE.Vector3(0, 1, 0) },
       uAlphaTest: { value: alphaTest },
+      uTime: { value: 0 },
+      uWindStrength: { value: DEFAULT_FOLIAGE_SETTINGS.enabled ? 0.34 : 0 },
     },
     vertexShader: /* glsl */ `
       #include <common>
       #include <logdepthbuf_pars_vertex>
 
+      ${PROP_LIGHT_PARS_GLSL}
+      ${PROP_WIND_PARS_GLSL}
+
       uniform vec3 uPlanetCenter;
       uniform vec3 uSunPosition;
-      uniform vec3 uSunColor;
-      uniform vec3 uAtmosphereLightColor;
-      uniform float uAtmosphereInfluence;
 
       varying vec2 vUv;
       varying vec3 vLight;
@@ -250,11 +360,29 @@ function createPropShaderMaterial(source: THREE.Material, kind: PlanetPropModel[
       attribute float instanceTerrainMacroAo;
       attribute float instanceTerrainSunLight;
 
+      ${PROP_LIGHT_FN_GLSL}
+      ${PROP_WIND_FN_GLSL}
+
       void main() {
         vUv = uv;
 
-        vec4 localPosition = vec4(position, 1.0);
+        // Sway is applied in model space, before the instance transform, so it
+        // is a fraction of tree height and scales with the instance. The
+        // foliage shader makes the identical call at each card's pivot, which
+        // is what keeps leaves welded to their branch through a gust.
+        vec3 swayed = position;
         vec4 instanceLocalOrigin = vec4(0.0, 0.0, 0.0, 1.0);
+        #if PROP_WIND == 1
+          #ifdef USE_INSTANCING
+            vec3 windOrigin = (instanceMatrix * vec4(0.0, 0.0, 0.0, 1.0)).xyz;
+            float treeHeight = length(instanceMatrix[0].xyz);
+            vec3 axisXWorld = instanceMatrix[0].xyz / max(treeHeight, 1e-6);
+            vec3 axisZWorld = instanceMatrix[2].xyz / max(length(instanceMatrix[2].xyz), 1e-6);
+            swayed += propWindSway(position, windOrigin, axisXWorld, axisZWorld, treeHeight, PROP_WIND_STIFFNESS);
+          #endif
+        #endif
+
+        vec4 localPosition = vec4(swayed, 1.0);
         vec3 localNormal = normal;
         #ifdef USE_INSTANCING
           mat3 instanceNormalMatrix = mat3(instanceMatrix);
@@ -279,30 +407,7 @@ function createPropShaderMaterial(source: THREE.Material, kind: PlanetPropModel[
         vTerrainMicroAo = instanceTerrainMicroAo;
         vTerrainMacroAo = instanceTerrainMacroAo;
 
-        float upSun = dot(upDir, sunDir);
-        float atmosphereInfluence = clamp(uAtmosphereInfluence, 0.0, 1.0);
-        float day = smoothstep(-0.18, 0.12, upSun);
-        float direct = max(dot(worldNormal, sunDir), 0.0);
-        float wrap = max(dot(worldNormal, sunDir) * 0.5 + 0.5, 0.0);
-        float sky = 0.16 + 0.22 * max(dot(worldNormal, upDir) * 0.5 + 0.5, 0.0);
-        float groundBounce = 0.10 * max(dot(worldNormal, -upDir) * 0.5 + 0.5, 0.0) * day;
-        float lowSun = pow(1.0 - clamp(upSun * 0.92 + 0.08, 0.0, 1.0), 1.8)
-          * smoothstep(-0.24, 0.50, upSun);
-        float terminator = smoothstep(-0.34, 0.18, upSun) * (1.0 - smoothstep(0.22, 0.72, upSun));
-
-        vec3 nightAmbient = vec3(0.018, 0.024, 0.038);
-        vec3 dayAmbient = vec3(0.18, 0.19, 0.20);
-        vec3 ambientTint = mix(vec3(1.0), uAtmosphereLightColor, atmosphereInfluence * (day * 0.20 + terminator * 0.08));
-        vec3 ambient = mix(nightAmbient, dayAmbient, day) * sky * ambientTint;
-        vec3 sunsetTint = mix(vec3(1.0, 0.34, 0.10), uSunColor, 0.36);
-        sunsetTint = mix(sunsetTint, uAtmosphereLightColor, 0.18);
-        vec3 atmosphericSunTint = mix(vec3(1.0), uAtmosphereLightColor, 0.70);
-        atmosphericSunTint = mix(atmosphericSunTint, sunsetTint, lowSun * 0.59);
-        vec3 sunTint = mix(uSunColor, atmosphericSunTint, atmosphereInfluence);
-        vec3 sunlight = sunTint * (direct * 1.12 + wrap * 0.22) * day;
-        vec3 terrain = vec3(0.23, 0.25, 0.20) * groundBounce;
-        vec3 minimumLight = mix(vec3(0.010, 0.014, 0.022), vec3(0.055), day);
-        vLight = max(ambient + sunlight * clamp(instanceTerrainSunLight, 0.0, 1.0) + terrain, minimumLight);
+        vLight = computePropLight(worldNormal, upDir, sunDir, instanceTerrainSunLight);
 
         gl_Position = projectionMatrix * viewMatrix * worldPos;
         #include <logdepthbuf_vertex>
@@ -311,18 +416,14 @@ function createPropShaderMaterial(source: THREE.Material, kind: PlanetPropModel[
     fragmentShader: /* glsl */ `
       #include <logdepthbuf_pars_fragment>
 
+      ${PROP_CLOUD_PARS_GLSL}
+
       uniform sampler2D uMap;
       uniform bool uUseMap;
       uniform vec3 uBaseColor;
       uniform float uAlphaTest;
       uniform vec3 uSunPosition;
       uniform float uTerrainAoStrength;
-      uniform sampler2D uCloudMask;
-      uniform float uCloudMaskOffset;
-      uniform float uCloudHeight;
-      uniform float uCloudShadowStrength;
-      uniform float uCloudShadowInfluence;
-      uniform vec3 uCloudLocalSunDirection;
 
       varying vec2 vUv;
       varying vec3 vLight;
@@ -347,49 +448,41 @@ function createPropShaderMaterial(source: THREE.Material, kind: PlanetPropModel[
         return ao;
       }
 
-      vec2 cloudMaskUv(vec3 dir) {
-        vec3 n = normalize(dir);
-        float lon = atan(n.x, n.z);
-        float lat = asin(clamp(n.y, -1.0, 1.0));
-        return vec2(
-          fract(lon / 6.28318530718 + 0.5 + uCloudMaskOffset),
-          clamp(0.5 - lat / 3.14159265359, 0.0, 1.0)
-        );
-      }
-
-      float propCloudShadowMask() {
-        if (uCloudShadowStrength <= 0.001 || uCloudShadowInfluence <= 0.001) return 0.0;
-        vec3 surfaceDir = normalize(vLocalPlanetDir);
-        vec3 sunDir = normalize(uCloudLocalSunDirection);
-        float daylight = smoothstep(-0.08, 0.62, dot(surfaceDir, sunDir));
-        float offset = clamp(uCloudHeight, 0.0, 0.20) * 2.8 + 0.018;
-        vec3 projectedDir = normalize(surfaceDir + sunDir * offset);
-        float macroMask = texture2D(uCloudMask, cloudMaskUv(projectedDir)).r;
-        float shadow = pow(smoothstep(0.05, 0.96, macroMask), 0.58);
-        float strength = clamp(uCloudShadowStrength * 0.42, 0.0, 2.2);
-        return shadow * daylight * strength * clamp(uCloudShadowInfluence, 0.0, 1.0);
-      }
+      ${PROP_CLOUD_FN_GLSL}
 
       void main() {
         vec4 texel = texture2D(uMap, vUv);
         vec3 albedo = uBaseColor;
-        float alpha = 1.0;
         if (uUseMap) {
           albedo *= texel.rgb;
-          alpha = texel.a;
         }
-        if (alpha < uAlphaTest) discard;
+        #if PROP_ALPHA_TEST == 1
+          float alpha = uUseMap ? texel.a : 1.0;
+          if (alpha < uAlphaTest) discard;
+        #endif
 
         vec3 color = albedo * vLight;
         color *= propTerrainAo();
-        float cloudShadow = propCloudShadowMask();
+        float cloudShadow = propCloudShadowMask(vLocalPlanetDir);
         vec3 coolShadow = color * vec3(0.11, 0.14, 0.19);
         color = mix(color, coolShadow, clamp(cloudShadow, 0.0, 0.96));
         gl_FragColor = vec4(color, 1.0);
         #include <logdepthbuf_fragment>
       }
     `,
-    side: kind === 'tree' ? THREE.DoubleSide : source.side,
+    // FrontSide for both kinds. The GLBs declare doubleSided: true, which is a
+    // modelling-tool default rather than a requirement — verified by welding
+    // each mesh by position and counting edges used by a single triangle:
+    // rock_1 is fully closed, oak_tree has 3 boundary edges out of ~26k and
+    // winter_tree 20, and all three have zero non-manifold edges. That is a
+    // closed solid with the trunk base left open (and buried), not a surface
+    // built from flat cards — a leaf card would contribute four boundary edges
+    // each. Backfaces here are never visible, so DoubleSide was rasterising
+    // ~17.5k triangles per tree twice.
+    //
+    // If foliage cards are ever added to these models, this needs to become a
+    // per-submesh decision.
+    side: THREE.FrontSide,
     transparent: false,
     alphaToCoverage: alphaTest > 0,
     depthWrite: true,
@@ -413,7 +506,27 @@ function disposeMaterial(material: THREE.Material | THREE.Material[]) {
   material.dispose()
 }
 
-async function loadPropModel(loader: GLTFLoader, id: string, kind: PlanetPropModel['kind'], url: string): Promise<PlanetPropModel> {
+function collectMeshParts(scene: THREE.Object3D): { geometry: THREE.BufferGeometry; source: THREE.Material | THREE.Material[] }[] {
+  const out: { geometry: THREE.BufferGeometry; source: THREE.Material | THREE.Material[] }[] = []
+  scene.traverse((object) => {
+    if (!(object instanceof THREE.Mesh)) return
+    const geometry = object.geometry?.clone()
+    if (!geometry) return
+    geometry.applyMatrix4(object.matrixWorld)
+    out.push({ geometry, source: object.material })
+  })
+  return out
+}
+
+async function loadPropModel(
+  loader: GLTFLoader,
+  id: string,
+  kind: PlanetPropModel['kind'],
+  url: string,
+  heightRange: readonly [number, number],
+  palette: FoliagePalette | null,
+  lodSpecs: PropLodSpec[] = [],
+): Promise<PlanetPropModel> {
   const gltf = await loader.loadAsync(url)
   gltf.scene.updateMatrixWorld(true)
 
@@ -429,13 +542,12 @@ async function loadPropModel(loader: GLTFLoader, id: string, kind: PlanetPropMod
     if (geometry.boundingBox) modelBox.union(geometry.boundingBox)
 
     rawParts.push({
-      geometry,
-      material: createPropMaterial(object.material, kind),
+      tiers: [{ geometry, material: createPropMaterial(object.material, kind) }],
     })
   })
 
   if (rawParts.length === 0 || modelBox.isEmpty()) {
-    return { id, kind, parts: [] }
+    return { id, kind, heightRange, parts: [], foliage: null }
   }
 
   const size = new THREE.Vector3()
@@ -448,12 +560,96 @@ async function loadPropModel(loader: GLTFLoader, id: string, kind: PlanetPropMod
     .premultiply(new THREE.Matrix4().makeScale(1 / height, 1 / height, 1 / height))
 
   for (const part of rawParts) {
-    part.geometry.applyMatrix4(normalize)
-    part.geometry.computeBoundingBox()
-    part.geometry.computeBoundingSphere()
+    const base = part.tiers[0].geometry
+    base.applyMatrix4(normalize)
+    base.computeBoundingBox()
+    base.computeBoundingSphere()
   }
 
-  return { id, kind, parts: rawParts }
+  // LOD tiers must be placed by the *base* model's normalize matrix. Deriving
+  // their own from their own bounding box would differ slightly (the simplifier
+  // moves the box by ~0.02%), and every tier switch would nudge the tree.
+  for (const spec of lodSpecs) {
+    try {
+      const lodGltf = await loader.loadAsync(spec.url)
+      lodGltf.scene.updateMatrixWorld(true)
+      const lodParts = collectMeshParts(lodGltf.scene)
+      if (lodParts.length !== rawParts.length) {
+        for (const lodPart of lodParts) lodPart.geometry.dispose()
+        if (import.meta.env.DEV) {
+          console.warn(`Prop LOD ${spec.url} has ${lodParts.length} parts, base has ${rawParts.length} -- skipped`)
+        }
+        continue
+      }
+      lodParts.forEach((lodPart, index) => {
+        lodPart.geometry.applyMatrix4(normalize)
+        lodPart.geometry.computeBoundingBox()
+        lodPart.geometry.computeBoundingSphere()
+        rawParts[index].tiers.push({
+          geometry: lodPart.geometry,
+          material: spec.ownMaterial
+            ? createPropMaterial(lodPart.source, kind)
+            : rawParts[index].tiers[0].material,
+        })
+      })
+    } catch (error) {
+      if (import.meta.env.DEV) console.warn(`Prop LOD ${spec.url} failed to load: ${String(error)}`)
+    }
+  }
+
+  return { id, kind, heightRange, parts: rawParts, foliage: buildModelFoliage(id, kind, rawParts, palette) }
+}
+
+// Leaves are derived from the tier-0 mesh only.
+//
+// This is forced by the assets, not chosen: the lower tiers are independently
+// re-exported, and oak lod_2 is down to 153 distinct vertex positions, where
+// the local-radius estimate has no neighbourhood left to work with and returns
+// zero for most of the mesh. Anchors from tier 0 are valid for every tier
+// anyway -- foliage is its own mesh, in the same normalised model space, so it
+// never had to agree with whichever trunk tier happens to be bound.
+function buildModelFoliage(
+  id: string,
+  kind: PlanetPropModel['kind'],
+  parts: PlanetPropPart[],
+  palette: FoliagePalette | null,
+): PlanetPropFoliage | null {
+  if (kind !== 'tree' || parts.length === 0 || !palette) return null
+
+  // The densest part, so a model split across several meshes still gets its
+  // anchors from the branch mesh rather than whichever one traversed first.
+  let source = parts[0].tiers[0].geometry
+  for (const part of parts) {
+    const candidate = part.tiers[0].geometry
+    if (candidate.getAttribute('position')?.count > (source.getAttribute('position')?.count ?? 0)) {
+      source = candidate
+    }
+  }
+
+  const seed = hashString(`foliage:${id}`)
+  const anchors = extractBranchAnchors(source, seed)
+  if (anchors.length === 0) {
+    if (import.meta.env.DEV) console.warn(`No branch anchors found for ${id} -- foliage skipped`)
+    return null
+  }
+
+  const built = buildFoliageGeometry(anchors, seed)
+  if (!built) return null
+
+  if (import.meta.env.DEV) {
+    console.info(`Foliage ${id}: ${anchors.length} anchors, ${built.cardCount} cards`)
+  }
+
+  return {
+    geometry: built.geometry,
+    material: createFoliageMaterial(
+      DEFAULT_FOLIAGE_SETTINGS,
+      palette,
+      DEFAULT_PROP_CLOUD_SHADOW_TEXTURE,
+      built.canopyCenter,
+    ),
+    cardCount: built.cardCount,
+  }
 }
 
 export function getPlanetPropAssets(): PlanetPropAssets | null {
@@ -465,18 +661,47 @@ export function loadPlanetPropAssets(): Promise<PlanetPropAssets> {
   if (assetPromise) return assetPromise
 
   const loader = new GLTFLoader()
-  assetPromise = Promise.all([
-    loadPropModel(loader, 'oak-tree', 'tree', oakTreeUrl),
-    loadPropModel(loader, 'winter-tree', 'tree', winterTreeUrl),
-    loadPropModel(loader, 'rock-1', 'rock', rock1Url),
-    loadPropModel(loader, 'rock-2', 'rock', rock2Url),
-  ]).then(([oakTree, winterTree, rock1, rock2]) => {
-    cachedAssets = {
-      trees: [oakTree, winterTree].filter(model => model.parts.length > 0),
-      rocks: [rock1, rock2].filter(model => model.parts.length > 0),
-    }
-    return cachedAssets
-  })
+  const treePromises = [
+    // Both trees ship four independently generated tiers, each with its own
+    // baked atlas -- hence ownMaterial on every one. A tier produced by
+    // decimating the base mesh instead would keep the base UVs and set false.
+    // Oaks read broad and shorter, the dry pine tall and narrow. Tune here.
+    loadPropModel(loader, 'oak-tree', 'tree', oakLod0Url, OAK_HEIGHT_RANGE, OAK_FOLIAGE_PALETTE, [
+      { url: oakLod1Url, ownMaterial: true },
+      { url: oakLod2Url, ownMaterial: true },
+      { url: oakLod3Url, ownMaterial: true },
+    ]),
+    loadPropModel(
+      loader, 'winter-tree', 'tree', winterLod0Url,
+      WINTER_TREE_HEIGHT_RANGE, WINTER_TREE_FOLIAGE_PALETTE,
+      [
+        { url: winterLod1Url, ownMaterial: true },
+        { url: winterLod2Url, ownMaterial: true },
+        { url: winterLod3Url, ownMaterial: true },
+      ],
+    ),
+  ]
+  // Skipped entirely rather than left at zero density: this way the two rock
+  // GLBs are never fetched, parsed or uploaded.
+  // Dynamic so the GLBs leave the module graph entirely while the flag is off,
+  // rather than being emitted into the build and simply never fetched.
+  const rockPromises = ROCKS_ENABLED
+    ? [
+        import('../../assets/models/rocks/rock_1.glb?url')
+          .then(module => loadPropModel(loader, 'rock-1', 'rock', module.default, ROCK_HEIGHT_RANGE, null)),
+        import('../../assets/models/rocks/rock_2.glb?url')
+          .then(module => loadPropModel(loader, 'rock-2', 'rock', module.default, ROCK_HEIGHT_RANGE, null)),
+      ]
+    : []
+
+  assetPromise = Promise.all([Promise.all(treePromises), Promise.all(rockPromises)])
+    .then(([trees, rocks]) => {
+      cachedAssets = {
+        trees: trees.filter(model => model.parts.length > 0),
+        rocks: rocks.filter(model => model.parts.length > 0),
+      }
+      return cachedAssets
+    })
 
   return assetPromise
 }
@@ -485,9 +710,19 @@ export function disposePlanetPropAssets() {
   if (!cachedAssets) return
 
   for (const model of [...cachedAssets.trees, ...cachedAssets.rocks]) {
+    if (model.foliage) {
+      model.foliage.geometry.dispose()
+      model.foliage.material.dispose()
+    }
     for (const part of model.parts) {
-      part.geometry.dispose()
-      disposeMaterial(part.material)
+      const seen = new Set<THREE.Material | THREE.Material[]>()
+      for (const tier of part.tiers) {
+        tier.geometry.dispose()
+        // Tiers that reuse the base material must not be disposed twice.
+        if (seen.has(tier.material)) continue
+        seen.add(tier.material)
+        disposeMaterial(tier.material)
+      }
     }
   }
   cachedAssets = null
@@ -513,14 +748,103 @@ function updatePropMaterial(material: THREE.Material | THREE.Material[], lightin
   material.uniforms.uCloudShadowStrength.value = lighting.cloudShadowStrength
   material.uniforms.uCloudShadowInfluence.value = lighting.cloudShadowStrength > 0.001 ? 1 : 0
   material.uniforms.uCloudLocalSunDirection.value.copy(lighting.cloudLocalSunDirection)
+  if (material.uniforms.uTime) material.uniforms.uTime.value = lighting.time
+  if (material.uniforms.uWindStrength) {
+    material.uniforms.uWindStrength.value = lighting.windStrength
+  }
 }
 
 export function updatePlanetPropMaterials(assets: PlanetPropAssets, lighting: PlanetPropLighting) {
   for (const model of [...assets.trees, ...assets.rocks]) {
     for (const part of model.parts) {
-      updatePropMaterial(part.material, lighting)
+      // Every tier, not just tier 0: independently baked tiers have their own
+      // material, and skipping them would leave distant props without sun
+      // position, cloud shadow or atmosphere tint.
+      for (const tier of part.tiers) {
+        updatePropMaterial(tier.material, lighting)
+      }
+    }
+    if (model.foliage) {
+      updatePropMaterial(model.foliage.material, lighting)
+      updateFoliageMaterialSettings(model.foliage.material, lighting.foliage)
     }
   }
+}
+
+// Recolours one species at a time. Separate from updatePlanetPropMaterials
+// because the palette is per model and changes only when someone moves a
+// slider, while that runs every frame for everything.
+export function setPlanetPropFoliagePalettes(
+  assets: PlanetPropAssets,
+  palettes: Record<string, FoliagePalette>,
+): void {
+  for (const model of assets.trees) {
+    const palette = palettes[model.id]
+    if (palette && model.foliage) setFoliagePalette(model.foliage.material, palette)
+  }
+}
+
+interface PropMeshEntry {
+  mesh: THREE.InstancedMesh
+  part: PlanetPropPart
+  attributes: [string, THREE.InstancedBufferAttribute][]
+  // Built lazily per tier and kept: most chunks only ever need one, and a
+  // chunk that oscillates across the threshold should not re-clone each time.
+  tierGeometries: (THREE.BufferGeometry | null)[]
+}
+
+interface PropFoliageEntry {
+  mesh: THREE.InstancedMesh
+  geometry: THREE.BufferGeometry
+  foliage: PlanetPropFoliage
+  // Per-instance size multiplier. The material is shared by every chunk on the
+  // planet, so the LOD size compensation cannot be a uniform -- it has to ride
+  // on the instances, which are per layer.
+  scaleAttribute: THREE.InstancedBufferAttribute
+}
+
+// Binds a model's vertex data to one layer's instance data.
+//
+// The source attributes are referenced, not copied. The previous version called
+// geometry.clone(), and BufferAttribute.clone() deep-copies its array, so every
+// chunk carried -- and uploaded -- its own copy of the tree mesh: 121 KB per
+// oak per chunk, per tier ever visited. With foliage added on top that was
+// going to be several times worse, so the sharing is what makes leaves
+// affordable at all.
+function buildInstancedGeometry(
+  source: THREE.BufferGeometry,
+  attributes: [string, THREE.InstancedBufferAttribute][],
+): THREE.BufferGeometry {
+  const geometry = new THREE.BufferGeometry()
+  for (const name of Object.keys(source.attributes)) {
+    geometry.setAttribute(name, source.attributes[name])
+  }
+  if (source.index) geometry.setIndex(source.index)
+  // Copied rather than referenced: InstancedMesh.computeBoundingSphere reads
+  // geometry.boundingSphere, and anything that recomputed it through a shared
+  // reference would corrupt it for every other layer.
+  geometry.boundingBox = source.boundingBox?.clone() ?? null
+  geometry.boundingSphere = source.boundingSphere?.clone() ?? null
+  for (const [name, attribute] of attributes) geometry.setAttribute(name, attribute)
+  return geometry
+}
+
+// Frees only what this layer owns.
+//
+// The vertex attributes belong to the model and are drawn by every other chunk
+// showing the same tree, so they are detached before dispose(). Without that,
+// the first chunk to unload would delete the GPU buffers the rest of the planet
+// is still rendering from, and they would be re-uploaded on the next frame --
+// forever, as chunks stream in and out.
+function disposeInstancedGeometry(geometry: THREE.BufferGeometry, source: THREE.BufferGeometry): void {
+  for (const name of Object.keys(source.attributes)) geometry.deleteAttribute(name)
+  geometry.setIndex(null)
+  geometry.dispose()
+}
+
+function foliageIndexCount(cardCount: number, tier: number): number {
+  const fraction = FOLIAGE_LOD_FRACTIONS[Math.min(tier, FOLIAGE_LOD_FRACTIONS.length - 1)]
+  return Math.max(0, Math.round(cardCount * fraction)) * 6
 }
 
 export class PlanetPropLayer {
@@ -530,6 +854,9 @@ export class PlanetPropLayer {
   private readonly terrain: PlanetTerrainParams
   private readonly sunLightAttributes: THREE.InstancedBufferAttribute[] = []
   private readonly lastSunDirection = new THREE.Vector3(Number.NaN, Number.NaN, Number.NaN)
+  private readonly meshEntries: PropMeshEntry[] = []
+  private readonly foliageEntries: PropFoliageEntry[] = []
+  private lodTier = 0
 
   constructor(params: PlanetPropLayerParams) {
     this.group.name = 'planet-prop-layer'
@@ -542,32 +869,74 @@ export class PlanetPropLayer {
     let totalInstances = 0
 
     for (const placement of placements) {
-      if (placement.matrices.length === 0) continue
+      const count = placement.matrices.length
+      if (count === 0) continue
 
-      totalInstances += placement.matrices.length
+      totalInstances += count
+      // Hoisted out of the part loop: these depend only on the placement, so
+      // building them per part duplicated identical attributes -- and the
+      // foliage mesh, which is per model rather than per part, needs the same
+      // ones.
+      const sunLightAttribute = new THREE.InstancedBufferAttribute(placement.sunLight, 1)
+      const attributes: [string, THREE.InstancedBufferAttribute][] = [
+        ['instancePlanetDir', new THREE.InstancedBufferAttribute(placement.planetDirs, 3)],
+        ['instanceTerrainNormal', new THREE.InstancedBufferAttribute(placement.terrainNormals, 3)],
+        ['instanceTerrainMicroAo', new THREE.InstancedBufferAttribute(placement.microAo, 1)],
+        ['instanceTerrainMacroAo', new THREE.InstancedBufferAttribute(placement.macroAo, 1)],
+        ['instanceTerrainSunLight', sunLightAttribute],
+      ]
+      this.sunLightAttributes.push(sunLightAttribute)
+
       for (const part of placement.model.parts) {
-        const geometry = part.geometry.clone()
-        geometry.setAttribute('instancePlanetDir', new THREE.InstancedBufferAttribute(placement.planetDirs, 3))
-        geometry.setAttribute('instanceTerrainNormal', new THREE.InstancedBufferAttribute(placement.terrainNormals, 3))
-        geometry.setAttribute('instanceTerrainMicroAo', new THREE.InstancedBufferAttribute(placement.microAo, 1))
-        geometry.setAttribute('instanceTerrainMacroAo', new THREE.InstancedBufferAttribute(placement.macroAo, 1))
-        const sunLightAttribute = new THREE.InstancedBufferAttribute(placement.sunLight, 1)
-        geometry.setAttribute('instanceTerrainSunLight', sunLightAttribute)
-        this.sunLightAttributes.push(sunLightAttribute)
-        const mesh = new THREE.InstancedMesh(geometry, part.material, placement.matrices.length)
+        const tierGeometries: (THREE.BufferGeometry | null)[] = new Array(part.tiers.length).fill(null)
+        const geometry = buildInstancedGeometry(part.tiers[0].geometry, attributes)
+        tierGeometries[0] = geometry
+        const mesh = new THREE.InstancedMesh(geometry, part.tiers[0].material, count)
         mesh.name = `planet-prop-${placement.model.id}`
         mesh.userData.planetProp = true
         mesh.userData.planetPropModel = placement.model.id
         mesh.userData.planetPropKind = placement.model.kind
         mesh.userData.planetPropShaderVersion = PROP_SHADER_VERSION
-        mesh.count = placement.matrices.length
+        mesh.count = count
         mesh.frustumCulled = true
         mesh.renderOrder = 2
-        for (let i = 0; i < placement.matrices.length; i++) {
+        for (let i = 0; i < count; i++) {
           mesh.setMatrixAt(i, placement.matrices[i])
         }
         mesh.instanceMatrix.needsUpdate = true
         mesh.computeBoundingSphere()
+        this.meshEntries.push({ mesh, part, attributes, tierGeometries })
+        this.group.add(mesh)
+      }
+
+      const foliage = placement.model.foliage
+      if (foliage) {
+        const scales = new Float32Array(count).fill(FOLIAGE_LOD_SIZE_BOOST[0])
+        const scaleAttribute = new THREE.InstancedBufferAttribute(scales, 1)
+        const geometry = buildInstancedGeometry(foliage.geometry, [
+          ...attributes,
+          ['instanceFoliageScale', scaleAttribute],
+        ])
+        geometry.setDrawRange(0, foliageIndexCount(foliage.cardCount, 0))
+        const mesh = new THREE.InstancedMesh(geometry, foliage.material, count)
+        mesh.name = `planet-foliage-${placement.model.id}`
+        mesh.userData.planetProp = true
+        mesh.userData.planetPropModel = placement.model.id
+        mesh.userData.planetPropKind = 'foliage'
+        mesh.userData.planetPropShaderVersion = PROP_SHADER_VERSION
+        mesh.count = count
+        mesh.frustumCulled = true
+        // After every trunk in the scene, not just this chunk's. Foliage is
+        // alpha-tested and therefore has no early-Z of its own; letting the
+        // opaque trunks lay down depth first is what keeps the hidden half of
+        // a canopy from ever reaching the fragment shader.
+        mesh.renderOrder = 3
+        for (let i = 0; i < count; i++) {
+          mesh.setMatrixAt(i, placement.matrices[i])
+        }
+        mesh.instanceMatrix.needsUpdate = true
+        mesh.computeBoundingSphere()
+        this.foliageEntries.push({ mesh, geometry, foliage, scaleAttribute })
         this.group.add(mesh)
       }
     }
@@ -576,18 +945,80 @@ export class PlanetPropLayer {
     this.group.visible = totalInstances > 0
   }
 
-  updateSunLight(localSunDirection: THREE.Vector3) {
+  // Inputs for an off-thread sun-light job. The arrays are handed over as-is
+  // and structured-cloned by postMessage, so this layer keeps ownership.
+  getSunLightJobPlacements(): PropSunPlacementInput[] {
+    return this.placements
+      .filter(placement => placement.sunLight.length > 0)
+      .map(placement => ({
+        planetDirs: placement.planetDirs,
+        terrainNormals: placement.terrainNormals,
+        surfaceRadii: placement.surfaceRadii,
+        count: placement.sunLight.length,
+      }))
+  }
+
+  // Counterpart to getSunLightJobPlacements. Bails out rather than writing
+  // partial data if the layer was rebuilt while the job was in flight.
+  applySunLightResults(results: Float32Array[], sunDirection: THREE.Vector3): void {
+    const active = this.placements.filter(placement => placement.sunLight.length > 0)
+    if (results.length !== active.length) return
+
+    let changed = false
+    for (let i = 0; i < results.length; i++) {
+      const values = results[i]
+      const placement = active[i]
+      if (values.length !== placement.sunLight.length) return
+      for (let k = 0; k < values.length; k++) {
+        if (Math.abs(placement.sunLight[k] - values[k]) > 0.015) {
+          changed = true
+          break
+        }
+      }
+      placement.sunLight.set(values)
+    }
+
+    this.lastSunDirection.copy(sunDirection).normalize()
+    if (!changed) return
+    for (const attribute of this.sunLightAttributes) attribute.needsUpdate = true
+  }
+
+  // Cheap predicate so the caller can decide whether to spend its per-frame
+  // budget on this layer, without doing the raymarch to find out.
+  needsSunLightUpdate(localSunDirection: THREE.Vector3): boolean {
+    if (this.instanceCount <= 0) return false
+    const lengthSq = localSunDirection.lengthSq()
+    if (lengthSq <= 1e-8) return false
+    if (!Number.isFinite(this.lastSunDirection.x)) return true
+    const inv = 1 / Math.sqrt(lengthSq)
+    const dot = (this.lastSunDirection.x * localSunDirection.x
+      + this.lastSunDirection.y * localSunDirection.y
+      + this.lastSunDirection.z * localSunDirection.z) * inv
+    return dot <= SUN_DIRECTION_EPSILON_DOT
+  }
+
+  // skipHorizon drops the terrain-occlusion raymarch, which is the entire cost
+  // here (10 detailed height samples per instance). Used to light a layer on
+  // the frame it is created so its trees are not black, without paying ~3.4ms
+  // of main thread inside the chunk integration budget. lastSunDirection is
+  // deliberately left untouched in that case, so the layer still reports as
+  // needing a real update and the budgeted pass refines it shortly after.
+  updateSunLight(localSunDirection: THREE.Vector3, skipHorizon = false) {
     if (this.instanceCount <= 0) return
 
-    const sunDir = localSunDirection.clone()
+    const sunDir = TEMP_SUN_DIR.copy(localSunDirection)
     if (sunDir.lengthSq() <= 1e-8) return
     sunDir.normalize()
-    if (Number.isFinite(this.lastSunDirection.x) && this.lastSunDirection.dot(sunDir) > 0.9997) return
-    this.lastSunDirection.copy(sunDir)
+    if (
+      !skipHorizon
+      && Number.isFinite(this.lastSunDirection.x)
+      && this.lastSunDirection.dot(sunDir) > SUN_DIRECTION_EPSILON_DOT
+    ) return
+    if (!skipHorizon) this.lastSunDirection.copy(sunDir)
 
     let changed = false
     for (const placement of this.placements) {
-      changed = this.updatePlacementSunLight(placement, sunDir) || changed
+      changed = this.updatePlacementSunLight(placement, sunDir, skipHorizon) || changed
     }
     if (!changed) return
 
@@ -623,88 +1054,88 @@ export class PlanetPropLayer {
     this.group.visible = visible && this.instanceCount > 0
   }
 
+  // Swaps every mesh to the given detail tier. Clamped per part, so a model
+  // without LOD data simply stays on tier 0.
+  setLodTier(tier: number) {
+    if (tier === this.lodTier) return
+    this.lodTier = tier
+
+    for (const entry of this.meshEntries) {
+      const index = Math.min(tier, entry.part.tiers.length - 1)
+      let geometry = entry.tierGeometries[index]
+      if (!geometry) {
+        geometry = buildInstancedGeometry(entry.part.tiers[index].geometry, entry.attributes)
+        entry.tierGeometries[index] = geometry
+      }
+      entry.mesh.geometry = geometry
+      // The material moves with the geometry: independently baked tiers carry
+      // their own atlas, so keeping tier 0's texture here would map it onto
+      // unrelated UVs.
+      entry.mesh.material = entry.part.tiers[index].material
+      entry.mesh.computeBoundingSphere()
+    }
+
+    // Foliage LOD is a draw range, not a geometry swap. The cards were shuffled
+    // at build time so any prefix is a spatially uniform sample of the canopy;
+    // truncating in score order instead would strip one side of the tree bare.
+    const boost = FOLIAGE_LOD_SIZE_BOOST[Math.min(tier, FOLIAGE_LOD_SIZE_BOOST.length - 1)]
+    for (const entry of this.foliageEntries) {
+      entry.geometry.setDrawRange(0, foliageIndexCount(entry.foliage.cardCount, tier))
+      // Fewer, larger cards hold the same canopy mass, so the silhouette
+      // survives the thinning even though the detail does not.
+      const scales = entry.scaleAttribute.array as Float32Array
+      scales.fill(boost)
+      entry.scaleAttribute.needsUpdate = true
+    }
+  }
+
+  get lodTierIndex(): number {
+    return this.lodTier
+  }
+
   dispose() {
     this.group.parent?.remove(this.group)
-    this.group.traverse((object) => {
-      if (object instanceof THREE.InstancedMesh) {
-        object.geometry.dispose()
-        object.dispose()
-      }
-    })
+    for (const entry of this.meshEntries) {
+      // Every tier that was ever built, not just the one currently bound.
+      entry.tierGeometries.forEach((geometry, index) => {
+        if (geometry) disposeInstancedGeometry(geometry, entry.part.tiers[index].geometry)
+      })
+      entry.mesh.dispose()
+    }
+    this.meshEntries.length = 0
+
+    for (const entry of this.foliageEntries) {
+      disposeInstancedGeometry(entry.geometry, entry.foliage.geometry)
+      entry.mesh.dispose()
+    }
+    this.foliageEntries.length = 0
   }
 
-  private updatePlacementSunLight(placement: PlanetPropPlacement, sunDir: THREE.Vector3): boolean {
-    let changed = false
-    const radial = new THREE.Vector3()
-    const terrainNormal = new THREE.Vector3()
-    const tangentSun = new THREE.Vector3()
-    const terrainMeters = Math.max(this.terrain.terrainScale * this.terrain.radius, 1)
+  private updatePlacementSunLight(
+    placement: PlanetPropPlacement,
+    sunDir: THREE.Vector3,
+    skipHorizon: boolean,
+  ): boolean {
+    const previous = _sunLightScratch.length >= placement.sunLight.length
+      ? _sunLightScratch.subarray(0, placement.sunLight.length)
+      : (_sunLightScratch = new Float32Array(placement.sunLight.length))
+    previous.set(placement.sunLight)
+
+    _sunInput.planetDirs = placement.planetDirs
+    _sunInput.terrainNormals = placement.terrainNormals
+    _sunInput.surfaceRadii = placement.surfaceRadii
+    _sunInput.sunX = sunDir.x
+    _sunInput.sunY = sunDir.y
+    _sunInput.sunZ = sunDir.z
+    computePropSunLight(_sunInput, this.terrain, placement.sunLight, skipHorizon)
 
     for (let i = 0; i < placement.sunLight.length; i++) {
-      const dirOffset = i * 3
-      radial.set(
-        placement.planetDirs[dirOffset],
-        placement.planetDirs[dirOffset + 1],
-        placement.planetDirs[dirOffset + 2],
-      ).normalize()
-      terrainNormal.set(
-        placement.terrainNormals[dirOffset],
-        placement.terrainNormals[dirOffset + 1],
-        placement.terrainNormals[dirOffset + 2],
-      ).normalize()
-
-      const radialSun = radial.dot(sunDir)
-      tangentSun.copy(sunDir).addScaledVector(radial, -radialSun)
-      const tangentLen = tangentSun.length()
-      let sunlight = 0
-
-      if (radialSun > -0.08 && tangentLen > 1e-5) {
-        tangentSun.divideScalar(tangentLen)
-        const normalGate = smoothstep(-0.04, 0.18, terrainNormal.dot(sunDir))
-        const horizonGate = this.computeHorizonSunLight(radial, tangentSun, radialSun / tangentLen, placement.surfaceRadii[i], terrainMeters)
-        sunlight = Math.min(normalGate, horizonGate)
-      } else if (radialSun > 0.35) {
-        sunlight = smoothstep(-0.08, 0.24, terrainNormal.dot(sunDir))
-      }
-
-      sunlight = clamp(sunlight, 0, 1)
-      if (Math.abs(placement.sunLight[i] - sunlight) > 0.015) {
-        placement.sunLight[i] = sunlight
-        changed = true
-      }
+      if (Math.abs(previous[i] - placement.sunLight[i]) > 0.015) return true
     }
-
-    return changed
+    return false
   }
 
-  private computeHorizonSunLight(
-    radial: THREE.Vector3,
-    tangentSun: THREE.Vector3,
-    sunSlope: number,
-    originRadius: number,
-    terrainMeters: number,
-  ): number {
-    let blocker = 0
-    const stylizedSunSlope = sunSlope * 0.42 - 0.035
 
-    for (const factor of SUN_SHADOW_SAMPLE_FACTORS) {
-      const distance = terrainMeters * factor
-      const angle = distance / Math.max(this.terrain.radius, 1)
-      const sinAngle = Math.sin(angle)
-      const cosAngle = Math.cos(angle)
-      sampleDirection(radial, tangentSun, sinAngle, cosAngle, TEMP_PROP_SAMPLE_DIR)
-      const sampleHeight = samplePlanetHeightDetailed(TEMP_PROP_SAMPLE_DIR, this.terrain, 0.35)
-      const sampleRadius = this.terrain.radius + sampleHeight * terrainMeters
-      const vertical = sampleRadius * cosAngle - originRadius - SUN_SHADOW_CLEARANCE
-      const horizontal = Math.max(sampleRadius * sinAngle, 1e-3)
-      const obstacleSlope = vertical / horizontal
-      const distanceWeight = smoothstep(0.04, 0.42, factor) * (1 - smoothstep(7.0, 8.5, factor))
-      blocker = Math.max(blocker, smoothstep(-0.015, 0.080, obstacleSlope - stylizedSunSlope) * distanceWeight)
-      if (blocker >= 0.995) break
-    }
-
-    return 1 - blocker
-  }
 
   private buildPlacements(params: PlanetPropLayerParams): PlanetPropPlacement[] {
     const treePlacements = this.buildKindPlacements(params, 'tree')
@@ -806,7 +1237,11 @@ export class PlanetPropLayer {
       if (!modelPlacement) continue
 
       if (kind === 'tree') {
-        const treeHeight = 7.5 + rng() * 12.5
+        // Per model rather than one shared range, so an oak and a pine are not
+        // the same size. Still exactly one rng() draw, so placement and model
+        // choice are untouched.
+        const [minHeight, maxHeight] = model.heightRange
+        const treeHeight = minHeight + rng() * (maxHeight - minHeight)
         placementUp.copy(radial).lerp(normal, 0.18).normalize()
         position.addScaledVector(placementUp, 0.08)
         scale.set(treeHeight, treeHeight, treeHeight)

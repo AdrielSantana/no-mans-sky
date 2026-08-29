@@ -40,30 +40,37 @@ function invSqrt(x: number): number {
   return 1 / Math.sqrt(x)
 }
 
-function grad4(j: number): [number, number, number, number] {
+// Fused grad4 + dot4. The split version allocated a 4-tuple per call and is
+// called five times per snoise4, i.e. 255 short-lived arrays per height sample —
+// and a height sample runs per terrain vertex, per AO tap and per prop shadow
+// ray. Fusing them removes the allocation entirely.
+//
+// The multiplication order below is deliberately `component * norm * coord`,
+// matching the original `[px*norm, ...]` then `a[0]*x + ...`. Factoring `norm`
+// out to the end is algebraically equal but not bit-equal: it diverges on ~46%
+// of samples (max 7.6e-14). That is invisible on its own, but this module is
+// shared with the SpacetimeDB server — client and server must agree on terrain
+// height exactly, or players sink through the ground the server thinks is solid.
+function grad4dot(j: number, x: number, y: number, z: number, w: number): number {
   const ipx = 1 / 294
   const ipy = 1 / 49
   const ipz = 1 / 7
-  const x = Math.floor(fract(j * ipx) * 7) * ipz - 1
-  const y = Math.floor(fract(j * ipy) * 7) * ipz - 1
-  const z = Math.floor(fract(j * ipz) * 7) * ipz - 1
-  let w = 1.5 - Math.abs(x) - Math.abs(y) - Math.abs(z)
-  let px = x
-  let py = y
-  let pz = z
+  const gx = Math.floor(fract(j * ipx) * 7) * ipz - 1
+  const gy = Math.floor(fract(j * ipy) * 7) * ipz - 1
+  const gz = Math.floor(fract(j * ipz) * 7) * ipz - 1
+  const gw = 1.5 - Math.abs(gx) - Math.abs(gy) - Math.abs(gz)
+  let px = gx
+  let py = gy
+  let pz = gz
 
-  if (w < 0) {
+  if (gw < 0) {
     px += px < 0 ? 1 : -1
     py += py < 0 ? 1 : -1
     pz += pz < 0 ? 1 : -1
   }
 
-  const norm = invSqrt(px * px + py * py + pz * pz + w * w)
-  return [px * norm, py * norm, pz * norm, w * norm]
-}
-
-function dot4(a: [number, number, number, number], x: number, y: number, z: number, w: number): number {
-  return a[0] * x + a[1] * y + a[2] * z + a[3] * w
+  const norm = invSqrt(px * px + py * py + pz * pz + gw * gw)
+  return px * norm * x + py * norm * y + pz * norm * z + gw * norm * w
 }
 
 function snoise4(x: number, y: number, z: number, w: number): number {
@@ -136,12 +143,6 @@ function snoise4(x: number, y: number, z: number, w: number): number {
   const j1z = permute(permute(permute(permute(iw + i3w) + iz + i3z) + iy + i3y) + ix + i3x)
   const j1w = permute(permute(permute(permute(iw + 1) + iz + 1) + iy + 1) + ix + 1)
 
-  const p0 = grad4(j0)
-  const p1 = grad4(j1x)
-  const p2 = grad4(j1y)
-  const p3 = grad4(j1z)
-  const p4 = grad4(j1w)
-
   let m0 = Math.max(0.6 - x0 * x0 - y0 * y0 - z0 * z0 - w0 * w0, 0)
   let m1 = Math.max(0.6 - x1 * x1 - y1 * y1 - z1 * z1 - w1 * w1, 0)
   let m2 = Math.max(0.6 - x2 * x2 - y2 * y2 - z2 * z2 - w2 * w2, 0)
@@ -154,11 +155,11 @@ function snoise4(x: number, y: number, z: number, w: number): number {
   m4 *= m4
 
   return 49 * (
-    m0 * m0 * dot4(p0, x0, y0, z0, w0) +
-    m1 * m1 * dot4(p1, x1, y1, z1, w1) +
-    m2 * m2 * dot4(p2, x2, y2, z2, w2) +
-    m3 * m3 * dot4(p3, x3, y3, z3, w3) +
-    m4 * m4 * dot4(p4, x4, y4, z4, w4)
+    m0 * m0 * grad4dot(j0, x0, y0, z0, w0) +
+    m1 * m1 * grad4dot(j1x, x1, y1, z1, w1) +
+    m2 * m2 * grad4dot(j1y, x2, y2, z2, w2) +
+    m3 * m3 * grad4dot(j1z, x3, y3, z3, w3) +
+    m4 * m4 * grad4dot(j1w, x4, y4, z4, w4)
   )
 }
 
@@ -205,11 +206,19 @@ function sampleWarpedDirection(dir: Vec3Like, params: PlanetTerrainParams, lacun
   })
 }
 
-export function samplePlanetHeight(dir: Vec3Like, params: PlanetTerrainParams): number {
+export function samplePlanetHeight(
+  dir: Vec3Like,
+  params: PlanetTerrainParams,
+  // Optional precomputed domain warp. samplePlanetHeightDetailed calls this and
+  // samplePlanetMicroHeight back to back with the same direction, and both used
+  // to derive the identical warp independently — 9 of the 78 snoise4 taps in a
+  // detailed sample, duplicated.
+  warpedDir?: Vec3Like,
+): number {
   const lacunarity = params.lacunarity ?? 2
   const gain = params.gain ?? 0.5
   const baseDir = normalize(dir)
-  const warped = sampleWarpedDirection(baseDir, params, lacunarity, gain)
+  const warped = warpedDir ?? sampleWarpedDirection(baseDir, params, lacunarity, gain)
   const frequency = params.frequency
   const octaves = Math.min(params.octaves, 8)
 
@@ -374,6 +383,7 @@ export function samplePlanetMicroHeight(
   dir: Vec3Like,
   params: PlanetTerrainParams,
   macroHeight = samplePlanetHeight(dir, params),
+  warpedDir?: Vec3Like,
 ): number {
   if (params.planetType === 'gas') return 0
 
@@ -383,8 +393,7 @@ export function samplePlanetMicroHeight(
 
   const lacunarity = params.lacunarity ?? 2
   const gain = params.gain ?? 0.5
-  const baseDir = normalize(dir)
-  const warped = sampleWarpedDirection(baseDir, params, lacunarity, gain)
+  const warped = warpedDir ?? sampleWarpedDirection(normalize(dir), params, lacunarity, gain)
   const scale = Math.max(params.microDetailScale ?? (params.planetType === 'ice' ? 1.15 : 2.5), 0.05)
   const radius = Math.max(params.radius, 1)
   const freqForMeters = (meters: number) => radius / Math.max(meters * scale, 0.25)
@@ -447,11 +456,16 @@ export function samplePlanetHeightDetailed(
   params: PlanetTerrainParams,
   microAmount = 1,
 ): number {
-  const macroHeight = samplePlanetHeight(dir, params)
+  // Derive the warp once and hand it to both samplers.
+  const lacunarity = params.lacunarity ?? 2
+  const gain = params.gain ?? 0.5
+  const warped = sampleWarpedDirection(normalize(dir), params, lacunarity, gain)
+
+  const macroHeight = samplePlanetHeight(dir, params, warped)
   const amount = clamp(microAmount, 0, 1)
   if (amount <= 0.001) return macroHeight
 
-  return macroHeight + samplePlanetMicroHeight(dir, params, macroHeight) * amount
+  return macroHeight + samplePlanetMicroHeight(dir, params, macroHeight, warped) * amount
 }
 
 export function samplePlanetRadius(dir: Vec3Like, params: PlanetTerrainParams): number {
