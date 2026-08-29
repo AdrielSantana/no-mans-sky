@@ -12,8 +12,9 @@ GPU sumiram. O HUD (`?perf`) agora reporta `draw`/`tri` de verdade.
 
 ## 1. Props — o subsistema mais pesado que sobrou
 
-Confirmado em uso: continua pesado. Backface culling e o alpha-test inútil já
-foram corrigidos (1.1); o que resta é contagem de triângulos e VRAM.
+Backface culling, o alpha-test inútil e as texturas 2048² já foram corrigidos
+(1.1 e 1.3). **O que resta é contagem de triângulos: LOD tiers (1.1b) e o
+raymarch de sombra síncrono (1.2).**
 
 ### 1.1 Backface culling e alpha-test — FEITO
 As árvores são **tronco e galhos, sem folhas** (escolha deliberada do autor).
@@ -67,9 +68,8 @@ antes das otimizações de ruído; hoje ~3,4 ms.
   instância, então duas árvores no mesmo chunk em alturas diferentes precisam
   sombrear diferente.
 
-### 1.3 Texturas 2048² — `planet-props.ts`
-Ver secção 3. Melhor retorno por risco de tudo que sobrou: 85 → 21 MB de VRAM
-sem tocar em código.
+### 1.3 Texturas — FEITO
+85,1 → 21,3 MB de VRAM. Ver secção 3.
 
 ---
 
@@ -97,39 +97,48 @@ streaming ao mesmo tempo.
 
 ---
 
-## 3. Assets — 28,8 MB → ~7 MB, zero linha de código
+## 3. Assets — FEITO (parcialmente)
 
-Medido parseando os arquivos. Nenhum GLB tem Draco ou KTX2 (`extensionsUsed`
-é undefined nos quatro).
+Redimensionados com `gltf-transform resize --filter lanczos3` para 1024², e a
+textura do astronauta reconvertida para JPEG q92.
 
-| arquivo | dims | disco | VRAM (RGBA8+mips) |
+| asset | antes | depois | |
 |---|---|---|---|
-| `rock_1.glb` / `rock_2.glb` | 2048² | 4,1 / 4,5 MB | 21,3 MB cada |
-| `oak_tree.glb` / `winter_tree.glb` | 2048² | 5,4 / 5,2 MB | 21,3 MB cada |
-| `astronaut.png` | 2048² | 6,9 MB | 21,3 MB |
-| tiles de terreno (4×) | 1024² | 0,9 MB | 22,6 MB |
+| `rock_1.glb` | 4,03 MB | 0,32 MB | 12,7× |
+| `rock_2.glb` | 4,36 MB | 0,35 MB | 12,4× |
+| `winter_tree.glb` | 5,03 MB | 1,02 MB | 5,0× |
+| `oak_tree.glb` | 5,31 MB | 0,95 MB | 5,6× |
+| `astronaut` (PNG→JPEG) | 6,72 MB | 1,26 MB | 5,3× |
 
-A geometria dos props é minúscula — `rock_1` tem 3.120 triângulos e **93% do
-arquivo é uma JPEG embutida**.
+- **VRAM de props: 85,1 → 21,3 MB.** `dist` inteiro: 32 MB → 11 MB.
+- Geometria preservada exatamente — contagens de vértice e triângulo conferidas
+  contra os valores originais nos quatro GLB.
+- 1024², não 512², mesmo nas rochas: o jogador pode chegar perto delas.
+  Combinado com anisotropia 16 (aplicada em `sourceMaterialMap`), 1024²
+  resolve **mais** detalhe do que os 2048² originais resolviam a 1×.
+- `astronaut.jpg` mantém 2048², então a VRAM dele não mudou — o ganho é de
+  download. O PNG era colorType 2 (RGB, sem alpha) e o shader lê só `.rgb`,
+  então não havia canal empacotado a perder.
+- Anisotropia do avatar subida de 4 para 16, alinhando com terreno e props.
 
-- `gltf-transform resize` para 1024² (512² nas rochas, que medem 0,9-5,5 m):
-  GLBs para ~5 MB, VRAM para ~21 MiB.
-- Se for de KTX2, use **UASTC + Zstd**. ETC1S é visivelmente blocado em albedo
-  ruidoso de rocha — seria regressão.
-- `astronaut.png` é colorType 2 (RGB, sem alpha) e o shader lê só `.rgb`.
-  JPEG q92 medido: 1,29 MB (5,3× menor).
-- `astronaut.fbx` carrega um `Video/Content` de 2,7 MB — a **mesma** textura já
-  servida como PNG, que o `FBXLoader` decodifica e `prepareModel` descarta três
-  linhas depois. Reexporte sem mídia embutida: 3,4 MB → ~645 KB.
-  **Não** tente resolver em código com `URL.revokeObjectURL(map.image.src)`:
-  `map.image` ainda é null nesse ponto, o `TypeError` é engolido pelo catch, e
-  o astronauta nunca aparece.
+### Ainda pendente
 
-Nota: os arquivos do `pathfinder_spaceship` (20,2 MB) não são importados por
-nenhum módulo. Como o Vite só empacota o que é importado, é peso de repositório,
-não de bundle.
+**`astronaut.fbx` carrega 2,7 MB de mídia embutida.** Um `Video/Content` que o
+`FBXLoader` transforma em blob URL e decodifica — e `prepareModel` substitui
+todos os materiais três linhas depois, descartando o resultado. É a mesma
+textura já servida separadamente. Reexportar sem mídia embutida levaria
+3,4 MB → ~645 KB.
 
----
+**Não** tente resolver em código com `URL.revokeObjectURL(map.image.src)`:
+`map.image` ainda é null nesse ponto, o `TypeError` é engolido pelo catch, e o
+astronauta nunca aparece. É edição de asset, não de código.
+
+**KTX2** continua na mesa se quiser mais: cortaria a VRAM outros 4-8×. Use
+**UASTC + Zstd** — ETC1S é visivelmente blocado em albedo ruidoso de rocha.
+
+**Peso de repositório:** os arquivos do `pathfinder_spaceship` (20,2 MB) não são
+importados por nenhum módulo. Como o Vite só empacota o que é importado, isso
+nunca esteve no bundle — mas está no clone.
 
 ## 4. macroAO — 46% do build de chunk
 

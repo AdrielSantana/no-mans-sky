@@ -2,7 +2,11 @@ import * as THREE from "three";
 import { FBXLoader } from "three/examples/jsm/loaders/FBXLoader.js";
 
 import astronautModelUrl from "../assets/models/astronaut/astronaut.fbx?url";
-import astronautTextureUrl from "../assets/models/astronaut/astronaut.png?url";
+// JPEG q92 rather than PNG: the source was a 6.56MB 2048x2048 PNG with
+// colorType 2 (RGB, no alpha), and the shader reads only .rgb and writes
+// alpha 1.0, so there was no packed channel to lose. Same resolution, so
+// VRAM is unchanged -- this is 5.3x off the download.
+import astronautTextureUrl from "../assets/models/astronaut/astronaut.jpg?url";
 import fallingIdleUrl from "../assets/animations/locomotion_pack/falling_idle.fbx?url";
 import fallingToLandUrl from "../assets/animations/locomotion_pack/falling_to_land.fbx?url";
 import idleUrl from "../assets/animations/locomotion_pack/idle.fbx?url";
@@ -197,7 +201,9 @@ export class PlayerAvatar {
 
       this.texture = texture;
       texture.colorSpace = THREE.SRGBColorSpace;
-      texture.anisotropy = 4;
+      // Matches the terrain (16) and props. WebGLTextures clamps to the
+      // hardware maximum, so this is safe to request unconditionally.
+      texture.anisotropy = 16;
       texture.needsUpdate = true;
 
       this.model = model;
