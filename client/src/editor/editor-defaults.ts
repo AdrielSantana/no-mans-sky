@@ -209,7 +209,7 @@ export const DEFAULT_PARAMS: EditorParams = {
   rockDensity: 0.35,
   propDistance: 2200,
   foliageDensity: 1,
-  foliageSize: 0.088,
+  foliageSize: 0.105,
   foliageFlutter: 1,
   foliageTranslucency: 0.85,
   oakLeafShade: '#3d6a26',

@@ -98,6 +98,15 @@ export const PROP_WIND_PARS_GLSL = /* glsl */ `
 // moves most. Bare branches are stiff, so `stiffness` is small by default --
 // anything larger and the trunk reads as rubber rather than wood.
 export const PROP_WIND_FN_GLSL = /* glsl */ `
+  // The slow swell that makes wind arrive in gusts instead of at one constant
+  // strength. Factored out because the branch bend and the leaf flutter both
+  // ride it: a canopy fluttering at a fixed rate while the branches surge
+  // reads as two animations that have nothing to do with each other.
+  float propWindGust(vec3 instanceOrigin) {
+    vec3 windDirA = normalize(vec3(0.74, 0.18, -0.65));
+    return smoothstep(-0.35, 0.95, sin(dot(instanceOrigin, windDirA) * 0.012 - uTime * 0.55));
+  }
+
   vec3 propWindSway(
     vec3 local,
     vec3 instanceOrigin,
@@ -114,8 +123,7 @@ export const PROP_WIND_FN_GLSL = /* glsl */ `
     float rate = inversesqrt(max(treeHeight, 1.0)) * 2.4;
     float waveA = sin(dot(instanceOrigin, windDirA) * 0.040 + uTime * 1.35 * rate);
     float waveB = sin(dot(instanceOrigin, windDirB) * 0.075 + uTime * 2.10 * rate + 1.7);
-    float gustEnvelope = smoothstep(-0.35, 0.95, sin(dot(instanceOrigin, windDirA) * 0.012 - uTime * 0.55));
-    float gust = (waveA * 0.72 + waveB * 0.28) * (0.45 + gustEnvelope * 0.75);
+    float gust = (waveA * 0.72 + waveB * 0.28) * (0.45 + propWindGust(instanceOrigin) * 0.75);
     float bend = local.y * local.y * uWindStrength * gust * stiffness;
 
     // Resolve the planet-space wind into the tree's own local axes, exactly as

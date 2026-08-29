@@ -59,7 +59,7 @@ export const DEFAULT_FOLIAGE_PALETTE: FoliagePalette = {
 export const DEFAULT_FOLIAGE_SETTINGS: FoliageSettings = {
   enabled: true,
   density: 1,
-  size: 0.088,
+  size: 0.105,
   sizeVariance: 0.45,
   colorVariance: 0.16,
   translucency: 0.85,
@@ -711,8 +711,14 @@ export function createFoliageMaterial(
         // Flutter is the card moving *relative* to its branch, phase-shifted
         // per card. This is what separates foliage from a rigid decal, and it
         // is deliberately absent from the trunk.
+        //
+        // Its amplitude rides the same gust envelope the branch bend does, so
+        // the canopy goes still between gusts and thrashes during one, in step
+        // with the branch it hangs on. The floor is non-zero because leaves are
+        // never completely dead even in calm air.
         float phase = leafHash * 6.2831853 + treeSeed * 12.9;
-        float flutterAmp = uFlutter * uWindStrength * 0.020;
+        float flutterGust = 0.28 + propWindGust(instanceOrigin) * 1.20;
+        float flutterAmp = uFlutter * uWindStrength * 0.020 * flutterGust;
         vec3 flutter =
             leafAxisX * sin(uTime * 3.1 + phase) * flutterAmp
           + leafAxisY * sin(uTime * 2.3 + phase * 1.7) * flutterAmp * 0.6;
