@@ -361,6 +361,51 @@ que o jogador chega perto), 256² no tier 1, que só entra a partir de 227 m ond
 uma pedra de 5 m tem ~23 px. 5,65 MB de VRAM por pedra, 22,6 MB nas quatro. Cair
 pra 512²/256² levaria a 6,6 MB se pesar.
 
+### 1.9 Dispersão cai 256× com a distância — NÃO FEITO
+
+Densidades baixadas a pedido para `treeDensity 0.2` / `rockDensity 0.15`. Mas o
+número de densidade **não é a alavanca** que parece ser, e vale registrar por quê
+antes de alguém mexer nele de novo.
+
+`buildKindPlacements` calcula quantos props colocar a partir da contagem de
+*células da grade*, que é constante em 1024 (`(gridSize - 1)²`), e não da **área**
+do chunk. Só que o chunk quadruplica de área a cada nível de LOD, e prop existe
+de `maxLod` até `maxLod - 4`, com `propDistance` de 2200 m no editor. Resultado,
+com R=50000 e as densidades novas:
+
+| lod | chunk | faixa de câmera | área | árvores | árv/ha | espaçamento |
+|---|---|---|---|---|---|---|
+| 11 | 49 m | 50–125 m | 0,24 ha | 7 | 29,4 | 18 m |
+| 10 | 98 m | 125–313 m | 0,95 ha | 7 | 7,3 | 37 m |
+| 9 | 195 m | 313–781 m | 3,81 ha | 7 | 1,8 | 74 m |
+| 8 | 391 m | 781–1953 m | 15,3 ha | 7 | 0,46 | 148 m |
+| 7 | 781 m | 1953 m+ | 61 ha | 7 | 0,12 | 295 m |
+
+**256× de queda dentro do alcance visível, em degraus de 4×.** Floresta fechada
+no pé, árvores avulsas no meio, horizonte vazio. Baixar a densidade global
+multiplica as cinco faixas igualmente — a razão entre elas não muda.
+
+E tem um segundo problema no mesmo lugar: o RNG é semeado com
+`nodeKey(face, lod, x, y)`, que **inclui o lod**. Chunk pai e filhos sorteiam
+posições sem relação nenhuma, então dividir um chunk não refina a distribuição:
+**reembaralha todas as árvores daquela região de uma vez**. O pop ao andar não é
+só de quantidade, é de posição.
+
+Caminhos, do mais barato ao mais certo:
+
+1. **Escalar `targetCount` pela área do chunk.** Uma linha, mas esbarra em
+   `MAX_TREE_INSTANCES_PER_CHUNK = 34`: manter 29 árv/ha num chunk de lod 9
+   pediria 112 instâncias, e de lod 7, 1793. O teto existe pra limitar o
+   raymarch de sombra (§1.2, ~3,4 ms por chunk) — escalar sem mexer nele só
+   move o degrau de lugar.
+2. **Encurtar `propDistance`** pra caber em menos faixas de LOD. Resolve por
+   remoção, ao custo do alcance de vista.
+3. **Tirar o placement do chunk de terreno.** Grade virtual de tamanho fixo
+   (ex. 100 m) independente do LOD: densidade uniforme por construção e o
+   reembaralhamento some, porque a célula não muda quando o terreno divide. É a
+   resposta certa e a mais cara — hoje a camada de prop pertence ao chunk, é
+   anexada em `chunk.mesh` e some junto com ele.
+
 ## 2. Pool global de workers — agora com evidência
 
 `initTerrainWorkers` (`planet-renderer.ts`) cria até `min(8, threads-1)` workers
@@ -456,26 +501,52 @@ numa máquina com 8+ núcleos. O que compra é latência de pop-in de LOD.
 
 ---
 
-## 5. Antialiasing — não existe nenhum hoje
+## 5. Antialiasing — FEITO (SMAA pós-tonemap)
 
-`RenderPass` rasteriza em alvos com `samples = 0` (`engine.ts:29-37`), e nada
-além do quad do `OutputPass` chega ao framebuffer. `antialias: false` já foi
-aplicado (era custo puro sem benefício), mas AA de verdade continua ausente.
+`RenderPass` rasteriza em alvos com `samples = 0` (`engine.ts`), e antes deste
+commit nada além do quad do `OutputPass` chegava ao framebuffer — ou seja, não
+existia AA nenhum. `antialias: false` no renderer continua certo pelo mesmo
+motivo de sempre: MSAA no backbuffer não teria aresta nenhuma pra resolver.
 
-Duas rotas:
-- **MSAA no composer** (`samples: 2`): funciona, mas **ambos** os alvos ficam
-  multisampled obrigatoriamente — a paridade de swap é dinâmica
-  (`needsSwap = hasClouds`, `UnderwaterPass.enabled`). Custo: RGBA16F
-  multisampled em DPR 2, até 4 resolves por frame.
-- **Pass pós-tonemap** (SMAA/FXAA): um pass fullscreen, ~0,2-0,4 ms a 1080p,
-  deixa os alvos HalfFloat e o depth read do cloud pass intactos.
+As duas rotas avaliadas eram MSAA no composer (`samples: 2`) e um pass
+pós-tonemap. Ficou o segundo, como a análise original recomendava: MSAA
+obrigaria **os dois** alvos a serem multisampled, porque a paridade de swap é
+dinâmica (`needsSwap = hasClouds`, `UnderwaterPass.enabled`), o que sai em
+RGBA16F multisampled em DPR 2 com até 4 resolves por frame.
 
-**Recomendado:** post-AA, salvo se a medição de MSAA 2× surpreender.
+`SMAAPass` entra **depois** do `OutputPass`, de propósito: SMAA detecta aresta
+por luma e quer a imagem tonemapeada em LDR, não o alvo HalfFloat da cena. Os
+alvos do composer seguem single-sampled e o depth read do cloud pass fica
+intacto.
 
-`alphaToCoverage` está ligado em grama e props e é **inerte** — os dois shaders
-escrevem alpha constante 1.0 e resolvem silhueta por `discard` binário. Só vale
-mexer depois de existir MSAA, e então separando cobertura de silhueta do fade
-(dobrar o fade na cobertura vira screen-door de 4 níveis).
+Dois detalhes que custaram leitura de fonte:
+
+- **`setSize` manual na construção.** `EffectComposer.setSize` multiplica pelo
+  pixel ratio e repassa pros passes, mas só roda sobre os passes que já existem.
+  Pass adicionado depois nunca recebe um — e SMAA sem resolução de device
+  caminha a busca de aresta na distância errada de texel. O `UnderwaterPass` já
+  tinha a mesma linha pelo mesmo motivo.
+- **Desligar não apaga a tela.** `EffectComposer.render` faz
+  `pass.renderToScreen = (this.renderToScreen && this.isLastEnabledPass(i))`,
+  então `smaaPass.enabled = false` devolve a tela pro `OutputPass` sem mais nada
+  a mudar. Conferido no fonte do three 0.184, não assumido.
+
+As duas texturas de lookup do SMAA são base64 inline, então nada é buscado da
+rede — mas decodificam de forma assíncrona, então os primeiros frames passam
+sem AA em vez de travar.
+
+Exposto no editor como *Diagnostics → Antialias (SMAA)*, ligado por padrão, e
+o HUD de diagnóstico mostra `aa=smaa|off`.
+
+**Não medido:** o custo (a estimativa de 0,2–0,4 ms a 1080p é da análise
+original, não medida aqui) e o resultado visual — o SwiftShader desta máquina
+não completa um frame da cena.
+
+`alphaToCoverage` continua ligado em grama e props e **continua inerte**: os
+dois shaders escrevem alpha constante 1.0 e resolvem silhueta por `discard`
+binário, e post-AA não muda isso — ele precisa de MSAA de verdade. Se um dia
+existir, separar cobertura de silhueta do fade (dobrar o fade na cobertura vira
+screen-door de 4 níveis).
 
 ---
 

@@ -113,6 +113,7 @@ export interface EditorParams {
   underwaterDistortion: number
   underwaterMurk: number
   debugBloom: boolean
+  debugAntialias: boolean
   debugAtmosphere: boolean
   debugClouds: boolean
   debugSimpleTerrain: boolean
@@ -205,8 +206,8 @@ export const DEFAULT_PARAMS: EditorParams = {
   grassColorA: '#1f6f2e',
   grassColorB: '#64b94a',
   propsEnabled: true,
-  treeDensity: 0.45,
-  rockDensity: 0.35,
+  treeDensity: 0.2,
+  rockDensity: 0.15,
   propDistance: 2200,
   foliageDensity: 1,
   foliageSize: 0.105,
@@ -253,6 +254,7 @@ export const DEFAULT_PARAMS: EditorParams = {
   underwaterDistortion: 0.75,
   underwaterMurk: 0.34,
   debugBloom: true,
+  debugAntialias: true,
   debugAtmosphere: true,
   debugClouds: true,
   debugSimpleTerrain: false,

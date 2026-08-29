@@ -5,6 +5,7 @@ import { FullScreenQuad, Pass } from 'three/examples/jsm/postprocessing/Pass.js'
 import { RenderPass } from 'three/examples/jsm/postprocessing/RenderPass.js'
 import { UnrealBloomPass } from 'three/examples/jsm/postprocessing/UnrealBloomPass.js'
 import { OutputPass } from 'three/examples/jsm/postprocessing/OutputPass.js'
+import { SMAAPass } from 'three/examples/jsm/postprocessing/SMAAPass.js'
 import { createSkybox } from './skybox'
 import { WORLD_SCALE } from './world-scale'
 import { CLOUD_RENDER_LAYER } from './render-layers'
@@ -408,6 +409,7 @@ export class GameEngine {
   private sunLight: THREE.PointLight | null = null
   private bloomPass: UnrealBloomPass | null = null
   private outputPass: OutputPass | null = null
+  private smaaPass: SMAAPass | null = null
   private cloudPass: CloudCompositePass | null = null
   private underwaterPass: UnderwaterPass | null = null
   private elapsedTime = 0
@@ -429,9 +431,9 @@ export class GameEngine {
     // draw reaching the default framebuffer is OutputPass's fullscreen quad,
     // where MSAA has no edges to resolve — so `antialias: true` allocated a
     // multisampled backbuffer and resolved it every frame for nothing.
-    // Geometry AA, if wanted, belongs in a post-tonemap pass (see the pass
-    // chain below); it cannot be bolted onto one composer target because
-    // RenderPass draws into readBuffer and the swap parity is dynamic.
+    // Geometry AA is instead the SMAA pass at the end of the chain below; it
+    // cannot be bolted onto one composer target because RenderPass draws into
+    // readBuffer and the swap parity is dynamic.
     this.renderer = new THREE.WebGLRenderer({ antialias: false, logarithmicDepthBuffer: true })
     this.renderer.setSize(width, height)
     this.renderer.setPixelRatio(this.pixelRatioLimit)
@@ -482,6 +484,20 @@ export class GameEngine {
     const outputPass = new OutputPass()
     this.composer.addPass(outputPass)
     this.outputPass = outputPass
+    // After OutputPass on purpose: SMAA detects edges by luma, so it wants the
+    // tonemapped LDR image, not the HalfFloat scene target. Running it here
+    // also leaves those targets single-sampled and the cloud pass's depth read
+    // untouched, which composer-level MSAA would not.
+    //
+    // Its two lookup textures are inline base64, so nothing is fetched -- but
+    // they decode asynchronously, so the very first frames pass through
+    // un-antialiased rather than blocking.
+    const smaaPass = new SMAAPass()
+    this.composer.addPass(smaaPass)
+    // Passes added after the composer's own setSize never got one, and SMAA
+    // needs device pixels or its edge search walks the wrong texel distance.
+    smaaPass.setSize(width * this.pixelRatioLimit, height * this.pixelRatioLimit)
+    this.smaaPass = smaaPass
 
     this.setupLights()
 
@@ -523,6 +539,16 @@ export class GameEngine {
 
   setBloomEnabled(enabled: boolean) {
     if (this.bloomPass) this.bloomPass.enabled = enabled
+  }
+
+  // EffectComposer points renderToScreen at the last *enabled* pass, so turning
+  // this off hands the screen back to OutputPass with nothing else to change.
+  setAntialiasEnabled(enabled: boolean) {
+    if (this.smaaPass) this.smaaPass.enabled = enabled
+  }
+
+  getAntialiasEnabled(): boolean {
+    return this.smaaPass?.enabled ?? false
   }
 
   setBloomSettings(settings: { strength: number; radius: number; threshold: number }) {
