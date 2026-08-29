@@ -1,12 +1,14 @@
 import * as THREE from 'three'
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js'
-import oakTreeUrl from '../../assets/models/trees/oak_tree.glb?url'
 import winterTreeUrl from '../../assets/models/trees/winter_tree.glb?url'
 import rock1Url from '../../assets/models/rocks/rock_1.glb?url'
 import rock2Url from '../../assets/models/rocks/rock_2.glb?url'
 // Geometry-only LOD tiers. Their embedded textures were shrunk to 8x8 because
 // only the geometry is read -- the material always comes from the base model.
-import oakTreeLod1Url from '../../assets/models/trees/oak_tree_lod1.glb?url'
+import oakLod0Url from '../../assets/models/trees/oak_tree/lod_0.glb?url'
+import oakLod1Url from '../../assets/models/trees/oak_tree/lod_1.glb?url'
+import oakLod2Url from '../../assets/models/trees/oak_tree/lod_2.glb?url'
+import oakLod3Url from '../../assets/models/trees/oak_tree/lod_3.glb?url'
 import winterTreeLod1Url from '../../assets/models/trees/winter_tree_lod1.glb?url'
 import {
   type PlanetTerrainParams,
@@ -35,12 +37,29 @@ interface PlanetPropModel {
   parts: PlanetPropPart[]
 }
 
-interface PlanetPropPart {
+interface PlanetPropTier {
   geometry: THREE.BufferGeometry
-  // Tier 0 is `geometry` itself; later entries are progressively simplified.
-  // Always at least length 1.
-  lodGeometries: THREE.BufferGeometry[]
   material: THREE.Material | THREE.Material[]
+}
+
+interface PlanetPropPart {
+  // Tier 0 is full detail; later entries are progressively simplified.
+  // Always at least length 1.
+  tiers: PlanetPropTier[]
+}
+
+// Whether a LOD file carries its own baked texture, and therefore its own UV
+// layout, or shares the base model's.
+//
+// This is not cosmetic. Tiers produced by decimating one mesh (gltf-transform
+// simplify) keep the base UVs and must reuse the base material. Tiers exported
+// independently by a generator re-bake their own atlas -- their UVs do not
+// match the base at all, and pairing them with the base texture produces
+// garbage. There is no reliable way to detect which is which from the file, so
+// it is declared per asset.
+interface PropLodSpec {
+  url: string
+  ownMaterial: boolean
 }
 
 interface PlanetPropLighting {
@@ -454,14 +473,14 @@ function disposeMaterial(material: THREE.Material | THREE.Material[]) {
   material.dispose()
 }
 
-function collectMeshGeometries(scene: THREE.Object3D): THREE.BufferGeometry[] {
-  const out: THREE.BufferGeometry[] = []
+function collectMeshParts(scene: THREE.Object3D): { geometry: THREE.BufferGeometry; source: THREE.Material | THREE.Material[] }[] {
+  const out: { geometry: THREE.BufferGeometry; source: THREE.Material | THREE.Material[] }[] = []
   scene.traverse((object) => {
     if (!(object instanceof THREE.Mesh)) return
     const geometry = object.geometry?.clone()
     if (!geometry) return
     geometry.applyMatrix4(object.matrixWorld)
-    out.push(geometry)
+    out.push({ geometry, source: object.material })
   })
   return out
 }
@@ -471,7 +490,7 @@ async function loadPropModel(
   id: string,
   kind: PlanetPropModel['kind'],
   url: string,
-  lodUrls: string[] = [],
+  lodSpecs: PropLodSpec[] = [],
 ): Promise<PlanetPropModel> {
   const gltf = await loader.loadAsync(url)
   gltf.scene.updateMatrixWorld(true)
@@ -488,9 +507,7 @@ async function loadPropModel(
     if (geometry.boundingBox) modelBox.union(geometry.boundingBox)
 
     rawParts.push({
-      geometry,
-      lodGeometries: [geometry],
-      material: createPropMaterial(object.material, kind),
+      tiers: [{ geometry, material: createPropMaterial(object.material, kind) }],
     })
   })
 
@@ -508,34 +525,40 @@ async function loadPropModel(
     .premultiply(new THREE.Matrix4().makeScale(1 / height, 1 / height, 1 / height))
 
   for (const part of rawParts) {
-    part.geometry.applyMatrix4(normalize)
-    part.geometry.computeBoundingBox()
-    part.geometry.computeBoundingSphere()
+    const base = part.tiers[0].geometry
+    base.applyMatrix4(normalize)
+    base.computeBoundingBox()
+    base.computeBoundingSphere()
   }
 
   // LOD tiers must be placed by the *base* model's normalize matrix. Deriving
   // their own from their own bounding box would differ slightly (the simplifier
   // moves the box by ~0.02%), and every tier switch would nudge the tree.
-  for (const lodUrl of lodUrls) {
+  for (const spec of lodSpecs) {
     try {
-      const lodGltf = await loader.loadAsync(lodUrl)
+      const lodGltf = await loader.loadAsync(spec.url)
       lodGltf.scene.updateMatrixWorld(true)
-      const geometries = collectMeshGeometries(lodGltf.scene)
-      if (geometries.length !== rawParts.length) {
-        for (const geometry of geometries) geometry.dispose()
+      const lodParts = collectMeshParts(lodGltf.scene)
+      if (lodParts.length !== rawParts.length) {
+        for (const lodPart of lodParts) lodPart.geometry.dispose()
         if (import.meta.env.DEV) {
-          console.warn(`Prop LOD ${lodUrl} has ${geometries.length} parts, base has ${rawParts.length} -- skipped`)
+          console.warn(`Prop LOD ${spec.url} has ${lodParts.length} parts, base has ${rawParts.length} -- skipped`)
         }
         continue
       }
-      geometries.forEach((geometry, index) => {
-        geometry.applyMatrix4(normalize)
-        geometry.computeBoundingBox()
-        geometry.computeBoundingSphere()
-        rawParts[index].lodGeometries.push(geometry)
+      lodParts.forEach((lodPart, index) => {
+        lodPart.geometry.applyMatrix4(normalize)
+        lodPart.geometry.computeBoundingBox()
+        lodPart.geometry.computeBoundingSphere()
+        rawParts[index].tiers.push({
+          geometry: lodPart.geometry,
+          material: spec.ownMaterial
+            ? createPropMaterial(lodPart.source, kind)
+            : rawParts[index].tiers[0].material,
+        })
       })
     } catch (error) {
-      if (import.meta.env.DEV) console.warn(`Prop LOD ${lodUrl} failed to load: ${String(error)}`)
+      if (import.meta.env.DEV) console.warn(`Prop LOD ${spec.url} failed to load: ${String(error)}`)
     }
   }
 
@@ -552,8 +575,17 @@ export function loadPlanetPropAssets(): Promise<PlanetPropAssets> {
 
   const loader = new GLTFLoader()
   assetPromise = Promise.all([
-    loadPropModel(loader, 'oak-tree', 'tree', oakTreeUrl, [oakTreeLod1Url]),
-    loadPropModel(loader, 'winter-tree', 'tree', winterTreeUrl, [winterTreeLod1Url]),
+    // Oak ships four independently generated tiers, each with its own baked
+    // atlas -- hence ownMaterial. Winter's single tier is a decimation of the
+    // base mesh and keeps its UVs, so it reuses the base material.
+    loadPropModel(loader, 'oak-tree', 'tree', oakLod0Url, [
+      { url: oakLod1Url, ownMaterial: true },
+      { url: oakLod2Url, ownMaterial: true },
+      { url: oakLod3Url, ownMaterial: true },
+    ]),
+    loadPropModel(loader, 'winter-tree', 'tree', winterTreeUrl, [
+      { url: winterTreeLod1Url, ownMaterial: false },
+    ]),
     loadPropModel(loader, 'rock-1', 'rock', rock1Url),
     loadPropModel(loader, 'rock-2', 'rock', rock2Url),
   ]).then(([oakTree, winterTree, rock1, rock2]) => {
@@ -572,8 +604,14 @@ export function disposePlanetPropAssets() {
 
   for (const model of [...cachedAssets.trees, ...cachedAssets.rocks]) {
     for (const part of model.parts) {
-      part.geometry.dispose()
-      disposeMaterial(part.material)
+      const seen = new Set<THREE.Material | THREE.Material[]>()
+      for (const tier of part.tiers) {
+        tier.geometry.dispose()
+        // Tiers that reuse the base material must not be disposed twice.
+        if (seen.has(tier.material)) continue
+        seen.add(tier.material)
+        disposeMaterial(tier.material)
+      }
     }
   }
   cachedAssets = null
@@ -604,7 +642,12 @@ function updatePropMaterial(material: THREE.Material | THREE.Material[], lightin
 export function updatePlanetPropMaterials(assets: PlanetPropAssets, lighting: PlanetPropLighting) {
   for (const model of [...assets.trees, ...assets.rocks]) {
     for (const part of model.parts) {
-      updatePropMaterial(part.material, lighting)
+      // Every tier, not just tier 0: independently baked tiers have their own
+      // material, and skipping them would leave distant props without sun
+      // position, cloud shadow or atmosphere tint.
+      for (const tier of part.tiers) {
+        updatePropMaterial(tier.material, lighting)
+      }
     }
   }
 }
@@ -627,8 +670,7 @@ function buildTierGeometry(
   tier: number,
   attributes: [string, THREE.InstancedBufferAttribute][],
 ): THREE.BufferGeometry {
-  const source = part.lodGeometries[Math.min(tier, part.lodGeometries.length - 1)]
-  const geometry = source.clone()
+  const geometry = part.tiers[Math.min(tier, part.tiers.length - 1)].geometry.clone()
   for (const [name, attribute] of attributes) geometry.setAttribute(name, attribute)
   return geometry
 }
@@ -667,10 +709,10 @@ export class PlanetPropLayer {
           ['instanceTerrainSunLight', sunLightAttribute],
         ]
         this.sunLightAttributes.push(sunLightAttribute)
-        const tierGeometries: (THREE.BufferGeometry | null)[] = new Array(part.lodGeometries.length).fill(null)
+        const tierGeometries: (THREE.BufferGeometry | null)[] = new Array(part.tiers.length).fill(null)
         const geometry = buildTierGeometry(part, 0, attributes)
         tierGeometries[0] = geometry
-        const mesh = new THREE.InstancedMesh(geometry, part.material, placement.matrices.length)
+        const mesh = new THREE.InstancedMesh(geometry, part.tiers[0].material, placement.matrices.length)
         mesh.name = `planet-prop-${placement.model.id}`
         mesh.userData.planetProp = true
         mesh.userData.planetPropModel = placement.model.id
@@ -809,13 +851,17 @@ export class PlanetPropLayer {
     this.lodTier = tier
 
     for (const entry of this.meshEntries) {
-      const index = Math.min(tier, entry.part.lodGeometries.length - 1)
+      const index = Math.min(tier, entry.part.tiers.length - 1)
       let geometry = entry.tierGeometries[index]
       if (!geometry) {
         geometry = buildTierGeometry(entry.part, index, entry.attributes)
         entry.tierGeometries[index] = geometry
       }
       entry.mesh.geometry = geometry
+      // The material moves with the geometry: independently baked tiers carry
+      // their own atlas, so keeping tier 0's texture here would map it onto
+      // unrelated UVs.
+      entry.mesh.material = entry.part.tiers[index].material
       entry.mesh.computeBoundingSphere()
     }
   }

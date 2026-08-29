@@ -93,7 +93,9 @@ const MAX_OCEAN_WORKERS = 3
 // Extra tiers drop in without a code change: models carrying fewer tiers are
 // clamped per part inside PlanetPropLayer.setLodTier, so adding a fraction here
 // before the assets exist is harmless.
-const PROP_LOD_DISTANCE_FRACTIONS = [0.35]
+// 0.35/0.62/0.86 of 648m => ~227m, ~402m, ~557m. Sized against on-screen
+// height: a 15m tree is ~68px at 227m, ~39px at 402m and ~28px at 557m.
+const PROP_LOD_DISTANCE_FRACTIONS = [0.35, 0.62, 0.86]
 const PROP_LOD_HYSTERESIS = 0.12
 // Cap on prop sun-light jobs queued on the dedicated worker. It processes
 // messages serially, so an unbounded queue would just accumulate results that

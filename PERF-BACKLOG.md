@@ -68,6 +68,41 @@ Detalhes que importam se mexer nisso:
   `visibleLayersByLod` nos stats de debug, para calibrar contra o que está
   realmente na tela.
 
+### 1.1c Convenção de assets de prop
+Modelos com múltiplos tiers vivem num diretório por modelo, com os arquivos
+nomeados `lod_0.glb` … `lod_N.glb` — **numerados pela contagem de triângulos**,
+não pelo nome que o gerador deu. Exportadores costumam mentir: os quatro tiers
+do carvalho chegaram como `lod_100`, `lod_100`, `lod_300` e `lod_0`, sendo os
+valores reais 91, 1.044, 309 e 3.990.
+
+**A pegadinha que importa:** tiers exportados independentemente por um gerador
+(Meshy e afins) re-assam o próprio atlas — os UVs deles **não** batem com o do
+modelo base. Emparelhar a textura do tier 0 com a geometria do tier 2 nesse caso
+dá lixo. Já tiers produzidos decimando um mesh (`gltf-transform simplify`)
+preservam os UVs e devem reusar o material base.
+
+Não dá pra detectar isso do arquivo com confiança, então é declarado por asset
+em `PropLodSpec.ownMaterial`. O carvalho usa `true` nos três tiers; o LOD
+auto-gerado do `winter_tree` usa `false`.
+
+Consequência: `updatePlanetPropMaterials` tem de percorrer **todos** os tiers,
+senão props distantes ficam sem posição do sol, sombra de nuvem e tinta de
+atmosfera.
+
+Higiene de textura no import:
+- Só a base color é lida pelo shader. `normalTexture`, `metallicRoughnessTexture`
+  e afins devem ser removidos do material e podados — o carvalho chegou com
+  10,4 MB de normal map e 1,4 MB de metallic-roughness que o `GLTFLoader`
+  decodifica e o shader nunca amostra.
+- Uma resolução por tier, acompanhando a faixa de distância:
+  1024² / 512² / 256² / 128². A escada inteira do carvalho fica em **7,07 MB de
+  VRAM** e 1,1 MB em disco, contra ~102 MB dos exports crus.
+
+**Oportunidade registrada:** os modelos vêm *com* normal map. O shader de props
+não usa nenhum e a iluminação é por vértice (`vLight`, `planet-props.ts:333`).
+Adicionar normal mapping seria um upgrade visual maior do que qualquer
+geometria extra — e permitiria alvos de triângulo mais baixos ainda.
+
 ### 1.2 Raymarch de sombra — FEITO
 `computeHorizonSunLight` rodava 10 amostras de `samplePlanetHeightDetailed` por
 instância, no main thread, durante a integração do chunk. Medido no worker
