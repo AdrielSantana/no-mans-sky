@@ -83,6 +83,10 @@ if (params.has('layer')) {
   const SPAN = 260 // metres across the patch
   const HEIGHT_NORM = 0.10
 
+  // A constant ramp across the patch, so the placement code meets a real slope.
+  // The flat cap it used to build could not show a floating root at all.
+  const SLOPE = Number(params.get('slope') ?? 0) * Math.PI / 180
+
   const positions = new Float32Array(GRID * GRID * 3)
   const normals = new Float32Array(GRID * GRID * 3)
   const heights = new Float32Array(GRID * GRID).fill(HEIGHT_NORM)
@@ -102,12 +106,50 @@ if (params.has('layer')) {
       // Patch on the +Z face, near the equator so the snow mask stays off.
       const dir = new THREE.Vector3(u / RADIUS, v / RADIUS, 1).normalize()
       const i = (iy * GRID + ix) * 3
-      positions[i] = dir.x * surfaceRadius
-      positions[i + 1] = dir.y * surfaceRadius
-      positions[i + 2] = dir.z * surfaceRadius
-      normals[i] = dir.x; normals[i + 1] = dir.y; normals[i + 2] = dir.z
+      const r = surfaceRadius + u * Math.tan(SLOPE)
+      positions[i] = dir.x * r
+      positions[i + 1] = dir.y * r
+      positions[i + 2] = dir.z * r
     }
   }
+
+  // Normals off the position grid rather than the radial direction, so they
+  // describe the ramp the trees are actually standing on.
+  const pAt = (ix: number, iy: number) => {
+    const i = (Math.min(GRID - 1, Math.max(0, iy)) * GRID + Math.min(GRID - 1, Math.max(0, ix))) * 3
+    return new THREE.Vector3(positions[i], positions[i + 1], positions[i + 2])
+  }
+  for (let iy = 0; iy < GRID; iy++) {
+    for (let ix = 0; ix < GRID; ix++) {
+      const du = pAt(ix + 1, iy).sub(pAt(ix - 1, iy))
+      const dv = pAt(ix, iy + 1).sub(pAt(ix, iy - 1))
+      const n = du.cross(dv).normalize()
+      const i = (iy * GRID + ix) * 3
+      normals[i] = n.x; normals[i + 1] = n.y; normals[i + 2] = n.z
+    }
+  }
+
+  // Draw the patch itself, triangulated exactly the way the chunk mesh is
+  // (a,b,c / b,d,c in buildTerrainChunkGeometryData) -- a root gap is only
+  // visible against the ground it is supposed to be resting on.
+  const segs = GRID - 1
+  const indices = new Uint32Array(segs * segs * 6)
+  let w = 0
+  for (let iy = 0; iy < segs; iy++) {
+    for (let ix = 0; ix < segs; ix++) {
+      const a = iy * GRID + ix, b = a + 1, c = a + GRID, d = c + 1
+      indices[w++] = a; indices[w++] = b; indices[w++] = c
+      indices[w++] = b; indices[w++] = d; indices[w++] = c
+    }
+  }
+  const groundGeo = new THREE.BufferGeometry()
+  groundGeo.setAttribute('position', new THREE.BufferAttribute(positions.slice(), 3))
+  groundGeo.setAttribute('normal', new THREE.BufferAttribute(normals.slice(), 3))
+  groundGeo.setIndex(new THREE.BufferAttribute(indices, 1))
+  scene.add(new THREE.Mesh(groundGeo, new THREE.MeshLambertMaterial({ color: 0x6b5a3e })))
+  const groundLight = new THREE.DirectionalLight(0xfff2c8, 2.2)
+  groundLight.position.set(0.45, 0.75, 0.5).multiplyScalar(1000)
+  scene.add(groundLight, new THREE.AmbientLight(0x8090a0, 1.2))
 
   const node = { face: 4, lod: 5, x: 3, y: 7, children: null, key: '4_5_3_7', covered: false }
   const layer = new PlanetPropLayer({
@@ -144,8 +186,20 @@ if (params.has('layer')) {
 
   // The patch sits on the +Z face, so "up" here is +Z, not +Y.
   camera.up.set(0, 0, 1)
-  camera.position.set(-SPAN * 0.42, -SPAN * 0.42, surfaceRadius + 16)
-  camera.lookAt(new THREE.Vector3(SPAN * 0.25, SPAN * 0.25, surfaceRadius + 6))
+  if (params.get('cam') === 'close') {
+    // Eye level at the base of the trees, looking across the slope: the only
+    // angle that shows whether a trunk is touching the ground.
+    const eyeU = Number(params.get('eyeu') ?? -40)
+    const eyeV = Number(params.get('eyev') ?? -40)
+    const groundAt = (u: number) => surfaceRadius + u * Math.tan(SLOPE)
+    camera.position.set(eyeU, eyeV, groundAt(eyeU) + Number(params.get('eyeh') ?? 3))
+    camera.lookAt(new THREE.Vector3(eyeU + 34, eyeV + 34, groundAt(eyeU + 34) + 2))
+    camera.fov = 34
+    camera.updateProjectionMatrix()
+  } else {
+    camera.position.set(-SPAN * 0.42, -SPAN * 0.42, surfaceRadius + 16)
+    camera.lookAt(new THREE.Vector3(SPAN * 0.25, SPAN * 0.25, surfaceRadius + 6))
+  }
   renderer.render(scene, camera)
 
   const meshes: string[] = []
@@ -156,7 +210,7 @@ if (params.has('layer')) {
     }
   })
   hud.textContent = [
-    `LAYER MODE tier=${TIER} instances=${layer.instanceCount}`,
+    `LAYER MODE tier=${TIER} slope=${(SLOPE * 180 / Math.PI).toFixed(0)}deg instances=${layer.instanceCount}`,
     ...meshes,
     `draws=${renderer.info.render.calls} tris=${renderer.info.render.triangles}`,
   ].join('\n')

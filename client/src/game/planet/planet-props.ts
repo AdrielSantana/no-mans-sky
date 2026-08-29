@@ -150,8 +150,16 @@ const MIN_TREE_SLOPE_DOT = 0.70
 const MIN_ROCK_SLOPE_DOT = 0.38
 const TREE_PATCH_SCALE_METERS = 190
 const ROCK_PATCH_SCALE_METERS = 110
-const PROP_SHADER_VERSION = 8
+const PROP_SHADER_VERSION = 9
 const PROP_TEXTURE_ANISOTROPY = 16
+
+// The bottom slice of a prop that counts as its base: deep enough to take in a
+// root flare, shallow enough that a low branch does not widen it.
+const PROP_BASE_BAND = 0.06
+// A hair of sink, as a fraction of prop height, so a base never lands exactly
+// coplanar with the terrain it sits on. The slope itself is handled in the
+// shader -- see PROP_SKIRT_BAND.
+const PROP_GROUND_BIAS = 0.006
 
 // Rocks are parked while the tree assets are being reworked. Flip this back to
 // true and the loader picks them up again -- nothing else needs touching.
@@ -347,6 +355,12 @@ function createPropShaderMaterial(source: THREE.Material, kind: PlanetPropModel[
       uniform vec3 uPlanetCenter;
       uniform vec3 uSunPosition;
 
+      // How far up the mesh the base is allowed to bend to meet the ground, as
+      // a fraction of prop height. It has to clear the root flare (0.06 on the
+      // oak) with room for the correction to ease out, or the trunk creases
+      // where the bend stops.
+      #define PROP_SKIRT_BAND 0.12
+
       varying vec2 vUv;
       varying vec3 vLight;
       varying vec3 vLocalPlanetDir;
@@ -388,6 +402,33 @@ function createPropShaderMaterial(source: THREE.Material, kind: PlanetPropModel[
           mat3 instanceNormalMatrix = mat3(instanceMatrix);
           instanceLocalOrigin = instanceMatrix * instanceLocalOrigin;
           localPosition = instanceMatrix * localPosition;
+
+          // Ground the base to the slope.
+          //
+          // A tree stands along its own up axis on purpose -- it grows towards
+          // the sky, not out of the hillside -- so on a slope its base disc is
+          // tilted relative to the ground and the downhill roots end up in the
+          // air. On level ground a vertex sits exactly position.y * scaleY
+          // above the surface; the drift from that is the daylight.
+          //
+          // Cancelling the drift for the bottom of the mesh and easing it out
+          // up the trunk makes the root flare splay along the slope. The
+          // alternative -- sinking the whole prop by the gap -- buries more
+          // trunk uphill than it recovers downhill: on a 13 m oak at 20 degrees
+          // that is 1.03 m of burial to close 0.73 m of gap, and the flare you
+          // wanted to see goes under the hill.
+          vec3 skirtUpColumn = instanceMatrix[1].xyz;
+          float skirtScaleY = length(skirtUpColumn);
+          vec3 skirtUp = skirtUpColumn / max(skirtScaleY, 1e-6);
+          vec3 skirtGroundNormal = normalize(instanceTerrainNormal);
+          float skirtDrift =
+            dot(localPosition.xyz - instanceLocalOrigin.xyz, skirtGroundNormal)
+            - position.y * skirtScaleY;
+          // Clamped so a grazing terrain normal cannot blow the correction up.
+          float skirtGrip = max(dot(skirtUp, skirtGroundNormal), 0.35);
+          float skirtFalloff = 1.0 - smoothstep(0.0, PROP_SKIRT_BAND, position.y);
+          localPosition.xyz -= skirtUp * (skirtDrift * skirtFalloff / skirtGrip);
+
           localNormal /= vec3(
             dot(instanceNormalMatrix[0], instanceNormalMatrix[0]),
             dot(instanceNormalMatrix[1], instanceNormalMatrix[1]),
@@ -518,6 +559,40 @@ function collectMeshParts(scene: THREE.Object3D): { geometry: THREE.BufferGeomet
   return out
 }
 
+// Where a prop's base sits horizontally, measured off the raw mesh in source
+// units before it is normalised. This is what the model gets pivoted on.
+//
+// Pivoting on the bounding box instead puts an oak's origin 0.05 of its own
+// height away from its trunk, because the box follows the canopy -- and the
+// random spin then throws that offset in a different direction for every tree,
+// so on a slope some oaks stand a quarter-metre proud of the ground and others
+// sink the same amount into it. That was the inconsistency between neighbours.
+function measureBasePivot(
+  parts: PlanetPropPart[],
+  minY: number,
+  height: number,
+): { x: number; z: number } {
+  const bandTop = minY + height * PROP_BASE_BAND
+  let minX = Infinity
+  let maxX = -Infinity
+  let minZ = Infinity
+  let maxZ = -Infinity
+  for (const part of parts) {
+    const position = part.tiers[0].geometry.getAttribute('position')
+    for (let i = 0; i < position.count; i++) {
+      if (position.getY(i) > bandTop) continue
+      const x = position.getX(i)
+      const z = position.getZ(i)
+      if (x < minX) minX = x
+      if (x > maxX) maxX = x
+      if (z < minZ) minZ = z
+      if (z > maxZ) maxZ = z
+    }
+  }
+  if (minX === Infinity) return { x: 0, z: 0 }
+  return { x: (minX + maxX) * 0.5, z: (minZ + maxZ) * 0.5 }
+}
+
 async function loadPropModel(
   loader: GLTFLoader,
   id: string,
@@ -551,12 +626,11 @@ async function loadPropModel(
   }
 
   const size = new THREE.Vector3()
-  const center = new THREE.Vector3()
   modelBox.getSize(size)
-  modelBox.getCenter(center)
   const height = Math.max(size.y, 1e-3)
+  const pivot = measureBasePivot(rawParts, modelBox.min.y, height)
   const normalize = new THREE.Matrix4()
-    .makeTranslation(-center.x, -modelBox.min.y, -center.z)
+    .makeTranslation(-pivot.x, -modelBox.min.y, -pivot.z)
     .premultiply(new THREE.Matrix4().makeScale(1 / height, 1 / height, 1 / height))
 
   for (const part of rawParts) {
@@ -597,7 +671,13 @@ async function loadPropModel(
     }
   }
 
-  return { id, kind, heightRange, parts: rawParts, foliage: buildModelFoliage(id, kind, rawParts, palette) }
+  return {
+    id,
+    kind,
+    heightRange,
+    parts: rawParts,
+    foliage: buildModelFoliage(id, kind, rawParts, palette),
+  }
 }
 
 // Leaves are derived from the tier-0 mesh only.
@@ -1243,19 +1323,22 @@ export class PlanetPropLayer {
         const [minHeight, maxHeight] = model.heightRange
         const treeHeight = minHeight + rng() * (maxHeight - minHeight)
         placementUp.copy(radial).lerp(normal, 0.18).normalize()
-        position.addScaledVector(placementUp, 0.08)
         scale.set(treeHeight, treeHeight, treeHeight)
       } else {
         const rockHeight = 0.9 + rng() * 4.6
         const squash = 0.62 + rng() * 0.48
         placementUp.copy(normal).lerp(radial, 0.22).normalize()
-        position.addScaledVector(placementUp, 0.03)
         scale.set(
           rockHeight * (1.15 + rng() * 1.45),
           rockHeight * squash,
           rockHeight * (1.00 + rng() * 1.20),
         )
       }
+
+      // Only a hairline of embed here. The slope is answered in the vertex
+      // shader, which splays the base along the ground rather than pushing the
+      // whole prop down into it -- see PROP_SKIRT_BAND.
+      position.addScaledVector(placementUp, -scale.y * PROP_GROUND_BIAS)
 
       quaternion.setFromUnitVectors(up, placementUp)
       spin.setFromAxisAngle(placementUp, rng() * Math.PI * 2)
@@ -1304,9 +1387,41 @@ export class PlanetPropLayer {
     const i10 = i00 + 1
     const i01 = i00 + gridSize
     const i11 = i01 + 1
-    this.bilerpVec3(surface.positions, i00, i10, i01, i11, tx, ty, outPosition)
-    this.bilerpVec3(surface.normals, i00, i10, i01, i11, tx, ty, outNormal)
+    // The chunk mesh splits every cell along the i10-i01 diagonal (see
+    // buildTerrainChunkGeometryData). Interpolating all four corners at once
+    // samples the bilinear patch instead, which lifts off those triangles by a
+    // quarter of the cell's twist -- on a coarse chunk that is enough to leave
+    // a prop hanging above the ground it was placed on. Interpolate whichever
+    // triangle the sample actually lands in.
+    if (tx + ty <= 1) {
+      this.baryVec3(surface.positions, i00, i10, i01, tx, ty, outPosition)
+      this.baryVec3(surface.normals, i00, i10, i01, tx, ty, outNormal)
+    } else {
+      this.baryVec3(surface.positions, i11, i01, i10, 1 - tx, 1 - ty, outPosition)
+      this.baryVec3(surface.normals, i11, i01, i10, 1 - tx, 1 - ty, outNormal)
+    }
     outNormal.normalize()
+  }
+
+  // out = v0 + (v1 - v0) * u + (v2 - v0) * v
+  private baryVec3(
+    values: Float32Array<ArrayBufferLike>,
+    i0: number,
+    i1: number,
+    i2: number,
+    u: number,
+    v: number,
+    out: THREE.Vector3,
+  ) {
+    const w = 1 - u - v
+    const a = i0 * 3
+    const b = i1 * 3
+    const c = i2 * 3
+    out.set(
+      values[a] * w + values[b] * u + values[c] * v,
+      values[a + 1] * w + values[b + 1] * u + values[c + 1] * v,
+      values[a + 2] * w + values[b + 2] * u + values[c + 2] * v,
+    )
   }
 
   private sampleScalar(
@@ -1324,28 +1439,5 @@ export class PlanetPropLayer {
     const h0 = values[i00] * (1 - tx) + values[i10] * tx
     const h1 = values[i01] * (1 - tx) + values[i11] * tx
     return h0 * (1 - ty) + h1 * ty
-  }
-
-  private bilerpVec3(
-    values: Float32Array<ArrayBufferLike>,
-    i00: number,
-    i10: number,
-    i01: number,
-    i11: number,
-    tx: number,
-    ty: number,
-    out: THREE.Vector3,
-  ) {
-    const x0 = values[i00 * 3] * (1 - tx) + values[i10 * 3] * tx
-    const y0 = values[i00 * 3 + 1] * (1 - tx) + values[i10 * 3 + 1] * tx
-    const z0 = values[i00 * 3 + 2] * (1 - tx) + values[i10 * 3 + 2] * tx
-    const x1 = values[i01 * 3] * (1 - tx) + values[i11 * 3] * tx
-    const y1 = values[i01 * 3 + 1] * (1 - tx) + values[i11 * 3 + 1] * tx
-    const z1 = values[i01 * 3 + 2] * (1 - tx) + values[i11 * 3 + 2] * tx
-    out.set(
-      x0 * (1 - ty) + x1 * ty,
-      y0 * (1 - ty) + y1 * ty,
-      z0 * (1 - ty) + z1 * ty,
-    )
   }
 }

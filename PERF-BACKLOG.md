@@ -225,6 +225,72 @@ Isso é seguro só porque os nomes não colidem: fonte usa `position`/`normal`/
 - **Sem fade por distância nos cards.** O LOD corta em degraus via draw range;
   um fade de tamanho no último tier tiraria o pop.
 
+### 1.7 Raízes flutuando em encosta — FEITO
+
+Árvore em terreno inclinado ficava com as raízes no ar do lado de baixo. Não era
+uma coisa só, eram três, medidas em cima das malhas de verdade:
+
+1. **A causa principal, geométrica.** A base do oak é um disco de raio **0,156
+   da altura da própria árvore** — a saia de raízes é larga. A árvore fica quase
+   na vertical na encosta de propósito (`lerp(radial, normal, 0.18)`: ela cresce
+   pro céu, não perpendicular ao morro), então o eixo dela e o do chão discordam
+   por um ângulo `a` e a borda de baixo do disco sobe `raio * sin(a)`. Oak de
+   13 m numa encosta de 20°: **0,73 m de luz do dia embaixo da raiz.** O winter
+   tree, um cilindro de base 0,037, mal aparecia — o problema era quase todo do
+   oak. Foi essa assimetria que apontou pra saia de raiz como causa.
+2. **O pivô estava na copa.** `normalize` centrava o modelo em x/z pelo
+   *bounding box*, que segue a copa: no oak isso põe a origem a 0,05 da altura
+   de distância do próprio tronco. O `spin` aleatório então jogava esse offset
+   pra uma direção diferente em cada árvore — na encosta, umas ficavam 25 cm
+   mais altas e outras enterravam o mesmo tanto. Daí a inconsistência entre
+   vizinhas. Agora `measureBasePivot` centra pela base.
+3. **`sampleSurface` amostrava a superfície errada.** A malha do chunk divide
+   cada célula na diagonal i10–i01; interpolar os quatro cantos de uma vez
+   amostra o *patch bilinear*, que descola dos triângulos por um quarto do twist
+   da célula. Em chunk grosseiro (props existem até `maxLod - 4`, células ~16×
+   maiores) isso sozinho já pendura a árvore acima do chão em que ela foi
+   plantada. Agora é baricêntrico no triângulo certo.
+
+O `+0.08` de *levantada* que existia antes só piorava os três.
+
+**Afundar a árvore não era a resposta.** Foi a primeira tentativa: descer o prop
+por `baseRadius * escala * sin(a)`. Fecha a folga, mas pra fechar 0,73 m enterra
+1,03 m morro acima — mais do que a saia inteira do oak, que tem 0,78 m de
+altura. Some justamente a raiz que se queria ver.
+
+**A resposta é a mesma das folhas: contato com o chão é da engine.** O vertex
+shader do tronco agora *deforma a base* em vez de descer a árvore. Em chão
+plano um vértice fica exatamente `position.y * scaleY` acima da superfície; o
+desvio disso é a luz do dia. O shader cancela o desvio no fundo da malha e
+solta o cancelamento subindo o tronco (`PROP_SKIRT_BAND = 0.12`, folgado o
+bastante pra passar da saia de 0,06 sem vincar). A saia de raiz acompanha a
+inclinação; nada afunda.
+
+Medido varrendo o `spin` em 24 ângulos sobre a saia inteira:
+
+| modelo | encosta | folga antes | folga afundando | enterro afundando | folga skirt | enterro skirt |
+|---|---|---|---|---|---|---|
+| oak 13 m | 20° | 0,73 m | 0,12 m | 1,03 m | **0,00 m** | **0,24 m** |
+| oak 13 m | 30° | 1,03 m | 0,24 m | 1,45 m | **0,00 m** | **0,32 m** |
+| winter 22 m | 20° | 0,42 m | 0,00 m | 0,55 m | **0,00 m** | **0,21 m** |
+| winter 22 m | 30° | 0,59 m | 0,00 m | 0,76 m | **0,00 m** | **0,25 m** |
+
+Sanidade do harness: em 0° de encosta a folga "antes" dá exatamente 0,08 m — a
+levantada antiga. O enterro que sobra no skirt é a saia morro acima passando
+abaixo do plano, que é o certo: é a árvore abraçando a encosta.
+
+Sobrou só `PROP_GROUND_BIAS` (0,006 da altura) pra base nunca ficar exatamente
+coplanar com o terreno.
+
+Vale pra rock também quando voltar (`ROCKS_ENABLED`) sem nada a mais: o skirt
+não é condicionado a `kind`.
+
+**O que ficou de fora:** a normal não é recalculada depois da deformação, então
+o sombreado da saia fica levemente errado na encosta — é a parte mais escondida
+da malha e não apareceu em teste. E o plano tangente é uma aproximação de
+primeira ordem: terreno muito rugoso dentro da pegada da árvore ainda deixa
+resíduo.
+
 ## 2. Pool global de workers — agora com evidência
 
 `initTerrainWorkers` (`planet-renderer.ts`) cria até `min(8, threads-1)` workers
