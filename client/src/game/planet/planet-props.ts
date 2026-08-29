@@ -1,7 +1,5 @@
 import * as THREE from 'three'
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js'
-import rock1Url from '../../assets/models/rocks/rock_1.glb?url'
-import rock2Url from '../../assets/models/rocks/rock_2.glb?url'
 // Geometry-only LOD tiers. Their embedded textures were shrunk to 8x8 because
 // only the geometry is read -- the material always comes from the base model.
 import oakLod0Url from '../../assets/models/trees/oak_tree/lod_0.glb?url'
@@ -119,6 +117,15 @@ const TREE_PATCH_SCALE_METERS = 190
 const ROCK_PATCH_SCALE_METERS = 110
 const PROP_SHADER_VERSION = 7
 const PROP_TEXTURE_ANISOTROPY = 16
+
+// Rocks are parked while the tree assets are being reworked. Flip this back to
+// true and the loader picks them up again -- nothing else needs touching.
+//
+// Safe to toggle at any time: placement RNG is seeded per kind
+// (`${chunkKey}:${kind}`), so trees and rocks draw from independent streams and
+// turning rocks off does not move a single tree. buildKindPlacements already
+// returns early on an empty model list.
+const ROCKS_ENABLED = false
 let _sunLightScratch = new Float32Array(0)
 const _sunInput: PropSunLightInput = {
   planetDirs: new Float32Array(0),
@@ -576,7 +583,7 @@ export function loadPlanetPropAssets(): Promise<PlanetPropAssets> {
   if (assetPromise) return assetPromise
 
   const loader = new GLTFLoader()
-  assetPromise = Promise.all([
+  const treePromises = [
     // Both trees ship four independently generated tiers, each with its own
     // baked atlas -- hence ownMaterial on every one. A tier produced by
     // decimating the base mesh instead would keep the base UVs and set false.
@@ -590,15 +597,28 @@ export function loadPlanetPropAssets(): Promise<PlanetPropAssets> {
       { url: winterLod2Url, ownMaterial: true },
       { url: winterLod3Url, ownMaterial: true },
     ]),
-    loadPropModel(loader, 'rock-1', 'rock', rock1Url),
-    loadPropModel(loader, 'rock-2', 'rock', rock2Url),
-  ]).then(([oakTree, winterTree, rock1, rock2]) => {
-    cachedAssets = {
-      trees: [oakTree, winterTree].filter(model => model.parts.length > 0),
-      rocks: [rock1, rock2].filter(model => model.parts.length > 0),
-    }
-    return cachedAssets
-  })
+  ]
+  // Skipped entirely rather than left at zero density: this way the two rock
+  // GLBs are never fetched, parsed or uploaded.
+  // Dynamic so the GLBs leave the module graph entirely while the flag is off,
+  // rather than being emitted into the build and simply never fetched.
+  const rockPromises = ROCKS_ENABLED
+    ? [
+        import('../../assets/models/rocks/rock_1.glb?url')
+          .then(module => loadPropModel(loader, 'rock-1', 'rock', module.default)),
+        import('../../assets/models/rocks/rock_2.glb?url')
+          .then(module => loadPropModel(loader, 'rock-2', 'rock', module.default)),
+      ]
+    : []
+
+  assetPromise = Promise.all([Promise.all(treePromises), Promise.all(rockPromises)])
+    .then(([trees, rocks]) => {
+      cachedAssets = {
+        trees: trees.filter(model => model.parts.length > 0),
+        rocks: rocks.filter(model => model.parts.length > 0),
+      }
+      return cachedAssets
+    })
 
   return assetPromise
 }

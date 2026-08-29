@@ -49,11 +49,19 @@ Escadas autoradas, quatro tiers cada, 7,07 MB de VRAM por árvore:
 
 | modelo | tier 0 | tier 1 | tier 2 | tier 3 |
 |---|---|---|---|---|
-| `oak_tree` | 3.990 | 1.044 | 309 | 91 |
+| `oak_tree` | 3.970 | 1.032 | 275 | 90 |
 | `winter_tree` | 3.774 | 1.024 | 302 | 88 |
 
 Texturas por tier: 1024² / 512² / 256² / 128².
-Rochas ainda sem LOD — 3,1k triângulos não justificam.
+
+**Rochas estão desativadas** enquanto as árvores são retrabalhadas
+(`ROCKS_ENABLED` em `planet-props.ts`). Os GLBs entram por import dinâmico, então
+com a flag desligada eles saem do grafo de módulos e nem são emitidos no build.
+Religar é trocar o booleano — o RNG de placement é semeado por tipo
+(`${chunkKey}:${kind}`), então ligar ou desligar rocha **não move nenhuma
+árvore**.
+
+Quando voltarem, os alvos são 400–700 triângulos no tier 0 e 120–200 no tier 1.
 
 Detalhes que importam se mexer nisso:
 - **Os LOD herdam a matriz `normalize` do modelo base.** `loadPropModel` deriva
