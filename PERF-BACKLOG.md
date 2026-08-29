@@ -54,14 +54,14 @@ Escadas autoradas, quatro tiers cada, 7,07 MB de VRAM por árvore:
 
 Texturas por tier: 1024² / 512² / 256² / 128².
 
-**Rochas estão desativadas** enquanto as árvores são retrabalhadas
-(`ROCKS_ENABLED` em `planet-props.ts`). Os GLBs entram por import dinâmico, então
-com a flag desligada eles saem do grafo de módulos e nem são emitidos no build.
-Religar é trocar o booleano — o RNG de placement é semeado por tipo
+**Rochas voltaram** (`ROCKS_ENABLED` em `planet-props.ts`, ver §1.8). Os GLBs
+entram por import dinâmico, então com a flag desligada eles saem do grafo de
+módulos e nem são emitidos no build. O RNG de placement é semeado por tipo
 (`${chunkKey}:${kind}`), então ligar ou desligar rocha **não move nenhuma
 árvore**.
 
-Quando voltarem, os alvos são 400–700 triângulos no tier 0 e 120–200 no tier 1.
+O alvo era 400–700 triângulos no tier 0 e 120–200 no tier 1; as quatro pedras
+novas ficaram em 628–630 e 186–188.
 
 Detalhes que importam se mexer nisso:
 - **Os LOD herdam a matriz `normalize` do modelo base.** `loadPropModel` deriva
@@ -271,8 +271,8 @@ Medido varrendo o `spin` em 24 ângulos sobre a saia inteira:
 
 | modelo | encosta | folga antes | folga afundando | enterro afundando | folga skirt | enterro skirt |
 |---|---|---|---|---|---|---|
-| oak 13 m | 20° | 0,73 m | 0,12 m | 1,03 m | **0,00 m** | **0,24 m** |
-| oak 13 m | 30° | 1,03 m | 0,24 m | 1,45 m | **0,00 m** | **0,32 m** |
+| oak 13 m | 20° | 0,73 m | 0,12 m | 1,03 m | **0,00 m** | **0,21 m** |
+| oak 13 m | 30° | 1,03 m | 0,24 m | 1,45 m | **0,00 m** | **0,29 m** |
 | winter 22 m | 20° | 0,95 m | 0,08 m | 1,31 m | **0,00 m** | **0,30 m** |
 | winter 22 m | 30° | 1,37 m | 0,22 m | 1,83 m | **0,00 m** | **0,39 m** |
 
@@ -293,14 +293,73 @@ risco real: o skirt só ancora o que estiver no `y` mais baixo da malha.
 Folhagem sem ajuste nenhum — `extractBranchAnchors` deu 321 anchors / 963 cards
 contra 295 / 885 do modelo antigo.
 
-Vale pra rock também quando voltar (`ROCKS_ENABLED`) sem nada a mais: o skirt
-não é condicionado a `kind`.
+Eu escrevi aqui que valeria pra rock "sem nada a mais". Estava errado — a
+banda constante de 0,12 quebra em prop achatado. Ver §1.8.
 
 **O que ficou de fora:** a normal não é recalculada depois da deformação, então
 o sombreado da saia fica levemente errado na encosta — é a parte mais escondida
 da malha e não apareceu em teste. E o plano tangente é uma aproximação de
 primeira ordem: terreno muito rugoso dentro da pegada da árvore ainda deixa
 resíduo.
+
+### 1.8 Pedras de volta — FEITO
+
+Quatro pedras novas, duas tiers cada. Três coisas mudaram junto, e nenhuma foi
+escolha estética: as três caíram das medições.
+
+**1. Os 8 arquivos não eram uma escada.** Eram 4 pedras × 2 tiers. Rodar o
+`import-prop-lods.mjs` na pasta teria produzido `lod_0..lod_9` de uma pedra
+fictícia. E os nomes não pareavam — `Meshy_AI__…025821` parece a `rock_1` e é a
+`rock_3b`. Pareei por forma (proporção da caixa normalizada + altura do
+centroide, ambas preservadas pela decimação): a distância do par certo ficou em
+0,033–0,057 contra 0,346–0,877 do segundo colocado, 6–25× de separação.
+
+**2. A banda do skirt não podia ser constante.** `PROP_SKIRT_BAND` era 0,12 da
+altura, escolhido pra passar da saia de raiz do oak. Mas a correção que o shader
+precisa aplicar escala com o quanto a base *avança de lado*, enquanto a banda
+escalava com a *altura* — e a laje (`rock_4`) avança 2,9 da própria altura.
+Espalhar 44% da espessura dela sobre um doze avos dela teria rasgado a malha.
+
+Agora a banda vem do modelo: `max(baseRadius, PROP_SKIRT_MIN_BAND)`, uniform
+por material, escrito uma vez na carga. Isso mantém o *ângulo* de cisalhamento
+constante em vez da distância. Sem teto: passando da altura do modelo a
+correção deixa de ser dobra e vira rotação da malha inteira sobre o plano do
+chão — que é exatamente o que uma pedra chata quer, e só um prop mais largo na
+base do que alto chega a pedir.
+
+Árvore quase não sente (banda do oak 0,12 → 0,133, do pine continua no piso).
+Pedra sente tudo:
+
+| pedra | baseRadius | banda | contato a 45° antes | depois |
+|---|---|---|---|---|
+| rock_1 | 0,448 | 0,448 | 0,00 m | 0,00 m |
+| rock_2 | 0,744 | 0,744 | 0,00 m | 0,00 m |
+| rock_3 | 1,066 | 1,066 | 0,13 m | **0,00 m** |
+| rock_4 | 2,924 | 2,924 | 0,33 m | **0,00 m** |
+
+**3. A escala de pedra estava dimensionada pela altura.** Com `scale.y =
+rockHeight * squash` e jitter horizontal até 2,6× em x e 2,2× em z, a laje 6,2:1
+virava uma panqueca de **40 m**. Aquele jitter existia pra fingir variedade a
+partir de duas malhas; quatro malhas cobrindo de 1,0 a 6,2 de proporção já
+carregam isso. Agora a pedra é dimensionada pela **maior dimensão**
+(`rockSize / max(model.width, 1)`), com só ±17% de estica pra quebrar
+repetição. A `ROCK_HEIGHT_RANGE` virou `ROCK_SIZE_RANGE` e finalmente é lida de
+`model.heightRange`, em vez de o intervalo estar duplicado hardcoded dentro de
+`buildKindPlacements`.
+
+Em `rockSize` 5,5 m as quatro dão 5,5 × 5,5 / 5,5 × 3,4 / 5,5 × 2,3 / 5,5 × 0,9
+metros — bola, achatada, baixa e laje.
+
+**Pedra também quer ficar encravada.** Um matacão apoiado exatamente no vértice
+mais baixo lê como largado ali. `PROP_GROUND_BIAS` virou dois números: a árvore
+segue com o fio de cabelo (0,006 da altura, porque enterrar tronco esconde a
+raiz que faz ela parecer plantada) e a pedra afunda 0,06–0,20, sorteado por
+instância pra um campo delas não parecer carimbado.
+
+**Custo:** 1024² no tier 0 (paridade com as pedras antigas — §3 já registrava
+que o jogador chega perto), 256² no tier 1, que só entra a partir de 227 m onde
+uma pedra de 5 m tem ~23 px. 5,65 MB de VRAM por pedra, 22,6 MB nas quatro. Cair
+pra 512²/256² levaria a 6,6 MB se pesar.
 
 ## 2. Pool global de workers — agora com evidência
 

@@ -58,6 +58,12 @@ interface PlanetPropModel {
   // height at load, so the instance scale *is* the world height.
   heightRange: readonly [number, number]
   parts: PlanetPropPart[]
+  // Both in model units, so as a fraction of the mesh's own height. baseRadius
+  // is how far the base reaches sideways, and sets how far up the mesh the
+  // shader may bend it onto the ground. width is the largest horizontal extent,
+  // which is what a rock is sized by -- see buildKindPlacements.
+  baseRadius: number
+  width: number
   // Procedural leaves, generated once from the tier-0 mesh. Null for rocks and
   // for any tree whose branches yielded no usable anchors.
   foliage: PlanetPropFoliage | null
@@ -156,25 +162,45 @@ const PROP_TEXTURE_ANISOTROPY = 16
 // The bottom slice of a prop that counts as its base: deep enough to take in a
 // root flare, shallow enough that a low branch does not widen it.
 const PROP_BASE_BAND = 0.06
-// A hair of sink, as a fraction of prop height, so a base never lands exactly
-// coplanar with the terrain it sits on. The slope itself is handled in the
-// shader -- see PROP_SKIRT_BAND.
-const PROP_GROUND_BIAS = 0.006
+const PROP_BASE_RADIUS_PERCENTILE = 0.9
 
-// Rocks are parked while the tree assets are being reworked. Flip this back to
-// true and the loader picks them up again -- nothing else needs touching.
+// Floor for the shader's skirt band. Above it the band follows the model's own
+// baseRadius, which keeps the shear a constant angle instead of a constant
+// distance: a trunk barely reaches sideways (0.10-0.13 of its height) while the
+// flat rock slab reaches 2.9, and spreading the slab's correction over a
+// twelfth of its thickness would tear it.
 //
+// There is deliberately no ceiling. Once the band passes the model's own
+// height the correction stops being a bend at all and becomes a rotation of
+// the whole mesh onto the ground plane -- which is exactly what a flat stone
+// wants, and what only a prop wider at the base than it is tall ever asks for.
+const PROP_SKIRT_MIN_BAND = 0.12
+
+// How far a prop settles into the ground, as a fraction of its own height.
+//
+// A trunk wants a hair -- just enough that the base never lands exactly
+// coplanar with the terrain -- because burying a tree hides the root flare that
+// makes it look planted. A boulder wants the opposite: resting on its lowest
+// vertex reads as dropped there rather than bedded, so rocks take a real embed,
+// jittered per instance so a field of them does not look stamped.
+const PROP_TREE_GROUND_BIAS = 0.006
+const PROP_ROCK_EMBED_MIN = 0.06
+const PROP_ROCK_EMBED_MAX = 0.20
+
 // Safe to toggle at any time: placement RNG is seeded per kind
 // (`${chunkKey}:${kind}`), so trees and rocks draw from independent streams and
 // turning rocks off does not move a single tree. buildKindPlacements already
 // returns early on an empty model list.
-const ROCKS_ENABLED = false
+const ROCKS_ENABLED = true
 
 // World height in metres. Rocks keep their own range in buildKindPlacements and
 // this entry only exists so the signature is uniform.
 const OAK_HEIGHT_RANGE = [6, 13] as const
 const WINTER_TREE_HEIGHT_RANGE = [11, 22] as const
-const ROCK_HEIGHT_RANGE = [0.9, 5.5] as const
+// Rocks are sized by their *largest* dimension rather than their height. The
+// four meshes run from a round boulder to a slab 6.2x wider than it is tall,
+// and sizing that slab to a 5.5 m height would make it 34 m across.
+const ROCK_SIZE_RANGE = [0.9, 5.5] as const
 
 // Leaf colour per species. colorA is the shaded inner canopy, colorB the sunlit
 // outer edge; the shader blends between them by height and adds a per-leaf
@@ -344,6 +370,7 @@ function createPropShaderMaterial(source: THREE.Material, kind: PlanetPropModel[
       uAlphaTest: { value: alphaTest },
       uTime: { value: 0 },
       uWindStrength: { value: DEFAULT_FOLIAGE_SETTINGS.enabled ? 0.34 : 0 },
+      uSkirtBand: { value: PROP_SKIRT_MIN_BAND },
     },
     vertexShader: /* glsl */ `
       #include <common>
@@ -355,11 +382,11 @@ function createPropShaderMaterial(source: THREE.Material, kind: PlanetPropModel[
       uniform vec3 uPlanetCenter;
       uniform vec3 uSunPosition;
 
-      // How far up the mesh the base is allowed to bend to meet the ground, as
-      // a fraction of prop height. It has to clear the root flare (0.06 on the
-      // oak) with room for the correction to ease out, or the trunk creases
-      // where the bend stops.
-      #define PROP_SKIRT_BAND 0.12
+      // How far up the mesh the base may bend to meet the ground, as a
+      // fraction of prop height. Set per model from how far its base reaches,
+      // so the shear is a constant angle rather than a constant distance --
+      // see PROP_SKIRT_MIN_BAND.
+      uniform float uSkirtBand;
 
       varying vec2 vUv;
       varying vec3 vLight;
@@ -426,7 +453,7 @@ function createPropShaderMaterial(source: THREE.Material, kind: PlanetPropModel[
             - position.y * skirtScaleY;
           // Clamped so a grazing terrain normal cannot blow the correction up.
           float skirtGrip = max(dot(skirtUp, skirtGroundNormal), 0.35);
-          float skirtFalloff = 1.0 - smoothstep(0.0, PROP_SKIRT_BAND, position.y);
+          float skirtFalloff = 1.0 - smoothstep(0.0, uSkirtBand, position.y);
           localPosition.xyz -= skirtUp * (skirtDrift * skirtFalloff / skirtGrip);
 
           localNormal /= vec3(
@@ -539,6 +566,19 @@ function createPropMaterial(material: THREE.Material | THREE.Material[], kind: P
   return createPropShaderMaterial(material, kind)
 }
 
+// The band is a property of the mesh, not of the frame, so it is written once
+// at load rather than every update. Every tier gets it: a tier exported on its
+// own carries its own material, and a decimated one shares the base tier's.
+function setPropSkirtBand(material: THREE.Material | THREE.Material[], band: number): void {
+  const apply = (item: THREE.Material) => {
+    if (item instanceof THREE.ShaderMaterial && item.uniforms.uSkirtBand) {
+      item.uniforms.uSkirtBand.value = band
+    }
+  }
+  if (Array.isArray(material)) material.forEach(apply)
+  else apply(material)
+}
+
 function disposeMaterial(material: THREE.Material | THREE.Material[]) {
   if (Array.isArray(material)) {
     for (const item of material) item.dispose()
@@ -559,38 +599,52 @@ function collectMeshParts(scene: THREE.Object3D): { geometry: THREE.BufferGeomet
   return out
 }
 
-// Where a prop's base sits horizontally, measured off the raw mesh in source
-// units before it is normalised. This is what the model gets pivoted on.
+// The prop's base, measured off the raw mesh in source units before it is
+// normalised. Two numbers come out.
 //
-// Pivoting on the bounding box instead puts an oak's origin 0.05 of its own
-// height away from its trunk, because the box follows the canopy -- and the
-// random spin then throws that offset in a different direction for every tree,
-// so on a slope some oaks stand a quarter-metre proud of the ground and others
-// sink the same amount into it. That was the inconsistency between neighbours.
-function measureBasePivot(
+// The centre is what the model gets pivoted on. Pivoting on the bounding box
+// instead puts an oak's origin 0.05 of its own height away from its trunk,
+// because the box follows the canopy -- and the random spin then throws that
+// offset in a different direction for every tree, so on a slope some oaks stand
+// a quarter-metre proud of the ground and others sink the same amount into it.
+// That was the inconsistency between neighbours.
+//
+// The radius is how far the base reaches from that centre, and it sets the
+// shader's skirt band. It is a high percentile rather than the maximum so one
+// stray root tip does not widen the band for the whole species.
+function measureBaseFootprint(
   parts: PlanetPropPart[],
   minY: number,
   height: number,
-): { x: number; z: number } {
+): { x: number; z: number; radius: number } {
   const bandTop = minY + height * PROP_BASE_BAND
-  let minX = Infinity
-  let maxX = -Infinity
-  let minZ = Infinity
-  let maxZ = -Infinity
+  const xs: number[] = []
+  const zs: number[] = []
   for (const part of parts) {
     const position = part.tiers[0].geometry.getAttribute('position')
     for (let i = 0; i < position.count; i++) {
       if (position.getY(i) > bandTop) continue
-      const x = position.getX(i)
-      const z = position.getZ(i)
-      if (x < minX) minX = x
-      if (x > maxX) maxX = x
-      if (z < minZ) minZ = z
-      if (z > maxZ) maxZ = z
+      xs.push(position.getX(i))
+      zs.push(position.getZ(i))
     }
   }
-  if (minX === Infinity) return { x: 0, z: 0 }
-  return { x: (minX + maxX) * 0.5, z: (minZ + maxZ) * 0.5 }
+  if (xs.length === 0) return { x: 0, z: 0, radius: 0 }
+
+  let minX = Infinity
+  let maxX = -Infinity
+  let minZ = Infinity
+  let maxZ = -Infinity
+  for (let i = 0; i < xs.length; i++) {
+    if (xs[i] < minX) minX = xs[i]
+    if (xs[i] > maxX) maxX = xs[i]
+    if (zs[i] < minZ) minZ = zs[i]
+    if (zs[i] > maxZ) maxZ = zs[i]
+  }
+  const x = (minX + maxX) * 0.5
+  const z = (minZ + maxZ) * 0.5
+  const radii = xs.map((value, i) => Math.hypot(value - x, zs[i] - z)).sort((a, b) => a - b)
+  const index = Math.min(radii.length - 1, Math.floor(radii.length * PROP_BASE_RADIUS_PERCENTILE))
+  return { x, z, radius: radii[index] }
 }
 
 async function loadPropModel(
@@ -622,16 +676,18 @@ async function loadPropModel(
   })
 
   if (rawParts.length === 0 || modelBox.isEmpty()) {
-    return { id, kind, heightRange, parts: [], foliage: null }
+    return { id, kind, heightRange, parts: [], baseRadius: 0, width: 1, foliage: null }
   }
 
   const size = new THREE.Vector3()
   modelBox.getSize(size)
   const height = Math.max(size.y, 1e-3)
-  const pivot = measureBasePivot(rawParts, modelBox.min.y, height)
+  const footprint = measureBaseFootprint(rawParts, modelBox.min.y, height)
   const normalize = new THREE.Matrix4()
-    .makeTranslation(-pivot.x, -modelBox.min.y, -pivot.z)
+    .makeTranslation(-footprint.x, -modelBox.min.y, -footprint.z)
     .premultiply(new THREE.Matrix4().makeScale(1 / height, 1 / height, 1 / height))
+  const baseRadius = footprint.radius / height
+  const width = Math.max(size.x, size.z) / height
 
   for (const part of rawParts) {
     const base = part.tiers[0].geometry
@@ -671,11 +727,18 @@ async function loadPropModel(
     }
   }
 
+  const skirtBand = Math.max(baseRadius, PROP_SKIRT_MIN_BAND)
+  for (const part of rawParts) {
+    for (const tier of part.tiers) setPropSkirtBand(tier.material, skirtBand)
+  }
+
   return {
     id,
     kind,
     heightRange,
     parts: rawParts,
+    baseRadius,
+    width,
     foliage: buildModelFoliage(id, kind, rawParts, palette),
   }
 }
@@ -761,16 +824,45 @@ export function loadPlanetPropAssets(): Promise<PlanetPropAssets> {
       ],
     ),
   ]
-  // Skipped entirely rather than left at zero density: this way the two rock
-  // GLBs are never fetched, parsed or uploaded.
+  // Each rock ships two independently exported tiers, so the second re-baked
+  // its own atlas and takes ownMaterial. Two rather than the trees' four is
+  // fine: setLodTier clamps per part, so a distant rock simply stays on its
+  // last tier.
+  const loadRock = (
+    id: string,
+    tier0: Promise<{ default: string }>,
+    tier1: Promise<{ default: string }>,
+  ) => Promise.all([tier0, tier1]).then(([lod0, lod1]) => loadPropModel(
+    loader, id, 'rock', lod0.default, ROCK_SIZE_RANGE, null,
+    [{ url: lod1.default, ownMaterial: true }],
+  ))
+
+  // Skipped entirely rather than left at zero density: this way the rock GLBs
+  // are never fetched, parsed or uploaded.
   // Dynamic so the GLBs leave the module graph entirely while the flag is off,
   // rather than being emitted into the build and simply never fetched.
   const rockPromises = ROCKS_ENABLED
     ? [
-        import('../../assets/models/rocks/rock_1.glb?url')
-          .then(module => loadPropModel(loader, 'rock-1', 'rock', module.default, ROCK_HEIGHT_RANGE, null)),
-        import('../../assets/models/rocks/rock_2.glb?url')
-          .then(module => loadPropModel(loader, 'rock-2', 'rock', module.default, ROCK_HEIGHT_RANGE, null)),
+        loadRock(
+          'rock-1',
+          import('../../assets/models/rocks/rock_1/lod_0.glb?url'),
+          import('../../assets/models/rocks/rock_1/lod_1.glb?url'),
+        ),
+        loadRock(
+          'rock-2',
+          import('../../assets/models/rocks/rock_2/lod_0.glb?url'),
+          import('../../assets/models/rocks/rock_2/lod_1.glb?url'),
+        ),
+        loadRock(
+          'rock-3',
+          import('../../assets/models/rocks/rock_3/lod_0.glb?url'),
+          import('../../assets/models/rocks/rock_3/lod_1.glb?url'),
+        ),
+        loadRock(
+          'rock-4',
+          import('../../assets/models/rocks/rock_4/lod_0.glb?url'),
+          import('../../assets/models/rocks/rock_4/lod_1.glb?url'),
+        ),
       ]
     : []
 
@@ -1316,6 +1408,7 @@ export class PlanetPropLayer {
       const modelPlacement = placementsByModel.get(model)
       if (!modelPlacement) continue
 
+      let embed = PROP_TREE_GROUND_BIAS
       if (kind === 'tree') {
         // Per model rather than one shared range, so an oak and a pine are not
         // the same size. Still exactly one rng() draw, so placement and model
@@ -1325,20 +1418,30 @@ export class PlanetPropLayer {
         placementUp.copy(radial).lerp(normal, 0.18).normalize()
         scale.set(treeHeight, treeHeight, treeHeight)
       } else {
-        const rockHeight = 0.9 + rng() * 4.6
-        const squash = 0.62 + rng() * 0.48
+        // Sized by whichever dimension is largest. `model.width` is the widest
+        // horizontal extent over the mesh's own height, so dividing by
+        // max(width, 1) lands the biggest dimension on exactly `rockSize` --
+        // a boulder by its height, the slab by its span.
+        const [minSize, maxSize] = model.heightRange
+        const rockSize = minSize + rng() * (maxSize - minSize)
+        const rockScale = rockSize / Math.max(model.width, 1)
+        // What stretch is left only breaks up repetition. The old jitter went
+        // to 2.6x across and 2.2x deep to fake variety out of two meshes; four
+        // meshes carry that now, and the old numbers on the slab gave a 40 m
+        // pancake.
         placementUp.copy(normal).lerp(radial, 0.22).normalize()
         scale.set(
-          rockHeight * (1.15 + rng() * 1.45),
-          rockHeight * squash,
-          rockHeight * (1.00 + rng() * 1.20),
+          rockScale * (0.88 + rng() * 0.34),
+          rockScale,
+          rockScale * (0.88 + rng() * 0.34),
         )
+        embed = PROP_ROCK_EMBED_MIN + rng() * (PROP_ROCK_EMBED_MAX - PROP_ROCK_EMBED_MIN)
       }
 
-      // Only a hairline of embed here. The slope is answered in the vertex
-      // shader, which splays the base along the ground rather than pushing the
-      // whole prop down into it -- see PROP_SKIRT_BAND.
-      position.addScaledVector(placementUp, -scale.y * PROP_GROUND_BIAS)
+      // The slope is answered in the vertex shader, which splays the base along
+      // the ground rather than pushing the whole prop into it. All that is left
+      // here is how deep the prop is bedded -- see PROP_TREE_GROUND_BIAS.
+      position.addScaledVector(placementUp, -scale.y * embed)
 
       quaternion.setFromUnitVectors(up, placementUp)
       spin.setFromAxisAngle(placementUp, rng() * Math.PI * 2)
