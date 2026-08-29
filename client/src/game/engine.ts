@@ -554,6 +554,13 @@ export class GameEngine {
     return this.sunShadow.isEnabled()
   }
 
+  /** Live state of the shadow pass, for the HUD. Reads the pass, not the params
+   * that were handed to it -- the two disagreeing is exactly the bug worth
+   * seeing. */
+  getSunShadowStats() {
+    return this.sunShadow.getStats()
+  }
+
   setBloomEnabled(enabled: boolean) {
     if (this.bloomPass) this.bloomPass.enabled = enabled
   }

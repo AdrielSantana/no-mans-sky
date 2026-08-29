@@ -342,12 +342,20 @@ export function EditorCanvas({ params }: Props) {
             .join(' ')
           : ''
 
+        // From the pass, not from the params handed to it. A HUD that echoes its
+        // own inputs cannot tell "the box is empty" from "the map is never
+        // sampled", and both look like no shadows at all.
+        const shadowStats = engine.getSunShadowStats()
+        const shadowDiag = shadowStats.enabled
+          ? `${shadowStats.size}@${shadowStats.radius}m casters=${shadowStats.casterDraws}${shadowStats.hasFrame ? '' : ' NOFRAME'}`
+          : 'off'
+
         perfOverlay.textContent = [
           `fps=${(1000 / avg(frameSamples)).toFixed(1)} frame=${avg(frameSamples).toFixed(1)}ms p95=${pct(sortedFrames, 0.95).toFixed(1)}ms`,
           `update=${avg(updateSamples).toFixed(2)}ms p95=${pct(sortedUpdates, 0.95).toFixed(2)}ms`,
           `draw=${engine.renderer.info.render.calls} tri=${engine.renderer.info.render.triangles}`,
           `geo=${engine.renderer.info.memory.geometries} tex=${engine.renderer.info.memory.textures}`,
-          `diag bloom=${paramsRef.current.debugBloom ? 'on' : 'off'} aa=${paramsRef.current.debugAntialias ? 'smaa' : 'off'} shadow=${paramsRef.current.debugSunShadow ? `${paramsRef.current.sunShadowSize}@${paramsRef.current.sunShadowRadius}m` : 'off'} atmosphere=${paramsRef.current.debugAtmosphere ? 'on' : 'off'} clouds=${paramsRef.current.debugClouds ? 'on' : 'off'} simpleTerrain=${paramsRef.current.debugSimpleTerrain ? 'on' : 'off'}`,
+          `diag bloom=${paramsRef.current.debugBloom ? 'on' : 'off'} aa=${paramsRef.current.debugAntialias ? 'smaa' : 'off'} shadow=${shadowDiag} atmosphere=${paramsRef.current.debugAtmosphere ? 'on' : 'off'} clouds=${paramsRef.current.debugClouds ? 'on' : 'off'} simpleTerrain=${paramsRef.current.debugSimpleTerrain ? 'on' : 'off'}`,
           bloom
             ? `bloom strength=${bloom.strength.toFixed(2)} radius=${bloom.radius.toFixed(2)} threshold=${bloom.threshold.toFixed(2)} enabled=${bloom.enabled ? 'on' : 'off'}`
             : 'bloom unavailable',

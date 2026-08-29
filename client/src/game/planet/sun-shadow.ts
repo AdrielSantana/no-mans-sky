@@ -67,6 +67,11 @@ export class SunShadowMap {
   private radius = DEFAULT_RADIUS
   private enabled = true
   private hasFrame = false
+  // Draw calls the last depth pass made, i.e. how many caster batches actually
+  // reached the map. Zero with the feature on means the box is empty, which
+  // looks identical on screen to the map never being sampled -- worth the two
+  // reads to tell those apart.
+  private lastCasterDraws = 0
 
   constructor() {
     // Only casters, so the depth pass never touches terrain, ocean, clouds or
@@ -78,6 +83,7 @@ export class SunShadowMap {
     this.enabled = enabled
     if (!enabled) {
       this.hasFrame = false
+      this.lastCasterDraws = 0
       _uniforms.uShadowParams.value.x = 0
     }
   }
@@ -187,12 +193,16 @@ export class SunShadowMap {
 
     const previousTarget = renderer.getRenderTarget()
     const previousAutoClear = renderer.autoClear
+    // The engine turns off info.autoReset and resets once per frame, so the
+    // counter accumulates and the delta is this pass's own draws.
+    const drawsBefore = renderer.info.render.calls
     renderer.setRenderTarget(target)
     renderer.autoClear = true
     renderer.clear(true, true, false)
     renderer.render(scene, this.camera)
     renderer.setRenderTarget(previousTarget)
     renderer.autoClear = previousAutoClear
+    this.lastCasterDraws = Math.max(0, renderer.info.render.calls - drawsBefore)
 
     this.hasFrame = true
     _uniforms.uShadowMap.value = target.depthTexture
@@ -203,12 +213,23 @@ export class SunShadowMap {
     return this.hasFrame
   }
 
+  getStats(): { enabled: boolean, hasFrame: boolean, casterDraws: number, size: number, radius: number } {
+    return {
+      enabled: this.enabled,
+      hasFrame: this.hasFrame,
+      casterDraws: this.lastCasterDraws,
+      size: this.size,
+      radius: this.radius,
+    }
+  }
+
   dispose(): void {
     this.target?.dispose()
     this.target = null
     _uniforms.uShadowMap.value = null
     _uniforms.uShadowParams.value.x = 0
     this.hasFrame = false
+    this.lastCasterDraws = 0
   }
 }
 

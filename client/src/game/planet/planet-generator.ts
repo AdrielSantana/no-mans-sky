@@ -360,11 +360,18 @@ vec3 applyPlanetLighting(vec3 albedo, vec3 normal, vec3 radialNormal, vec3 world
   float surfaceBlend = clamp(uSurfaceLightingBlend, 0.0, 1.0);
   if (uPlanetKind > 0.5 && uPlanetKind < 1.5) surfaceBlend = 0.0;
   float reliefOcclusion = terrainReliefOcclusion(heightNorm, slope);
-  float softDirect = direct * 0.78 + direct * direct * 0.24;
-  softDirect *= mix(0.82, 1.0, reliefOcclusion);
   // Cast shadows dim the sun term and leave ambient alone, so what a tree drops
   // on the ground reads as shade rather than a hole in it.
-  softDirect *= sunShadowFactor(worldPos, nDotL);
+  //
+  // Sampled once and applied to both direct terms. This function carries two
+  // lighting models and mixes between them on uSurfaceLightingBlend, and the
+  // surface model below is the only one alive where props exist -- putting the
+  // shadow on softDirect alone means the mix throws it away exactly where it
+  // was meant to show.
+  float castShadow = sunShadowFactor(worldPos, nDotL);
+  float softDirect = direct * 0.78 + direct * direct * 0.24;
+  softDirect *= mix(0.82, 1.0, reliefOcclusion);
+  softDirect *= castShadow;
   float ambient = mix(0.055, 0.22, day) * reliefOcclusion;
   float rim = pow(1.0 - max(dot(n, viewDir), 0.0), 2.3) * smoothstep(-0.05, 0.50, nDotL);
   float highland = smoothstep(0.60, 0.90, heightNorm) * 0.055;
@@ -392,7 +399,7 @@ vec3 applyPlanetLighting(vec3 albedo, vec3 normal, vec3 radialNormal, vec3 world
 
   float skyVisibility = clamp(dot(n, r) * 0.54 + 0.46, 0.18, 1.0);
   float wrappedDay = smoothstep(-0.42, 0.58, nDotL);
-  float surfaceDirect = direct * 0.70 + wrappedDay * 0.22 + direct * direct * 0.18;
+  float surfaceDirect = (direct * 0.70 + wrappedDay * 0.22 + direct * direct * 0.18) * castShadow;
   float microCavity = smoothstep(0.035, 0.32, slope) * (1.0 - smoothstep(0.80, 1.0, heightNorm));
   float lowAngleRelief = 1.0 - smoothstep(0.16, 0.72, nDotL);
   float directionalReliefShadow = clamp(1.0 - microCavity * lowAngleRelief * surfaceBlend * 0.34, 0.66, 1.0);
