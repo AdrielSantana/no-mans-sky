@@ -4,6 +4,10 @@ import oakTreeUrl from '../../assets/models/trees/oak_tree.glb?url'
 import winterTreeUrl from '../../assets/models/trees/winter_tree.glb?url'
 import rock1Url from '../../assets/models/rocks/rock_1.glb?url'
 import rock2Url from '../../assets/models/rocks/rock_2.glb?url'
+// Geometry-only LOD tiers. Their embedded textures were shrunk to 8x8 because
+// only the geometry is read -- the material always comes from the base model.
+import oakTreeLod1Url from '../../assets/models/trees/oak_tree_lod1.glb?url'
+import winterTreeLod1Url from '../../assets/models/trees/winter_tree_lod1.glb?url'
 import {
   samplePlanetHeightDetailed,
   type PlanetTerrainParams,
@@ -32,6 +36,9 @@ interface PlanetPropModel {
 
 interface PlanetPropPart {
   geometry: THREE.BufferGeometry
+  // Tier 0 is `geometry` itself; later entries are progressively simplified.
+  // Always at least length 1.
+  lodGeometries: THREE.BufferGeometry[]
   material: THREE.Material | THREE.Material[]
 }
 
@@ -467,7 +474,25 @@ function disposeMaterial(material: THREE.Material | THREE.Material[]) {
   material.dispose()
 }
 
-async function loadPropModel(loader: GLTFLoader, id: string, kind: PlanetPropModel['kind'], url: string): Promise<PlanetPropModel> {
+function collectMeshGeometries(scene: THREE.Object3D): THREE.BufferGeometry[] {
+  const out: THREE.BufferGeometry[] = []
+  scene.traverse((object) => {
+    if (!(object instanceof THREE.Mesh)) return
+    const geometry = object.geometry?.clone()
+    if (!geometry) return
+    geometry.applyMatrix4(object.matrixWorld)
+    out.push(geometry)
+  })
+  return out
+}
+
+async function loadPropModel(
+  loader: GLTFLoader,
+  id: string,
+  kind: PlanetPropModel['kind'],
+  url: string,
+  lodUrls: string[] = [],
+): Promise<PlanetPropModel> {
   const gltf = await loader.loadAsync(url)
   gltf.scene.updateMatrixWorld(true)
 
@@ -484,6 +509,7 @@ async function loadPropModel(loader: GLTFLoader, id: string, kind: PlanetPropMod
 
     rawParts.push({
       geometry,
+      lodGeometries: [geometry],
       material: createPropMaterial(object.material, kind),
     })
   })
@@ -507,6 +533,32 @@ async function loadPropModel(loader: GLTFLoader, id: string, kind: PlanetPropMod
     part.geometry.computeBoundingSphere()
   }
 
+  // LOD tiers must be placed by the *base* model's normalize matrix. Deriving
+  // their own from their own bounding box would differ slightly (the simplifier
+  // moves the box by ~0.02%), and every tier switch would nudge the tree.
+  for (const lodUrl of lodUrls) {
+    try {
+      const lodGltf = await loader.loadAsync(lodUrl)
+      lodGltf.scene.updateMatrixWorld(true)
+      const geometries = collectMeshGeometries(lodGltf.scene)
+      if (geometries.length !== rawParts.length) {
+        for (const geometry of geometries) geometry.dispose()
+        if (import.meta.env.DEV) {
+          console.warn(`Prop LOD ${lodUrl} has ${geometries.length} parts, base has ${rawParts.length} -- skipped`)
+        }
+        continue
+      }
+      geometries.forEach((geometry, index) => {
+        geometry.applyMatrix4(normalize)
+        geometry.computeBoundingBox()
+        geometry.computeBoundingSphere()
+        rawParts[index].lodGeometries.push(geometry)
+      })
+    } catch (error) {
+      if (import.meta.env.DEV) console.warn(`Prop LOD ${lodUrl} failed to load: ${String(error)}`)
+    }
+  }
+
   return { id, kind, parts: rawParts }
 }
 
@@ -520,8 +572,8 @@ export function loadPlanetPropAssets(): Promise<PlanetPropAssets> {
 
   const loader = new GLTFLoader()
   assetPromise = Promise.all([
-    loadPropModel(loader, 'oak-tree', 'tree', oakTreeUrl),
-    loadPropModel(loader, 'winter-tree', 'tree', winterTreeUrl),
+    loadPropModel(loader, 'oak-tree', 'tree', oakTreeUrl, [oakTreeLod1Url]),
+    loadPropModel(loader, 'winter-tree', 'tree', winterTreeUrl, [winterTreeLod1Url]),
     loadPropModel(loader, 'rock-1', 'rock', rock1Url),
     loadPropModel(loader, 'rock-2', 'rock', rock2Url),
   ]).then(([oakTree, winterTree, rock1, rock2]) => {
@@ -577,6 +629,30 @@ export function updatePlanetPropMaterials(assets: PlanetPropAssets, lighting: Pl
   }
 }
 
+interface PropMeshEntry {
+  mesh: THREE.InstancedMesh
+  part: PlanetPropPart
+  attributes: [string, THREE.InstancedBufferAttribute][]
+  // Built lazily per tier and kept: most chunks only ever need one, and a
+  // chunk that oscillates across the threshold should not re-clone each time.
+  tierGeometries: (THREE.BufferGeometry | null)[]
+}
+
+// The instanced attributes live on the geometry, not the mesh, so a tier swap
+// has to re-attach them. They are shared between tiers by reference -- the
+// placements, the sun-light values and the matrices all survive the switch, so
+// changing tier never re-runs the horizon raymarch.
+function buildTierGeometry(
+  part: PlanetPropPart,
+  tier: number,
+  attributes: [string, THREE.InstancedBufferAttribute][],
+): THREE.BufferGeometry {
+  const source = part.lodGeometries[Math.min(tier, part.lodGeometries.length - 1)]
+  const geometry = source.clone()
+  for (const [name, attribute] of attributes) geometry.setAttribute(name, attribute)
+  return geometry
+}
+
 export class PlanetPropLayer {
   readonly group = new THREE.Group()
   readonly instanceCount: number
@@ -584,6 +660,8 @@ export class PlanetPropLayer {
   private readonly terrain: PlanetTerrainParams
   private readonly sunLightAttributes: THREE.InstancedBufferAttribute[] = []
   private readonly lastSunDirection = new THREE.Vector3(Number.NaN, Number.NaN, Number.NaN)
+  private readonly meshEntries: PropMeshEntry[] = []
+  private lodTier = 0
 
   constructor(params: PlanetPropLayerParams) {
     this.group.name = 'planet-prop-layer'
@@ -600,14 +678,18 @@ export class PlanetPropLayer {
 
       totalInstances += placement.matrices.length
       for (const part of placement.model.parts) {
-        const geometry = part.geometry.clone()
-        geometry.setAttribute('instancePlanetDir', new THREE.InstancedBufferAttribute(placement.planetDirs, 3))
-        geometry.setAttribute('instanceTerrainNormal', new THREE.InstancedBufferAttribute(placement.terrainNormals, 3))
-        geometry.setAttribute('instanceTerrainMicroAo', new THREE.InstancedBufferAttribute(placement.microAo, 1))
-        geometry.setAttribute('instanceTerrainMacroAo', new THREE.InstancedBufferAttribute(placement.macroAo, 1))
         const sunLightAttribute = new THREE.InstancedBufferAttribute(placement.sunLight, 1)
-        geometry.setAttribute('instanceTerrainSunLight', sunLightAttribute)
+        const attributes: [string, THREE.InstancedBufferAttribute][] = [
+          ['instancePlanetDir', new THREE.InstancedBufferAttribute(placement.planetDirs, 3)],
+          ['instanceTerrainNormal', new THREE.InstancedBufferAttribute(placement.terrainNormals, 3)],
+          ['instanceTerrainMicroAo', new THREE.InstancedBufferAttribute(placement.microAo, 1)],
+          ['instanceTerrainMacroAo', new THREE.InstancedBufferAttribute(placement.macroAo, 1)],
+          ['instanceTerrainSunLight', sunLightAttribute],
+        ]
         this.sunLightAttributes.push(sunLightAttribute)
+        const tierGeometries: (THREE.BufferGeometry | null)[] = new Array(part.lodGeometries.length).fill(null)
+        const geometry = buildTierGeometry(part, 0, attributes)
+        tierGeometries[0] = geometry
         const mesh = new THREE.InstancedMesh(geometry, part.material, placement.matrices.length)
         mesh.name = `planet-prop-${placement.model.id}`
         mesh.userData.planetProp = true
@@ -622,6 +704,7 @@ export class PlanetPropLayer {
         }
         mesh.instanceMatrix.needsUpdate = true
         mesh.computeBoundingSphere()
+        this.meshEntries.push({ mesh, part, attributes, tierGeometries })
         this.group.add(mesh)
       }
     }
@@ -691,14 +774,36 @@ export class PlanetPropLayer {
     this.group.visible = visible && this.instanceCount > 0
   }
 
+  // Swaps every mesh to the given detail tier. Clamped per part, so a model
+  // without LOD data simply stays on tier 0.
+  setLodTier(tier: number) {
+    if (tier === this.lodTier) return
+    this.lodTier = tier
+
+    for (const entry of this.meshEntries) {
+      const index = Math.min(tier, entry.part.lodGeometries.length - 1)
+      let geometry = entry.tierGeometries[index]
+      if (!geometry) {
+        geometry = buildTierGeometry(entry.part, index, entry.attributes)
+        entry.tierGeometries[index] = geometry
+      }
+      entry.mesh.geometry = geometry
+      entry.mesh.computeBoundingSphere()
+    }
+  }
+
+  get lodTierIndex(): number {
+    return this.lodTier
+  }
+
   dispose() {
     this.group.parent?.remove(this.group)
-    this.group.traverse((object) => {
-      if (object instanceof THREE.InstancedMesh) {
-        object.geometry.dispose()
-        object.dispose()
-      }
-    })
+    for (const entry of this.meshEntries) {
+      // Every tier that was ever built, not just the one currently bound.
+      for (const geometry of entry.tierGeometries) geometry?.dispose()
+      entry.mesh.dispose()
+    }
+    this.meshEntries.length = 0
   }
 
   private updatePlacementSunLight(placement: PlanetPropPlacement, sunDir: THREE.Vector3): boolean {

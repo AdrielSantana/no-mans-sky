@@ -12,9 +12,9 @@ GPU sumiram. O HUD (`?perf`) agora reporta `draw`/`tri` de verdade.
 
 ## 1. Props — o subsistema mais pesado que sobrou
 
-Backface culling, o alpha-test inútil e as texturas 2048² já foram corrigidos
-(1.1 e 1.3). **O que resta é contagem de triângulos: LOD tiers (1.1b) e o
-raymarch de sombra síncrono (1.2).**
+Backface culling, alpha-test inútil, texturas 2048² e LOD tiers já foram
+corrigidos (1.1, 1.1b, 1.3). **O que resta é o raymarch de sombra síncrono
+(1.2).**
 
 ### 1.1 Backface culling e alpha-test — FEITO
 As árvores são **tronco e galhos, sem folhas** (escolha deliberada do autor).
@@ -41,18 +41,32 @@ Consequências, ambas corrigidas:
 **Se algum dia forem adicionados cards de folhagem a esses modelos, isto tem
 de voltar a ser uma decisão por submesh.**
 
-### 1.1b LOD tiers — ainda pendente, e agora mais fácil
-Continua sendo 17.509 / 20.482 triângulos por árvore renderizados a até 648 m
-(game) cobrindo 10-60 px de altura de tela.
+### 1.1b LOD tiers — FEITO
+Tiers gerados offline com `gltf-transform weld` + `simplify --ratio 0.30
+--error 0.02`, determinístico e sem custo de runtime:
 
-A ressalva original — "decimação em runtime destrói a silhueta dos cards de
-folhagem" — **não se aplica**: não há cards. Tronco e galhos são sólidos
-fechados, então decimação em runtime é viável e tiers autorados deixam de ser
-obrigatórios.
+| modelo | tier 0 | tier 1 |
+|---|---|---|
+| `oak_tree` | 17.509 tris | 5.249 tris |
+| `winter_tree` | 20.482 tris | 6.142 tris |
 
-Mantenha a estrutura de `InstancedMesh` por chunk (é ela que faz o frustum
-culling funcionar) e alterne por `.visible`, não por `.count`, usando o `dist`
-já calculado em `updateChunkPropVisibility`.
+Rochas ficaram sem LOD — 3,1k triângulos não justificam.
+
+Detalhes que importam se mexer nisso:
+- **Os LOD herdam a matriz `normalize` do modelo base.** `loadPropModel` deriva
+  essa matriz da bounding box; se o LOD derivasse a dele, a árvore daria um
+  pulo na troca de tier, porque o simplificador move a caixa em ~0,02%.
+- A troca é `mesh.geometry = <tier>`, reaproveitando os mesmos
+  `InstancedBufferAttribute`. Placements, matrizes e valores de sombra
+  sobrevivem — **trocar de tier nunca re-roda o raymarch de horizonte**.
+- Geometrias por tier são construídas sob demanda e mantidas em cache: a
+  maioria dos chunks só precisa de uma.
+- As texturas embutidas nos GLB de LOD foram reduzidas a 8×8 porque só a
+  geometria é lida — o material vem sempre do modelo base.
+- Limiar em `PROP_LOD1_DISTANCE_FRACTION` (0,35 da distância de exibição, ~227m
+  no game) com 12% de histerese. O histograma de tiers está exposto em
+  `visibleLayersByLod` nos stats de debug, para calibrar contra o que está
+  realmente na tela.
 
 ### 1.2 Raymarch de sombra ainda é síncrono — `planet-props.ts:680-707`
 `computeHorizonSunLight` roda 10 amostras de `samplePlanetHeightDetailed` por

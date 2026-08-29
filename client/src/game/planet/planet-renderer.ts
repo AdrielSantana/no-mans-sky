@@ -80,6 +80,13 @@ const CLOUD_CAP_ANGLE_MAX = 0.92
 // lag on a shadow direction that only moves 1.4 degrees anyway.
 const PROP_SUN_LIGHT_BUDGET_MS = 2
 const MAX_OCEAN_WORKERS = 3
+// Trees drop to their simplified tier past this fraction of the prop show
+// distance (648 in game, so ~227m). A tree at that range covers a few dozen
+// pixels of screen height while the full model rasterises 17.5k-20.5k
+// triangles. Hysteresis keeps a chunk sitting on the boundary from swapping
+// geometry every frame.
+const PROP_LOD1_DISTANCE_FRACTION = 0.35
+const PROP_LOD_HYSTERESIS = 0.12
 
 // Scratches for the per-node LOD traversal. getNodeCenter used to allocate a
 // Vector3 on every call and is hit four times per node per frame; these are
@@ -1602,13 +1609,20 @@ export class PlanetRenderer {
     let meshes = 0
     let instances = 0
     let visibleLayers = 0
+    // Visible layers per detail tier, so PROP_LOD1_DISTANCE_FRACTION can be
+    // tuned against what is actually on screen.
+    const lodTiers: number[] = []
     let sunCount = 0
     let sunMin = 1
     let sunMax = 0
     let sunSum = 0
 
     for (const [chunkKey, layer] of this.propLayers) {
-      if (layer.group.visible) visibleLayers++
+      if (layer.group.visible) {
+        visibleLayers++
+        const tier = layer.lodTierIndex
+        lodTiers[tier] = (lodTiers[tier] ?? 0) + 1
+      }
       const sunStats = layer.getSunLightStats()
       if (sunStats.count > 0) {
         sunCount += sunStats.count
@@ -1643,6 +1657,7 @@ export class PlanetRenderer {
       assetLoadRequested: this.propAssetLoadRequested,
       layers: this.propLayers.size,
       visibleLayers,
+      visibleLayersByLod: Array.from(lodTiers, count => count ?? 0),
       meshes,
       instances,
       visibleInstances: this.propVisibleInstances,
@@ -3007,6 +3022,7 @@ export class PlanetRenderer {
       && dist < this.propSettings.distance
     props.setVisible(visible)
     if (visible) {
+      props.setLodTier(this.resolvePropLodTier(dist, props.lodTierIndex))
       if (
         this.propSunLightSpentMs < PROP_SUN_LIGHT_BUDGET_MS
         && props.needsSunLightUpdate(this.cloudLocalSunDirection)
@@ -3017,6 +3033,14 @@ export class PlanetRenderer {
       }
       this.propVisibleInstances += props.instanceCount
     }
+  }
+
+  private resolvePropLodTier(dist: number, currentTier: number): number {
+    const threshold = this.propSettings.distance * PROP_LOD1_DISTANCE_FRACTION
+    if (currentTier === 0) {
+      return dist > threshold * (1 + PROP_LOD_HYSTERESIS) ? 1 : 0
+    }
+    return dist < threshold * (1 - PROP_LOD_HYSTERESIS) ? 0 : 1
   }
 
   private disposeChunk(chunk: TerrainChunk) {
