@@ -470,6 +470,17 @@ export function EditorCanvas({ params }: Props) {
       rockDensity: params.rockDensity,
       distance: params.propDistance,
     })
+    planetRef.current?.setFoliageSettings({
+      enabled: params.propsEnabled,
+      density: params.foliageDensity,
+      size: params.foliageSize,
+      flutter: params.foliageFlutter,
+      translucency: params.foliageTranslucency,
+    })
+    planetRef.current?.setFoliagePalettes({
+      'oak-tree': { colorA: params.oakLeafShade, colorB: params.oakLeafSun },
+      'winter-tree': { colorA: params.pineLeafShade, colorB: params.pineLeafSun },
+    })
     planetRef.current?.setAtmosphereOptics({
       sunGlare: params.atmosphereSunGlare,
       sunGlareSize: params.atmosphereSunGlareSize,

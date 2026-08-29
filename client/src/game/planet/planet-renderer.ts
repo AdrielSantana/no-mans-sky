@@ -52,10 +52,16 @@ import {
   PlanetPropLayer,
   getPlanetPropAssets,
   loadPlanetPropAssets,
+  setPlanetPropFoliagePalettes,
   updatePlanetPropMaterials,
   type PlanetPropAssets,
   type PlanetPropSettings,
 } from './planet-props'
+import {
+  DEFAULT_FOLIAGE_SETTINGS,
+  type FoliagePalette,
+  type FoliageSettings,
+} from './tree-foliage'
 import { createOceanMaterial } from './ocean'
 import { OceanGpuIfftSpectrum } from './ocean-gpu-ifft'
 import { OceanIfftSpectrum } from './ocean-ifft'
@@ -349,6 +355,13 @@ export class PlanetRenderer {
     distance: 0,
   }
   private propMinLod = 0
+  // Leaves are generated and driven entirely here rather than baked into the
+  // tree assets, so every one of these is live: change it and the canopy
+  // responds on the next frame with no reload and no rebuild.
+  private foliageSettings: FoliageSettings = { ...DEFAULT_FOLIAGE_SETTINGS }
+  // Keyed by model id. Empty means every species keeps the palette it was
+  // built with; entries override it live.
+  private foliagePalettes: Record<string, FoliagePalette> = {}
   // Last known camera position in planet-local space, so prop attachment can
   // gate on distance from paths that do not receive it (createChunk,
   // rebuildPropLayers).
@@ -1119,6 +1132,37 @@ export class PlanetRenderer {
     }
   }
 
+  // Live foliage tuning. None of this touches placement or geometry -- the
+  // cards already exist on every tree and the shader reads these each frame --
+  // so it is safe to drive from a slider without rebuilding a single chunk.
+  setFoliageSettings(settings: Partial<FoliageSettings>) {
+    this.foliageSettings = {
+      ...this.foliageSettings,
+      ...settings,
+      density: THREE.MathUtils.clamp(settings.density ?? this.foliageSettings.density, 0, 1),
+      size: THREE.MathUtils.clamp(settings.size ?? this.foliageSettings.size, 0, 0.6),
+      sizeVariance: THREE.MathUtils.clamp(settings.sizeVariance ?? this.foliageSettings.sizeVariance, 0, 1),
+      colorVariance: THREE.MathUtils.clamp(settings.colorVariance ?? this.foliageSettings.colorVariance, 0, 1),
+      translucency: THREE.MathUtils.clamp(settings.translucency ?? this.foliageSettings.translucency, 0, 3),
+      flutter: THREE.MathUtils.clamp(settings.flutter ?? this.foliageSettings.flutter, 0, 4),
+    }
+    // `enabled` is the one setting that is not just a uniform: zero density
+    // collapses every card to a degenerate quad, which the rasteriser drops
+    // before it costs a fragment.
+    if (!this.foliageSettings.enabled) this.foliageSettings.density = 0
+  }
+
+  getFoliageSettings(): FoliageSettings {
+    return { ...this.foliageSettings }
+  }
+
+  // Per-species leaf colour. Applied on the next frame; safe to call before the
+  // prop assets have finished loading.
+  setFoliagePalettes(palettes: Record<string, FoliagePalette>) {
+    this.foliagePalettes = { ...this.foliagePalettes, ...palettes }
+    if (this.propAssets) setPlanetPropFoliagePalettes(this.propAssets, this.foliagePalettes)
+  }
+
   // Drains the deferred scatter rebuilds once the slider has settled. Called at
   // the top of update(); asset load still rebuilds immediately, since that is a
   // one-shot and the props should appear as soon as they arrive.
@@ -1776,7 +1820,14 @@ export class PlanetRenderer {
         cloudHeight: this.cloudHeight,
         cloudShadowStrength: this.hasActiveClouds() ? this.cloudShadow : 0,
         cloudLocalSunDirection: this.cloudLocalSunDirection,
+        time: this.time,
+        // The trees answer the same wind the grass does -- same directions,
+        // same frequencies, same strength -- so a gust leans a whole clearing
+        // at once instead of each layer running its own private weather.
+        windStrength: this.grassSettings.windStrength,
+        foliage: this.foliageSettings,
       })
+      setPlanetPropFoliagePalettes(this.propAssets, this.foliagePalettes)
     }
     this.chunkPriorityCache.clear()
 

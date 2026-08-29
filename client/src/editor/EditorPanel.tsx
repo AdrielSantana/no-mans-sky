@@ -842,6 +842,110 @@ export function EditorPanel({ params, onChange }: Props) {
       </div>
 
       <div className="editor-section">
+        <div className="editor-section-title">Foliage</div>
+        <div className="editor-row">
+          <span className="editor-label">Density</span>
+          <input
+            className="editor-slider"
+            type="range"
+            min={RANGES.foliageDensity.min}
+            max={RANGES.foliageDensity.max}
+            step={RANGES.foliageDensity.step}
+            value={params.foliageDensity}
+            disabled={!params.propsEnabled}
+            onChange={e => set('foliageDensity', Number(e.target.value))}
+          />
+          <span className="editor-value">{params.foliageDensity.toFixed(2)}</span>
+        </div>
+        <div className="editor-row">
+          <span className="editor-label">Leaf Size</span>
+          <input
+            className="editor-slider"
+            type="range"
+            min={RANGES.foliageSize.min}
+            max={RANGES.foliageSize.max}
+            step={RANGES.foliageSize.step}
+            value={params.foliageSize}
+            disabled={!params.propsEnabled}
+            onChange={e => set('foliageSize', Number(e.target.value))}
+          />
+          <span className="editor-value">{params.foliageSize.toFixed(3)}</span>
+        </div>
+        <div className="editor-row">
+          <span className="editor-label">Flutter</span>
+          <input
+            className="editor-slider"
+            type="range"
+            min={RANGES.foliageFlutter.min}
+            max={RANGES.foliageFlutter.max}
+            step={RANGES.foliageFlutter.step}
+            value={params.foliageFlutter}
+            disabled={!params.propsEnabled}
+            onChange={e => set('foliageFlutter', Number(e.target.value))}
+          />
+          <span className="editor-value">{params.foliageFlutter.toFixed(2)}</span>
+        </div>
+        <div className="editor-row">
+          <span className="editor-label">Backlight</span>
+          <input
+            className="editor-slider"
+            type="range"
+            min={RANGES.foliageTranslucency.min}
+            max={RANGES.foliageTranslucency.max}
+            step={RANGES.foliageTranslucency.step}
+            value={params.foliageTranslucency}
+            disabled={!params.propsEnabled}
+            onChange={e => set('foliageTranslucency', Number(e.target.value))}
+          />
+          <span className="editor-value">{params.foliageTranslucency.toFixed(2)}</span>
+        </div>
+        <div className="editor-row">
+          <span className="editor-label">Oak Shade</span>
+          <input
+            className="editor-color"
+            type="color"
+            value={params.oakLeafShade}
+            disabled={!params.propsEnabled}
+            onChange={e => set('oakLeafShade', e.target.value)}
+          />
+          <span className="editor-value">{params.oakLeafShade}</span>
+        </div>
+        <div className="editor-row">
+          <span className="editor-label">Oak Sun</span>
+          <input
+            className="editor-color"
+            type="color"
+            value={params.oakLeafSun}
+            disabled={!params.propsEnabled}
+            onChange={e => set('oakLeafSun', e.target.value)}
+          />
+          <span className="editor-value">{params.oakLeafSun}</span>
+        </div>
+        <div className="editor-row">
+          <span className="editor-label">Pine Shade</span>
+          <input
+            className="editor-color"
+            type="color"
+            value={params.pineLeafShade}
+            disabled={!params.propsEnabled}
+            onChange={e => set('pineLeafShade', e.target.value)}
+          />
+          <span className="editor-value">{params.pineLeafShade}</span>
+        </div>
+        <div className="editor-row">
+          <span className="editor-label">Pine Sun</span>
+          <input
+            className="editor-color"
+            type="color"
+            value={params.pineLeafSun}
+            disabled={!params.propsEnabled}
+            onChange={e => set('pineLeafSun', e.target.value)}
+          />
+          <span className="editor-value">{params.pineLeafSun}</span>
+        </div>
+      </div>
+
+      <div className="editor-section">
         <div className="editor-section-title">Atmosphere</div>
         <div className="editor-row">
           <span className="editor-label">Color</span>

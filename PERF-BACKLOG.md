@@ -156,6 +156,75 @@ time.
 
 ---
 
+### 1.4 Folhagem procedural — FEITO
+
+As árvores são tronco e galhos de propósito: as folhas são geradas na engine
+para que quantidade, tamanho, cor, balanço e translucidez sejam parâmetros vivos.
+
+Como funciona (`tree-foliage.ts`):
+
+1. **Âncoras** vêm só do `lod_0`. Para cada vértice soldado por posição, o raio
+   local do galho é estimado por PCA numa vizinhança (`estimateLocalRadii`) —
+   nos assets reais isso separa p05 de p95 por 6.6x, que é o sinal usado.
+   Rejeição de Poisson espalha as âncoras pelos galhos.
+   **Não dá para fazer isso nos tiers baixos**: oak `lod_2` tem 153 posições
+   distintas e o estimador devolve zero na maior parte da malha.
+2. **Cards** são quads gerados por âncora, embaralhados deterministicamente para
+   que *qualquer prefixo* da lista seja uma amostra espacialmente uniforme.
+3. **LOD é `setDrawRange`**, não troca de geometria. Por isso o embaralhamento
+   importa: truncar em ordem de score depenaria um lado da árvore.
+4. **Atlas de folha** é desenhado num canvas no load. Textura em vez de silhueta
+   analítica porque só textura tem mipmap, e sem mipmap folha alpha-testada
+   pequena serrilha muito.
+
+Medido: oak 523 âncoras → 1569 cards, winter 295 → 885. 34 árvores num chunk
+saem em **4 draw calls** (2 troncos + 2 folhagens).
+
+Armadilhas que custaram tempo:
+
+- **`MAX_VERTEX_ATTRIBS` é 16.** A primeira versão usava atributos separados
+  para `uv`, `leafAxisY`, `leafCorner` e `leafHash` e batia em exatamente 16 com
+  `instanceMatrix` (4) mais os 6 por instância — o programa não linkava, com
+  "Too many attributes". Hoje corner, célula do atlas e hash dividem um `vec4`,
+  o segundo eixo do card sai de `cross(leafAxisX, normal)` e a uv é calculada no
+  shader. Ficou em 14. **Sobram 2 slots**: qualquer atributo novo em prop
+  precisa caber nisso.
+- **Um shader que não compila ainda conta triângulos** em `renderer.info`. Custou
+  duas rodadas até eu capturar o console do headless.
+- **O vento tem que ser a mesma função nos dois materiais.** Tronco e folha
+  chamam `propWindSway` com os mesmos argumentos no mesmo ponto; qualquer
+  divergência faz as folhas escorregarem do galho durante a rajada. Por isso
+  `PROP_WIND_STIFFNESS` vive em `prop-shading.ts` e não em nenhum dos dois.
+- **Cor é por espécie, não global** (`FoliagePalette` ao lado de `heightRange`).
+
+### 1.5 Geometria compartilhada entre chunks — FEITO (achado no caminho)
+
+`buildTierGeometry` fazia `geometry.clone()` por chunk, e
+`BufferAttribute.clone()` copia o array: **cada chunk carregava e subia sua
+própria cópia da malha da árvore** — 121 KB por oak por chunk, por tier já
+visitado. Com folhagem por cima ia multiplicar.
+
+Agora `buildInstancedGeometry` referencia os atributos da fonte e só acrescenta
+os atributos instanciados. O contrapeso é `disposeInstancedGeometry`: os
+atributos compartilhados são **desanexados antes** de `dispose()`, senão o
+primeiro chunk a sair de cena apagaria os buffers que o resto do planeta ainda
+está desenhando — e eles voltariam a subir no frame seguinte, para sempre,
+conforme os chunks entram e saem.
+
+Isso é seguro só porque os nomes não colidem: fonte usa `position`/`normal`/
+`uv`/`leafAxisX`/`leafData`, instanciados usam o prefixo `instance`.
+
+### 1.6 Folhagem — o que ficou de fora
+
+- **O atlas é o mesmo para as duas espécies.** Um conífero quer ramo de agulha,
+  não tufo de folha larga. Hoje o winter tree só se diferencia pela cor.
+- **`alphaToCoverage` continua inerte** porque o renderer roda `antialias: false`.
+  Com MSAA ligado, folhagem seria o primeiro lugar a se beneficiar.
+- **Sem sombra de folha no chão.** As props recebem sombra do terreno e das
+  nuvens, mas não projetam nada.
+- **Sem fade por distância nos cards.** O LOD corta em degraus via draw range;
+  um fade de tamanho no último tier tiraria o pop.
+
 ## 2. Pool global de workers — agora com evidência
 
 `initTerrainWorkers` (`planet-renderer.ts`) cria até `min(8, threads-1)` workers
