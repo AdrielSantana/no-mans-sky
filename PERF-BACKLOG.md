@@ -12,9 +12,9 @@ GPU sumiram. O HUD (`?perf`) agora reporta `draw`/`tri` de verdade.
 
 ## 1. Props — o subsistema mais pesado que sobrou
 
-Backface culling, alpha-test inútil, texturas 2048² e LOD tiers já foram
-corrigidos (1.1, 1.1b, 1.3). **O que resta é o raymarch de sombra síncrono
-(1.2).**
+Todos os quatro problemas identificados foram corrigidos: backface culling e
+alpha-test (1.1), LOD tiers (1.1b), raymarch de sombra fora da main thread
+(1.2) e texturas (1.3). O que resta são refinamentos, não gargalos.
 
 ### 1.1 Backface culling e alpha-test — FEITO
 As árvores são **tronco e galhos, sem folhas** (escolha deliberada do autor).
@@ -68,19 +68,37 @@ Detalhes que importam se mexer nisso:
   `visibleLayersByLod` nos stats de debug, para calibrar contra o que está
   realmente na tela.
 
-### 1.2 Raymarch de sombra ainda é síncrono — `planet-props.ts:680-707`
-`computeHorizonSunLight` roda 10 amostras de `samplePlanetHeightDetailed` por
-instância, no main thread, durante a integração do chunk. ~4,4 ms/chunk medido
-antes das otimizações de ruído; hoje ~3,4 ms.
+### 1.2 Raymarch de sombra — FEITO
+`computeHorizonSunLight` rodava 10 amostras de `samplePlanetHeightDetailed` por
+instância, no main thread, durante a integração do chunk. Medido no worker
+depois da mudança: **6,8 a 66,6 ms por camada de 33 instâncias** — bem acima dos
+~4,4 ms/chunk que a auditoria estimou.
 
-- **Early-out analítico:** `blocker` só fica não-zero se algum `obstacleSlope`
-  exceder `stylizedSunSlope - 0.015`. Um limite por planeta de slope alcançável
-  colapsa o caso diurno comum num compare.
-- **Perfil de horizonte no worker:** emita `horizonRadii` junto com os buffers
-  de geometria em `terrain-worker.ts` e interpole.
-  **Cacheie raios, não oclusão** — o termo vertical depende do raio da própria
-  instância, então duas árvores no mesmo chunk em alturas diferentes precisam
-  sombrear diferente.
+A computação é pura (lê só os arrays de placement, a direção do sol e os params
+de terreno), então foi extraída inteira para `prop-sun-light.ts`, compartilhada
+verbatim com o worker.
+
+- **Um job por camada**, não por placement: camada é a unidade que nasce, morre
+  e é invalidada, então rastrear staleness por camada mantém o bookkeeping
+  honesto.
+- **Um worker dedicado**, não um pool. Resultados que chegam tarde são
+  descartados e re-pedidos; oversubscrever mataria o streaming de terreno
+  (ver secção 2).
+- No `attachPropLayer` a camada é iluminada com o **termo de normal apenas**
+  (`skipHorizon`), que é praticamente grátis. Ela continua se reportando como
+  stale, então o job real refina logo em seguida — árvores nunca aparecem
+  pretas, e nada disso entra no orçamento de 2,5 ms de integração de chunk.
+- Fallback preservado: sem `Worker`, com o worker em erro, ou com a fila cheia
+  (`MAX_PROP_SUN_IN_FLIGHT`), cai no caminho main-thread orçado em 2 ms/frame.
+
+Verificado bit-idêntico ao HEAD em 10.800 instâncias (3 presets × 4 direções de
+sol, incluindo sol rasante onde o raymarch domina).
+
+**Ainda não feito:** o early-out analítico. `blocker` só pode ficar não-zero se
+algum `obstacleSlope` exceder `stylizedSunSlope - 0.015`; um limite por planeta
+de slope alcançável colapsaria o caso diurno comum num compare. Agora que o
+custo está fora da main thread isso virou otimização de latência, não de frame
+time.
 
 ### 1.3 Texturas — FEITO
 85,1 → 21,3 MB de VRAM. Ver secção 3.

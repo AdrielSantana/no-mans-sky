@@ -70,9 +70,47 @@ export interface TerrainWorkerOceanErrorResponse {
   message: string
 }
 
-export type TerrainWorkerRequest = TerrainWorkerBuildRequest | TerrainWorkerOceanRequest
+// One job per prop layer rather than per placement: a layer is the unit that
+// gets created, disposed and invalidated, so tracking staleness per layer keeps
+// the bookkeeping honest.
+export interface PropSunPlacementInput {
+  planetDirs: Float32Array
+  terrainNormals: Float32Array
+  surfaceRadii: Float32Array
+  count: number
+}
+
+export interface TerrainWorkerPropSunRequest {
+  type: 'prop-sun'
+  id: number
+  terrain: PlanetTerrainParams
+  sunX: number
+  sunY: number
+  sunZ: number
+  placements: PropSunPlacementInput[]
+}
+
+export interface TerrainWorkerPropSunResponse {
+  type: 'prop-sun-built'
+  id: number
+  durationMs: number
+  results: Float32Array[]
+}
+
+export interface TerrainWorkerPropSunErrorResponse {
+  type: 'prop-sun-error'
+  id: number
+  message: string
+}
+
+export type TerrainWorkerRequest =
+  | TerrainWorkerBuildRequest
+  | TerrainWorkerOceanRequest
+  | TerrainWorkerPropSunRequest
 export type TerrainWorkerResponse =
   | TerrainWorkerBuildResponse
   | TerrainWorkerErrorResponse
   | TerrainWorkerOceanResponse
   | TerrainWorkerOceanErrorResponse
+  | TerrainWorkerPropSunResponse
+  | TerrainWorkerPropSunErrorResponse

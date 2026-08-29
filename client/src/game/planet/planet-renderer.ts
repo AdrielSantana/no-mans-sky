@@ -32,6 +32,7 @@ import type { Vec3Like } from '../../../../server/spacetimedb/src/shared/vector'
 import type {
   TerrainWorkerBuildResponse,
   TerrainWorkerOceanRequest,
+  TerrainWorkerPropSunRequest,
   TerrainWorkerResponse,
 } from './terrain-worker-types'
 import {
@@ -80,13 +81,24 @@ const CLOUD_CAP_ANGLE_MAX = 0.92
 // lag on a shadow direction that only moves 1.4 degrees anyway.
 const PROP_SUN_LIGHT_BUDGET_MS = 2
 const MAX_OCEAN_WORKERS = 3
-// Trees drop to their simplified tier past this fraction of the prop show
-// distance (648 in game, so ~227m). A tree at that range covers a few dozen
-// pixels of screen height while the full model rasterises 17.5k-20.5k
-// triangles. Hysteresis keeps a chunk sitting on the boundary from swapping
-// geometry every frame.
-const PROP_LOD1_DISTANCE_FRACTION = 0.35
+// Distance ladder for prop detail tiers, as fractions of the prop show
+// distance (648 in game). Entry i is the boundary between tier i and tier i+1,
+// so this array is one shorter than the number of tiers.
+//
+// A 15m tree covers roughly 156px of screen height at 100m, 69px at 227m and
+// 24px at 648m, while the full model rasterises 17.5k-20.5k triangles --
+// and because instance count grows with the square of distance, most trees on
+// screen are in the far bands.
+//
+// Extra tiers drop in without a code change: models carrying fewer tiers are
+// clamped per part inside PlanetPropLayer.setLodTier, so adding a fraction here
+// before the assets exist is harmless.
+const PROP_LOD_DISTANCE_FRACTIONS = [0.35]
 const PROP_LOD_HYSTERESIS = 0.12
+// Cap on prop sun-light jobs queued on the dedicated worker. It processes
+// messages serially, so an unbounded queue would just accumulate results that
+// are already stale by the time they land.
+const MAX_PROP_SUN_IN_FLIGHT = 6
 
 // Scratches for the per-node LOD traversal. getNodeCenter used to allocate a
 // Vector3 on every call and is hit four times per node per frame; these are
@@ -97,6 +109,9 @@ const _radiusDir = new THREE.Vector3()
 const _horizonDir = new THREE.Vector3()
 const _camDir = new THREE.Vector3()
 const _stitchScratch: StitchSteps = { bottom: 0, top: 0, left: 0, right: 0 }
+const _propSunDir = new THREE.Vector3()
+// Same 1.4-degree threshold the layer uses to decide it needs refreshing.
+const PROP_SUN_STALE_DOT = 0.9997
 const CLOUD_BILLBOARD_MAX_INSTANCES = 1600
 const CLOUD_BILLBOARD_SURFACE_BUDGET = 0.42
 const CLOUD_BILLBOARD_BUDGET_NEAR_DISTANCE = WORLD_SCALE.localDetailFar * 1.25
@@ -338,6 +353,11 @@ export class PlanetRenderer {
   private lastLocalCamPos = new THREE.Vector3()
   private hasLocalCamPos = false
   private propSunLightSpentMs = 0
+  private propSunWorker: Worker | null = null
+  private propSunWorkerFailed = false
+  private propSunJobId = 0
+  private propSunJobs = new Map<number, { chunkKey: string; sunX: number; sunY: number; sunZ: number }>()
+  private propSunInFlightChunks = new Set<string>()
   private propVisibleInstances = 0
   private sunPosition = new THREE.Vector3(0, 0, 0)
   private cloudLocalSunDirection = new THREE.Vector3(0, 1, 0)
@@ -1478,7 +1498,10 @@ export class PlanetRenderer {
         const response = event.data
         // Ocean jobs go to their own dedicated worker; these slots only ever
         // see chunk traffic. Narrowing here keeps the union honest.
-        if (response.type === 'ocean-built' || response.type === 'ocean-error') return
+        if (
+          response.type === 'ocean-built' || response.type === 'ocean-error'
+          || response.type === 'prop-sun-built' || response.type === 'prop-sun-error'
+        ) return
         slot.busy = false
         slot.key = null
         slot.jobId = null
@@ -2413,7 +2436,11 @@ export class PlanetRenderer {
       return
     }
 
-    props.updateSunLight(this.cloudLocalSunDirection)
+    // Approximate lighting only: the horizon raymarch is ~3.4ms per chunk and
+    // this runs inside the 2.5ms chunk integration budget. The layer reports as
+    // stale afterwards, so the budgeted pass in updateChunkPropVisibility does
+    // the real work over the following frames.
+    props.updateSunLight(this.cloudLocalSunDirection, true)
     chunk.mesh.add(props.group)
     this.propLayers.set(chunk.key, props)
   }
@@ -2459,6 +2486,10 @@ export class PlanetRenderer {
     const oceanDirections = this.addOceanTerrainHeightAttribute(oceanGeo)
     this.oceanGeometry = oceanGeo
     this.terminateOceanWorkers()
+    this.propSunWorker?.terminate()
+    this.propSunWorker = null
+    this.propSunJobs.clear()
+    this.propSunInFlightChunks.clear()
     this.oceanShoreMask?.dispose()
     this.oceanShoreMask = this.createOceanShoreMaskTexture()
     this.oceanDataReady = false
@@ -3023,24 +3054,126 @@ export class PlanetRenderer {
     props.setVisible(visible)
     if (visible) {
       props.setLodTier(this.resolvePropLodTier(dist, props.lodTierIndex))
-      if (
-        this.propSunLightSpentMs < PROP_SUN_LIGHT_BUDGET_MS
-        && props.needsSunLightUpdate(this.cloudLocalSunDirection)
-      ) {
-        const started = performance.now()
-        props.updateSunLight(this.cloudLocalSunDirection)
-        this.propSunLightSpentMs += performance.now() - started
+      if (props.needsSunLightUpdate(this.cloudLocalSunDirection)) {
+        this.requestPropSunLight(chunk.key, props)
       }
       this.propVisibleInstances += props.instanceCount
     }
   }
 
-  private resolvePropLodTier(dist: number, currentTier: number): number {
-    const threshold = this.propSettings.distance * PROP_LOD1_DISTANCE_FRACTION
-    if (currentTier === 0) {
-      return dist > threshold * (1 + PROP_LOD_HYSTERESIS) ? 1 : 0
+  // Horizon shadowing is ten detailed height samples per instance -- ~3.4ms per
+  // chunk. It depends only on the placement arrays, the sun direction and the
+  // terrain params, so it moves off the main thread wholesale. A single
+  // dedicated worker is enough: results that arrive late are simply discarded
+  // and re-requested, and oversubscribing would starve chunk streaming.
+  private requestPropSunLight(chunkKey: string, layer: PlanetPropLayer) {
+    if (this.propSunInFlightChunks.has(chunkKey)) return
+
+    const worker = this.ensurePropSunWorker()
+    if (!worker || this.propSunInFlightChunks.size >= MAX_PROP_SUN_IN_FLIGHT) {
+      // No worker available (or the queue is full): fall back to the budgeted
+      // main-thread path so lighting still converges.
+      if (this.propSunLightSpentMs < PROP_SUN_LIGHT_BUDGET_MS) {
+        const started = performance.now()
+        layer.updateSunLight(this.cloudLocalSunDirection)
+        this.propSunLightSpentMs += performance.now() - started
+      }
+      return
     }
-    return dist < threshold * (1 - PROP_LOD_HYSTERESIS) ? 0 : 1
+
+    const placements = layer.getSunLightJobPlacements()
+    if (placements.length === 0) return
+
+    const sun = _propSunDir.copy(this.cloudLocalSunDirection)
+    if (sun.lengthSq() <= 1e-8) return
+    sun.normalize()
+
+    const id = ++this.propSunJobId
+    this.propSunJobs.set(id, { chunkKey, sunX: sun.x, sunY: sun.y, sunZ: sun.z })
+    this.propSunInFlightChunks.add(chunkKey)
+
+    const request: TerrainWorkerPropSunRequest = {
+      type: 'prop-sun',
+      id,
+      terrain: this.terrainParams,
+      sunX: sun.x,
+      sunY: sun.y,
+      sunZ: sun.z,
+      placements,
+    }
+    worker.postMessage(request)
+  }
+
+  private ensurePropSunWorker(): Worker | null {
+    if (this.propSunWorker || this.propSunWorkerFailed || typeof Worker === 'undefined') {
+      return this.propSunWorker
+    }
+
+    try {
+      const worker = new Worker(new URL('./terrain-worker.ts', import.meta.url), { type: 'module' })
+      worker.onmessage = (event: MessageEvent<TerrainWorkerResponse>) => {
+        const response = event.data
+        if (response.type === 'prop-sun-built') {
+          this.completePropSunJob(response.id, response.results)
+          return
+        }
+        if (response.type === 'prop-sun-error') {
+          if (import.meta.env.DEV) console.warn(`Prop sun worker failed: ${response.message}`)
+          this.completePropSunJob(response.id, null)
+        }
+      }
+      worker.onerror = () => {
+        // Drop back to the budgeted main-thread path for the rest of the session.
+        this.propSunWorkerFailed = true
+        this.propSunWorker?.terminate()
+        this.propSunWorker = null
+        this.propSunJobs.clear()
+        this.propSunInFlightChunks.clear()
+      }
+      this.propSunWorker = worker
+    } catch {
+      this.propSunWorkerFailed = true
+    }
+
+    return this.propSunWorker
+  }
+
+  private completePropSunJob(id: number, results: Float32Array[] | null) {
+    const job = this.propSunJobs.get(id)
+    if (!job) return
+    this.propSunJobs.delete(id)
+    this.propSunInFlightChunks.delete(job.chunkKey)
+    if (!results || this.disposed) return
+
+    const layer = this.propLayers.get(job.chunkKey)
+    if (!layer) return
+
+    // Discard if the sun moved past the staleness threshold while the job was
+    // in flight -- needsSunLightUpdate will simply ask again next frame.
+    const current = _propSunDir.copy(this.cloudLocalSunDirection)
+    if (current.lengthSq() <= 1e-8) return
+    current.normalize()
+    if (current.x * job.sunX + current.y * job.sunY + current.z * job.sunZ <= PROP_SUN_STALE_DOT) return
+
+    layer.applySunLightResults(results, current)
+  }
+
+  private resolvePropLodTier(dist: number, currentTier: number): number {
+    const distance = this.propSettings.distance
+    let tier = 0
+
+    for (let i = 0; i < PROP_LOD_DISTANCE_FRACTIONS.length; i++) {
+      const threshold = distance * PROP_LOD_DISTANCE_FRACTIONS[i]
+      // Asymmetric bound: a boundary already crossed has to be re-crossed by
+      // the hysteresis margin to step back down, so a chunk sitting on it does
+      // not swap geometry every frame.
+      const bound = i < currentTier
+        ? threshold * (1 - PROP_LOD_HYSTERESIS)
+        : threshold * (1 + PROP_LOD_HYSTERESIS)
+      if (dist > bound) tier = i + 1
+    }
+
+    return tier
   }
 
   private disposeChunk(chunk: TerrainChunk) {

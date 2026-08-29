@@ -9,12 +9,13 @@ import rock2Url from '../../assets/models/rocks/rock_2.glb?url'
 import oakTreeLod1Url from '../../assets/models/trees/oak_tree_lod1.glb?url'
 import winterTreeLod1Url from '../../assets/models/trees/winter_tree_lod1.glb?url'
 import {
-  samplePlanetHeightDetailed,
   type PlanetTerrainParams,
 } from '../../../../server/spacetimedb/src/shared/planet-terrain'
 import type { QuadtreeNode } from './quadtree'
 import { nodeKey } from './quadtree'
 import type { TerrainChunkSurfaceData } from './terrain-chunk'
+import { computePropSunLight, type PropSunLightInput } from './prop-sun-light'
+import type { PropSunPlacementInput } from './terrain-worker-types'
 
 export interface PlanetPropSettings {
   enabled: boolean
@@ -96,41 +97,20 @@ const MIN_ROCK_SLOPE_DOT = 0.38
 const TREE_PATCH_SCALE_METERS = 190
 const ROCK_PATCH_SCALE_METERS = 110
 const PROP_SHADER_VERSION = 7
-const SUN_SHADOW_SAMPLE_FACTORS = [0.04, 0.08, 0.16, 0.30, 0.52, 0.86, 1.35, 2.10, 3.25, 5.0, 7.5]
-
-// The distance weight depends only on the factor, so it is precomputed once
-// instead of two smoothsteps per sample per instance. Zero-weight samples are
-// dropped outright: the first factor (0.04) sits exactly on the lower edge of
-// smoothstep(0.04, 0.42, ...), so its weight is exactly 0 and its contribution
-// to `blocker` — a running max — is a guaranteed no-op. It was costing a full
-// samplePlanetHeightDetailed (~11µs) per instance to add nothing. Dropping it
-// is byte-identical output for 1/11 of the raymarch.
-const SUN_SHADOW_SAMPLES: { factor: number; weight: number }[] = SUN_SHADOW_SAMPLE_FACTORS
-  .map(factor => ({
-    factor,
-    weight: smoothstep(0.04, 0.42, factor) * (1 - smoothstep(7.0, 8.5, factor)),
-  }))
-  .filter(sample => sample.weight > 0)
-const SUN_SHADOW_CLEARANCE = 4.0
 const PROP_TEXTURE_ANISOTROPY = 16
-const TEMP_PROP_SAMPLE_DIR = new THREE.Vector3()
+let _sunLightScratch = new Float32Array(0)
+const _sunInput: PropSunLightInput = {
+  planetDirs: new Float32Array(0),
+  terrainNormals: new Float32Array(0),
+  surfaceRadii: new Float32Array(0),
+  sunX: 0,
+  sunY: 0,
+  sunZ: 0,
+}
 const TEMP_SUN_DIR = new THREE.Vector3()
 // ~1.4 degrees of sun travel before a layer's horizon shadows are recomputed.
 const SUN_DIRECTION_EPSILON_DOT = 0.9997
 
-function sampleDirection(
-  radial: THREE.Vector3,
-  tangent: THREE.Vector3,
-  sinAngle: number,
-  cosAngle: number,
-  out: THREE.Vector3,
-): THREE.Vector3 {
-  return out
-    .copy(radial)
-    .multiplyScalar(cosAngle)
-    .addScaledVector(tangent, sinAngle)
-    .normalize()
-}
 
 const DEFAULT_PROP_TEXTURE = new THREE.DataTexture(
   new Uint8Array([255, 255, 255, 255]),
@@ -713,6 +693,44 @@ export class PlanetPropLayer {
     this.group.visible = totalInstances > 0
   }
 
+  // Inputs for an off-thread sun-light job. The arrays are handed over as-is
+  // and structured-cloned by postMessage, so this layer keeps ownership.
+  getSunLightJobPlacements(): PropSunPlacementInput[] {
+    return this.placements
+      .filter(placement => placement.sunLight.length > 0)
+      .map(placement => ({
+        planetDirs: placement.planetDirs,
+        terrainNormals: placement.terrainNormals,
+        surfaceRadii: placement.surfaceRadii,
+        count: placement.sunLight.length,
+      }))
+  }
+
+  // Counterpart to getSunLightJobPlacements. Bails out rather than writing
+  // partial data if the layer was rebuilt while the job was in flight.
+  applySunLightResults(results: Float32Array[], sunDirection: THREE.Vector3): void {
+    const active = this.placements.filter(placement => placement.sunLight.length > 0)
+    if (results.length !== active.length) return
+
+    let changed = false
+    for (let i = 0; i < results.length; i++) {
+      const values = results[i]
+      const placement = active[i]
+      if (values.length !== placement.sunLight.length) return
+      for (let k = 0; k < values.length; k++) {
+        if (Math.abs(placement.sunLight[k] - values[k]) > 0.015) {
+          changed = true
+          break
+        }
+      }
+      placement.sunLight.set(values)
+    }
+
+    this.lastSunDirection.copy(sunDirection).normalize()
+    if (!changed) return
+    for (const attribute of this.sunLightAttributes) attribute.needsUpdate = true
+  }
+
   // Cheap predicate so the caller can decide whether to spend its per-frame
   // budget on this layer, without doing the raymarch to find out.
   needsSunLightUpdate(localSunDirection: THREE.Vector3): boolean {
@@ -727,18 +745,28 @@ export class PlanetPropLayer {
     return dot <= SUN_DIRECTION_EPSILON_DOT
   }
 
-  updateSunLight(localSunDirection: THREE.Vector3) {
+  // skipHorizon drops the terrain-occlusion raymarch, which is the entire cost
+  // here (10 detailed height samples per instance). Used to light a layer on
+  // the frame it is created so its trees are not black, without paying ~3.4ms
+  // of main thread inside the chunk integration budget. lastSunDirection is
+  // deliberately left untouched in that case, so the layer still reports as
+  // needing a real update and the budgeted pass refines it shortly after.
+  updateSunLight(localSunDirection: THREE.Vector3, skipHorizon = false) {
     if (this.instanceCount <= 0) return
 
     const sunDir = TEMP_SUN_DIR.copy(localSunDirection)
     if (sunDir.lengthSq() <= 1e-8) return
     sunDir.normalize()
-    if (Number.isFinite(this.lastSunDirection.x) && this.lastSunDirection.dot(sunDir) > SUN_DIRECTION_EPSILON_DOT) return
-    this.lastSunDirection.copy(sunDir)
+    if (
+      !skipHorizon
+      && Number.isFinite(this.lastSunDirection.x)
+      && this.lastSunDirection.dot(sunDir) > SUN_DIRECTION_EPSILON_DOT
+    ) return
+    if (!skipHorizon) this.lastSunDirection.copy(sunDir)
 
     let changed = false
     for (const placement of this.placements) {
-      changed = this.updatePlacementSunLight(placement, sunDir) || changed
+      changed = this.updatePlacementSunLight(placement, sunDir, skipHorizon) || changed
     }
     if (!changed) return
 
@@ -806,77 +834,31 @@ export class PlanetPropLayer {
     this.meshEntries.length = 0
   }
 
-  private updatePlacementSunLight(placement: PlanetPropPlacement, sunDir: THREE.Vector3): boolean {
-    let changed = false
-    const radial = new THREE.Vector3()
-    const terrainNormal = new THREE.Vector3()
-    const tangentSun = new THREE.Vector3()
-    const terrainMeters = Math.max(this.terrain.terrainScale * this.terrain.radius, 1)
+  private updatePlacementSunLight(
+    placement: PlanetPropPlacement,
+    sunDir: THREE.Vector3,
+    skipHorizon: boolean,
+  ): boolean {
+    const previous = _sunLightScratch.length >= placement.sunLight.length
+      ? _sunLightScratch.subarray(0, placement.sunLight.length)
+      : (_sunLightScratch = new Float32Array(placement.sunLight.length))
+    previous.set(placement.sunLight)
+
+    _sunInput.planetDirs = placement.planetDirs
+    _sunInput.terrainNormals = placement.terrainNormals
+    _sunInput.surfaceRadii = placement.surfaceRadii
+    _sunInput.sunX = sunDir.x
+    _sunInput.sunY = sunDir.y
+    _sunInput.sunZ = sunDir.z
+    computePropSunLight(_sunInput, this.terrain, placement.sunLight, skipHorizon)
 
     for (let i = 0; i < placement.sunLight.length; i++) {
-      const dirOffset = i * 3
-      radial.set(
-        placement.planetDirs[dirOffset],
-        placement.planetDirs[dirOffset + 1],
-        placement.planetDirs[dirOffset + 2],
-      ).normalize()
-      terrainNormal.set(
-        placement.terrainNormals[dirOffset],
-        placement.terrainNormals[dirOffset + 1],
-        placement.terrainNormals[dirOffset + 2],
-      ).normalize()
-
-      const radialSun = radial.dot(sunDir)
-      tangentSun.copy(sunDir).addScaledVector(radial, -radialSun)
-      const tangentLen = tangentSun.length()
-      let sunlight = 0
-
-      if (radialSun > -0.08 && tangentLen > 1e-5) {
-        tangentSun.divideScalar(tangentLen)
-        const normalGate = smoothstep(-0.04, 0.18, terrainNormal.dot(sunDir))
-        const horizonGate = this.computeHorizonSunLight(radial, tangentSun, radialSun / tangentLen, placement.surfaceRadii[i], terrainMeters)
-        sunlight = Math.min(normalGate, horizonGate)
-      } else if (radialSun > 0.35) {
-        sunlight = smoothstep(-0.08, 0.24, terrainNormal.dot(sunDir))
-      }
-
-      sunlight = clamp(sunlight, 0, 1)
-      if (Math.abs(placement.sunLight[i] - sunlight) > 0.015) {
-        placement.sunLight[i] = sunlight
-        changed = true
-      }
+      if (Math.abs(previous[i] - placement.sunLight[i]) > 0.015) return true
     }
-
-    return changed
+    return false
   }
 
-  private computeHorizonSunLight(
-    radial: THREE.Vector3,
-    tangentSun: THREE.Vector3,
-    sunSlope: number,
-    originRadius: number,
-    terrainMeters: number,
-  ): number {
-    let blocker = 0
-    const stylizedSunSlope = sunSlope * 0.42 - 0.035
 
-    for (const { factor, weight } of SUN_SHADOW_SAMPLES) {
-      const distance = terrainMeters * factor
-      const angle = distance / Math.max(this.terrain.radius, 1)
-      const sinAngle = Math.sin(angle)
-      const cosAngle = Math.cos(angle)
-      sampleDirection(radial, tangentSun, sinAngle, cosAngle, TEMP_PROP_SAMPLE_DIR)
-      const sampleHeight = samplePlanetHeightDetailed(TEMP_PROP_SAMPLE_DIR, this.terrain, 0.35)
-      const sampleRadius = this.terrain.radius + sampleHeight * terrainMeters
-      const vertical = sampleRadius * cosAngle - originRadius - SUN_SHADOW_CLEARANCE
-      const horizontal = Math.max(sampleRadius * sinAngle, 1e-3)
-      const obstacleSlope = vertical / horizontal
-      blocker = Math.max(blocker, smoothstep(-0.015, 0.080, obstacleSlope - stylizedSunSlope) * weight)
-      if (blocker >= 0.995) break
-    }
-
-    return 1 - blocker
-  }
 
   private buildPlacements(params: PlanetPropLayerParams): PlanetPropPlacement[] {
     const treePlacements = this.buildKindPlacements(params, 'tree')

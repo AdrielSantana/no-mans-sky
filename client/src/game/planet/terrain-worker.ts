@@ -1,5 +1,6 @@
 import { buildTerrainChunkGeometryData } from './terrain-geometry'
 import { buildOceanShoreMask, buildOceanVertexHeights } from './ocean-sampling'
+import { computePropSunLight } from './prop-sun-light'
 import type {
   TerrainWorkerBuildResponse,
   TerrainWorkerErrorResponse,
@@ -47,11 +48,48 @@ function handleOcean(request: Extract<TerrainWorkerRequest, { type: 'ocean' }>) 
   }
 }
 
+function handlePropSun(request: Extract<TerrainWorkerRequest, { type: 'prop-sun' }>) {
+  try {
+    const start = performance.now()
+    const results = request.placements.map((placement) => {
+      const out = new Float32Array(placement.count)
+      computePropSunLight(
+        {
+          planetDirs: placement.planetDirs,
+          terrainNormals: placement.terrainNormals,
+          surfaceRadii: placement.surfaceRadii,
+          sunX: request.sunX,
+          sunY: request.sunY,
+          sunZ: request.sunZ,
+        },
+        request.terrain,
+        out,
+      )
+      return out
+    })
+    ctx.postMessage(
+      { type: 'prop-sun-built', id: request.id, durationMs: performance.now() - start, results },
+      results.map(r => r.buffer),
+    )
+  } catch (error) {
+    ctx.postMessage({
+      type: 'prop-sun-error',
+      id: request.id,
+      message: error instanceof Error ? error.message : String(error),
+    })
+  }
+}
+
 ctx.onmessage = (event: MessageEvent<TerrainWorkerRequest>) => {
   const request = event.data
 
   if (request.type === 'ocean') {
     handleOcean(request)
+    return
+  }
+
+  if (request.type === 'prop-sun') {
+    handlePropSun(request)
     return
   }
 
