@@ -406,27 +406,57 @@ Caminhos, do mais barato ao mais certo:
    resposta certa e a mais cara — hoje a camada de prop pertence ao chunk, é
    anexada em `chunk.mesh` e some junto com ele.
 
-## 2. Pool global de workers — agora com evidência
+## 2. Pool global de workers — FEITO
 
-`initTerrainWorkers` (`planet-renderer.ts`) cria até `min(8, threads-1)` workers
-**por PlanetRenderer**, e `celestial-system.ts` cria um renderer por planeta.
+`initTerrainWorkers` criava até `min(8, threads - 1)` workers **por
+PlanetRenderer**, e `celestial-system.ts` cria um renderer para **todo corpo que
+tem planet params** — cinco no sistema semeado (Mercúrio, Vênus, Terra, Marte,
+Júpiter), sem nenhum gate de distância. Numa máquina de 10 threads isso era
+**5 × 8 = 40 module workers vivos desde o primeiro sync**, cada um com sua
+própria cópia do bundle de terreno, todos disputando os mesmos núcleos — para um
+jogador que só pode estar em cima de um planeta por vez.
 
-Isto deixou de ser teórico. Ao paralelizar o job do oceano medi:
+E os outros quatro não estavam nem trabalhando: assim que a quadtree de um
+planeta distante assenta, ele para de pedir chunk. Eram 32 workers ociosos e
+caros.
+
+Isso já tinha evidência medida na paralelização do oceano:
 
 | fatias | wall | maior fatia | trabalho real por fatia |
 |---|---|---|---|
 | 6 | 1748 ms | 1338 ms | ~380 ms |
 | 3 | 1875 ms | 1479 ms | ~760 ms |
 
-Numa máquina de 10 núcleos, 8 workers de chunk + N de oceano saturam tudo: o
-número de fatias deixa de importar porque o gargalo é disponibilidade de CPU.
-Por isso `resolveOceanSliceCount` é deliberadamente conservador (`threads / 3`,
-máx. 3) — oversubscrever deixa o streaming de terreno mais lento, e isso o
-jogador vê.
+O número de fatias quase não importava porque o gargalo já era disponibilidade
+de CPU — que é exatamente o sintoma de 40 workers em 10 núcleos.
 
-**O conserto é um pool global compartilhado com prioridade por distância**, em
-vez de um pool por planeta. Destrava a paralelização do oceano e acelera o
-streaming ao mesmo tempo.
+Agora existe `terrain-worker-pool.ts`, um pool único de módulo. Renderer não
+possui mais worker: ele **aluga** um por job e o pool devolve o slot sozinho
+quando a resposta chega.
+
+O detalhe que não é óbvio é a separação entre `busy` e `owner`. Quando um
+renderer é descartado com job no ar, ele solta o *lease* mas o worker continua
+calculando; marcar esse worker como livre entregaria a resposta pendente ao
+handler do próximo dono. Então `releaseTerrainWorkersFor` limpa só o dono e os
+handlers, e o slot se libera de fato quando a resposta aterrissa e cai num
+handler nulo. Matar o worker seria pior: custaria um respawn de module worker
+inteiro para poupar poucos ms de trabalho que ninguém espera.
+
+`dispose()` também deixou de chamar `terminate()` — os workers são de todos os
+planetas agora.
+
+Verificado com um `Worker` falso em node, 9 asserções: cinco renderers geram 8
+workers e não 40; o lease satura em 8 e devolve null; a resposta chega ao dono
+certo; worker ocupado não é reentregue; resposta órfã é descartada em vez de
+vazar pro dono seguinte; e encolher o pool preserva quem está ocupado.
+
+**Não feito: prioridade por distância.** O backlog pedia, e continua sendo o
+certo em teoria, mas vale menos do que parece — planeta distante para de pedir
+chunk quando a quadtree assenta, então na prática o pool inteiro sobra pro
+planeta debaixo do jogador. O que resta é um transiente de boot, onde os cinco
+disputam as primeiras chunks na ordem em que `update()` os visita. Se um dia
+incomodar, o formato é o pool receber jobs com prioridade em vez de os renderers
+puxarem slots.
 
 ---
 

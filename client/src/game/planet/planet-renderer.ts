@@ -49,6 +49,12 @@ import {
   type FluffyGrassSettings,
 } from './fluffy-grass'
 import {
+  acquireTerrainWorker,
+  releaseTerrainWorkersFor,
+  setTerrainWorkerPoolSize,
+  terrainWorkerPoolSize,
+} from './terrain-worker-pool'
+import {
   PlanetPropLayer,
   getPlanetPropAssets,
   loadPlanetPropAssets,
@@ -71,7 +77,6 @@ import { CLOUD_OCCLUDER_RENDER_LAYER, CLOUD_RENDER_LAYER } from '../render-layer
 const SYNC_CHUNK_BUILD_BUDGET_MS = 4
 const WORKER_DISPATCH_BUDGET_MS = 0.8
 const CHUNK_INTEGRATION_BUDGET_MS = 2.5
-const MAX_TERRAIN_WORKERS = 8
 const DETAILED_MATERIAL_MIN_LOD = 6
 const DETAILED_MATERIAL_DISTANCE = WORLD_SCALE.localDetailFar
 const LOD_COLLAPSE_HYSTERESIS = 1.35
@@ -153,14 +158,6 @@ const FAR_TEXTURE_LOD_BANDS = [
 function smoothstepNumber(edge0: number, edge1: number, value: number): number {
   const t = THREE.MathUtils.clamp((value - edge0) / Math.max(edge1 - edge0, 1e-6), 0, 1)
   return t * t * (3 - 2 * t)
-}
-
-interface TerrainWorkerSlot {
-  worker: Worker
-  busy: boolean
-  key: string | null
-  jobId: number | null
-  epoch: number
 }
 
 export interface UnderwaterViewState {
@@ -421,7 +418,6 @@ export class PlanetRenderer {
   private pendingCollapseKeys = new Set<string>()
   private pendingWorkerKeys = new Set<string>()
   private completedWorkerJobs: TerrainWorkerBuildResponse[] = []
-  private workerSlots: TerrainWorkerSlot[] = []
   private chunkBuildEpoch = 0
   private nextWorkerJobId = 1
   private generatedChunksLastFrame = 0
@@ -784,7 +780,11 @@ export class PlanetRenderer {
       this.quadtrees.push(createRoot(f as CubeFace))
     }
 
-    this.initTerrainWorkers()
+    // Shared across every PlanetRenderer -- see terrain-worker-pool.ts. Each
+    // renderer asking for its own pool is what put 40 workers on a ten-thread
+    // machine. Last explicit request wins; the game leaves all five at 0, which
+    // means "derive from hardware" and makes the call idempotent.
+    setTerrainWorkerPoolSize(this.requestedTerrainWorkers)
     this.ensurePropAssets()
   }
 
@@ -1526,76 +1526,6 @@ export class PlanetRenderer {
     if (options.fallbackTerrainShader !== undefined) this.debugFallbackTerrainShader = options.fallbackTerrainShader
   }
 
-  private initTerrainWorkers() {
-    if (typeof Worker === 'undefined') return
-
-    const workerCount = this.resolveTerrainWorkerCount()
-    for (let i = 0; i < workerCount; i++) {
-      const worker = new Worker(new URL('./terrain-worker.ts', import.meta.url), { type: 'module' })
-      const slot: TerrainWorkerSlot = {
-        worker,
-        busy: false,
-        key: null,
-        jobId: null,
-        epoch: this.chunkBuildEpoch,
-      }
-
-      worker.onmessage = (event: MessageEvent<TerrainWorkerResponse>) => {
-        const response = event.data
-        // Ocean jobs go to their own dedicated worker; these slots only ever
-        // see chunk traffic. Narrowing here keeps the union honest.
-        if (
-          response.type === 'ocean-built' || response.type === 'ocean-error'
-          || response.type === 'prop-sun-built' || response.type === 'prop-sun-error'
-        ) return
-        slot.busy = false
-        slot.key = null
-        slot.jobId = null
-        slot.epoch = this.chunkBuildEpoch
-
-        if (response.epoch !== this.chunkBuildEpoch) return
-
-        if (response.type === 'error') {
-          this.pendingWorkerKeys.delete(response.key)
-          this.pendingKeys.add(response.key)
-          if (import.meta.env.DEV) {
-            console.warn(`Terrain worker failed for ${response.key}: ${response.message}`)
-          }
-          return
-        }
-
-        if (!this.pendingWorkerKeys.has(response.key)) return
-        this.completedWorkerJobs.push(response)
-      }
-
-      worker.onerror = () => {
-        if (slot.key) {
-          this.pendingWorkerKeys.delete(slot.key)
-          this.pendingKeys.add(slot.key)
-        }
-        slot.busy = false
-        slot.key = null
-        slot.jobId = null
-      }
-
-      this.workerSlots.push(slot)
-    }
-  }
-
-  private resolveTerrainWorkerCount(): number {
-    const hardwareThreads = typeof navigator === 'undefined'
-      ? 4
-      : Math.max(2, navigator.hardwareConcurrency ?? 4)
-    const hardwareCap = Math.max(1, Math.min(MAX_TERRAIN_WORKERS, hardwareThreads - 1))
-    const requested = Math.floor(this.requestedTerrainWorkers)
-
-    if (requested > 0) {
-      return Math.max(1, Math.min(requested, hardwareCap))
-    }
-
-    return hardwareCap
-  }
-
   sampleSurfaceRadius(dir: Vec3Like): number {
     const chunk = this.findVisibleChunkForDirection(dir)
     return chunk?.sampleVisualRadius(dir) ?? samplePlanetRadiusDetailed(dir, this.terrainParams)
@@ -1643,7 +1573,7 @@ export class PlanetRenderer {
       detailedMaterialChunks,
       pending: this.pendingKeys.size + this.pendingWorkerKeys.size + this.completedWorkerJobs.length,
       building: this.pendingWorkerKeys.size,
-      workers: this.workerSlots.length,
+      workers: terrainWorkerPoolSize(),
       completedBuilds: this.completedWorkerJobs.length,
       pendingCollapses: this.pendingCollapseKeys.size,
       skirtEdges,
@@ -1945,7 +1875,7 @@ export class PlanetRenderer {
 
     // 4. Process pending chunks
     this.integrateCompletedChunkBuilds(localCamPos)
-    if (this.workerSlots.length > 0) {
+    if (terrainWorkerPoolSize() > 0) {
       this.dispatchPendingChunkBuilds(localCamPos)
     } else {
       this.processPendingChunksSync(localCamPos)
@@ -2277,8 +2207,7 @@ export class PlanetRenderer {
     if (this.pendingKeys.size === 0) return
 
     const dispatchStart = performance.now()
-    for (const slot of this.workerSlots) {
-      if (slot.busy) continue
+    for (;;) {
       if (performance.now() - dispatchStart >= WORKER_DISPATCH_BUDGET_MS) break
 
       const key = this.findBestPendingChunkKey(localCamPos)
@@ -2288,13 +2217,22 @@ export class PlanetRenderer {
       this.pendingKeys.delete(key)
       if (!node || this.chunks.has(key) || this.pendingWorkerKeys.has(key)) continue
 
+      const worker = acquireTerrainWorker(
+        this,
+        response => this.handleChunkWorkerResponse(response),
+        () => this.failChunkWorkerJob(key),
+      )
+      // Pool is saturated. Put the key back and let the next frame try again --
+      // a distant planet whose quadtree has settled asks for nothing, so in
+      // practice the planet under the player gets the whole pool.
+      if (!worker) {
+        this.pendingKeys.add(key)
+        break
+      }
+
       const jobId = this.nextWorkerJobId++
-      slot.busy = true
-      slot.key = key
-      slot.jobId = jobId
-      slot.epoch = this.chunkBuildEpoch
       this.pendingWorkerKeys.add(key)
-      slot.worker.postMessage({
+      worker.postMessage({
         type: 'build',
         id: jobId,
         epoch: this.chunkBuildEpoch,
@@ -2305,6 +2243,33 @@ export class PlanetRenderer {
         skirts: { bottom: false, top: false, left: false, right: false },
       })
     }
+  }
+
+  // Was the per-slot onmessage closure. The pool frees the worker before this
+  // runs, so a chunk that lands early can be replaced on the next dispatch.
+  private handleChunkWorkerResponse(response: TerrainWorkerResponse) {
+    if (
+      response.type === 'ocean-built' || response.type === 'ocean-error'
+      || response.type === 'prop-sun-built' || response.type === 'prop-sun-error'
+    ) return
+    if (response.epoch !== this.chunkBuildEpoch) return
+
+    if (response.type === 'error') {
+      this.pendingWorkerKeys.delete(response.key)
+      this.pendingKeys.add(response.key)
+      if (import.meta.env.DEV) {
+        console.warn(`Terrain worker failed for ${response.key}: ${response.message}`)
+      }
+      return
+    }
+
+    if (!this.pendingWorkerKeys.has(response.key)) return
+    this.completedWorkerJobs.push(response)
+  }
+
+  private failChunkWorkerJob(key: string) {
+    this.pendingWorkerKeys.delete(key)
+    this.pendingKeys.add(key)
   }
 
   private processPendingChunksSync(localCamPos: THREE.Vector3) {
@@ -3427,10 +3392,9 @@ export class PlanetRenderer {
   dispose() {
     this.disposed = true
     this.removeAllChunks()
-    for (const slot of this.workerSlots) {
-      slot.worker.terminate()
-    }
-    this.workerSlots.length = 0
+    // Not terminate: the pool is shared with every other planet. This only
+    // says the results still in the air are no longer wanted.
+    releaseTerrainWorkersFor(this)
     this.material.dispose()
     for (const material of this.farLodMaterials) {
       material.dispose()
