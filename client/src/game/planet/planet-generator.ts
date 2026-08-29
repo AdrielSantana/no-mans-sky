@@ -1,4 +1,5 @@
 import * as THREE from 'three'
+import { SUN_SHADOW_PARS_GLSL, getSunShadowUniforms } from './sun-shadow'
 import grassTextureUrl from '../../assets/terrain/grass_soil_tile.webp'
 import rockTextureUrl from '../../assets/terrain/rock_tile.webp'
 import sandTextureUrl from '../../assets/terrain/sand_tile.webp'
@@ -312,7 +313,11 @@ float realisticTerrainHeight(vec3 sphereDir) {
 }
 `
 
+// Prepended to the shared lighting block, so all three terrain materials pick
+// up shadow receiving without any of them mentioning it.
 const PLANET_LIGHTING_GLSL = /* glsl */ `
+${SUN_SHADOW_PARS_GLSL}
+
 uniform float uSurfaceLightingBlend;
 uniform float uTerrainAoStrength;
 
@@ -357,6 +362,9 @@ vec3 applyPlanetLighting(vec3 albedo, vec3 normal, vec3 radialNormal, vec3 world
   float reliefOcclusion = terrainReliefOcclusion(heightNorm, slope);
   float softDirect = direct * 0.78 + direct * direct * 0.24;
   softDirect *= mix(0.82, 1.0, reliefOcclusion);
+  // Cast shadows dim the sun term and leave ambient alone, so what a tree drops
+  // on the ground reads as shade rather than a hole in it.
+  softDirect *= sunShadowFactor(worldPos, nDotL);
   float ambient = mix(0.055, 0.22, day) * reliefOcclusion;
   float rim = pow(1.0 - max(dot(n, viewDir), 0.0), 2.3) * smoothstep(-0.05, 0.50, nDotL);
   float highland = smoothstep(0.60, 0.90, heightNorm) * 0.055;
@@ -911,6 +919,7 @@ export function createPlanetMaterial(params: {
     fragmentShader,
     side: THREE.DoubleSide,
     uniforms: {
+      ...getSunShadowUniforms(),
       uSeed: { value: params.seed },
       uTerrainScale: { value: params.terrainScale },
       uPlanetRadius: { value: params.planetRadius },
@@ -1204,6 +1213,7 @@ export function createPlanetFarMaterial(params: {
     fragmentShader,
     side: THREE.DoubleSide,
     uniforms: {
+      ...getSunShadowUniforms(),
       uSeed: { value: params.seed },
       uTerrainScale: { value: params.terrainScale },
       uPlanetRadius: { value: params.planetRadius },
@@ -1469,6 +1479,7 @@ export function createPlanetFallbackMaterial(params: {
     fragmentShader,
     side: THREE.FrontSide,
     uniforms: {
+      ...getSunShadowUniforms(),
       uSeed: { value: params.seed },
       uFrequency: { value: params.frequency },
       uOctaves: { value: params.octaves },

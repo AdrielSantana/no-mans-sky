@@ -9,6 +9,7 @@ import { SMAAPass } from 'three/examples/jsm/postprocessing/SMAAPass.js'
 import { createSkybox } from './skybox'
 import { WORLD_SCALE } from './world-scale'
 import { CLOUD_RENDER_LAYER } from './render-layers'
+import { SunShadowMap } from './planet/sun-shadow'
 
 // Upper bound on a single frame's delta. Returning from a hidden tab hands
 // Clock.getDelta() the whole elapsed wall time.
@@ -410,6 +411,8 @@ export class GameEngine {
   private bloomPass: UnrealBloomPass | null = null
   private outputPass: OutputPass | null = null
   private smaaPass: SMAAPass | null = null
+  private sunShadow = new SunShadowMap()
+  private sunShadowDir = new THREE.Vector3()
   private cloudPass: CloudCompositePass | null = null
   private underwaterPass: UnderwaterPass | null = null
   private elapsedTime = 0
@@ -535,6 +538,20 @@ export class GameEngine {
 
   getSunColor(target = new THREE.Color()): THREE.Color {
     return this.sunLight ? target.copy(this.sunLight.color) : target.set(0xffffff)
+  }
+
+  setSunShadowEnabled(enabled: boolean) {
+    this.sunShadow.setEnabled(enabled)
+  }
+
+  setSunShadowSettings(settings: { strength: number; radius: number; size: number }) {
+    this.sunShadow.setStrength(settings.strength)
+    this.sunShadow.setRadius(settings.radius)
+    this.sunShadow.setSize(settings.size)
+  }
+
+  getSunShadowEnabled(): boolean {
+    return this.sunShadow.isEnabled()
   }
 
   setBloomEnabled(enabled: boolean) {
@@ -718,6 +735,14 @@ export class GameEngine {
       this.controls.update()
       onFrame?.(dt)
       this.underwaterPass?.setTime(this.elapsedTime)
+      // Before the composer, and centred on the camera rather than on any one
+      // planet: the box is 260 m deep along the sun, so wherever the camera is
+      // standing the ground under it is inside. Out in orbit no caster is in
+      // range and the pass degenerates to a clear.
+      if (this.sunLight) {
+        this.sunShadowDir.copy(this.sunLight.position).sub(this.camera.position).normalize()
+        this.sunShadow.render(this.renderer, this.scene, this.sunShadowDir, this.camera.position)
+      }
       this.composer.render()
     }
     loop()
@@ -732,6 +757,7 @@ export class GameEngine {
 
   dispose() {
     this.stop()
+    this.sunShadow.dispose()
     window.removeEventListener('resize', this.boundResize)
     this.resizeObserver?.disconnect()
     this.resizeObserver = null

@@ -118,6 +118,12 @@ function createPlanet(scene: THREE.Scene, renderer: THREE.WebGLRenderer, params:
 function applyDebugSettings(engine: GameEngine, planet: PlanetRenderer, params: EditorParams) {
   engine.setBloomEnabled(params.debugBloom)
   engine.setAntialiasEnabled(params.debugAntialias)
+  engine.setSunShadowEnabled(params.debugSunShadow)
+  engine.setSunShadowSettings({
+    strength: params.sunShadowStrength,
+    radius: params.sunShadowRadius,
+    size: params.sunShadowSize,
+  })
   engine.setBloomSettings({
     strength: params.bloomStrength,
     radius: params.bloomRadius,
@@ -341,7 +347,7 @@ export function EditorCanvas({ params }: Props) {
           `update=${avg(updateSamples).toFixed(2)}ms p95=${pct(sortedUpdates, 0.95).toFixed(2)}ms`,
           `draw=${engine.renderer.info.render.calls} tri=${engine.renderer.info.render.triangles}`,
           `geo=${engine.renderer.info.memory.geometries} tex=${engine.renderer.info.memory.textures}`,
-          `diag bloom=${paramsRef.current.debugBloom ? 'on' : 'off'} aa=${paramsRef.current.debugAntialias ? 'smaa' : 'off'} atmosphere=${paramsRef.current.debugAtmosphere ? 'on' : 'off'} clouds=${paramsRef.current.debugClouds ? 'on' : 'off'} simpleTerrain=${paramsRef.current.debugSimpleTerrain ? 'on' : 'off'}`,
+          `diag bloom=${paramsRef.current.debugBloom ? 'on' : 'off'} aa=${paramsRef.current.debugAntialias ? 'smaa' : 'off'} shadow=${paramsRef.current.debugSunShadow ? `${paramsRef.current.sunShadowSize}@${paramsRef.current.sunShadowRadius}m` : 'off'} atmosphere=${paramsRef.current.debugAtmosphere ? 'on' : 'off'} clouds=${paramsRef.current.debugClouds ? 'on' : 'off'} simpleTerrain=${paramsRef.current.debugSimpleTerrain ? 'on' : 'off'}`,
           bloom
             ? `bloom strength=${bloom.strength.toFixed(2)} radius=${bloom.radius.toFixed(2)} threshold=${bloom.threshold.toFixed(2)} enabled=${bloom.enabled ? 'on' : 'off'}`
             : 'bloom unavailable',

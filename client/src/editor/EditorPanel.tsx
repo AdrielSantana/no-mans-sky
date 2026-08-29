@@ -1333,6 +1333,56 @@ export function EditorPanel({ params, onChange }: Props) {
           </label>
         </div>
         <div className="editor-row">
+          <label style={{ display: 'flex', alignItems: 'center', gap: 6, cursor: 'pointer' }}>
+            <input
+              type="checkbox"
+              checked={params.debugSunShadow}
+              onChange={e => set('debugSunShadow', e.target.checked)}
+              style={{ accentColor: '#2dd4a7' }}
+            />
+            <span className="editor-label" style={{ width: 'auto' }}>Sun Shadows</span>
+          </label>
+        </div>
+        <div className="editor-row">
+          <span className="editor-label">Shadow Strength</span>
+          <input
+            className="editor-slider"
+            type="range"
+            min={RANGES.sunShadowStrength.min}
+            max={RANGES.sunShadowStrength.max}
+            step={RANGES.sunShadowStrength.step}
+            value={params.sunShadowStrength}
+            onChange={e => set('sunShadowStrength', Number(e.target.value))}
+          />
+          <span className="editor-value">{params.sunShadowStrength.toFixed(2)}</span>
+        </div>
+        <div className="editor-row">
+          <span className="editor-label">Shadow Radius</span>
+          <input
+            className="editor-slider"
+            type="range"
+            min={RANGES.sunShadowRadius.min}
+            max={RANGES.sunShadowRadius.max}
+            step={RANGES.sunShadowRadius.step}
+            value={params.sunShadowRadius}
+            onChange={e => set('sunShadowRadius', Number(e.target.value))}
+          />
+          <span className="editor-value">{params.sunShadowRadius}m</span>
+        </div>
+        <div className="editor-row">
+          <span className="editor-label">Shadow Map</span>
+          <input
+            className="editor-slider"
+            type="range"
+            min={RANGES.sunShadowSize.min}
+            max={RANGES.sunShadowSize.max}
+            step={RANGES.sunShadowSize.step}
+            value={params.sunShadowSize}
+            onChange={e => set('sunShadowSize', Number(e.target.value))}
+          />
+          <span className="editor-value">{params.sunShadowSize}</span>
+        </div>
+        <div className="editor-row">
           <span className="editor-label">Bloom Strength</span>
           <input
             className="editor-slider"

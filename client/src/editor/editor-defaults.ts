@@ -114,6 +114,10 @@ export interface EditorParams {
   underwaterMurk: number
   debugBloom: boolean
   debugAntialias: boolean
+  debugSunShadow: boolean
+  sunShadowStrength: number
+  sunShadowRadius: number
+  sunShadowSize: number
   debugAtmosphere: boolean
   debugClouds: boolean
   debugSimpleTerrain: boolean
@@ -255,6 +259,10 @@ export const DEFAULT_PARAMS: EditorParams = {
   underwaterMurk: 0.34,
   debugBloom: true,
   debugAntialias: true,
+  debugSunShadow: true,
+  sunShadowStrength: 0.75,
+  sunShadowRadius: 120,
+  sunShadowSize: 2048,
   debugAtmosphere: true,
   debugClouds: true,
   debugSimpleTerrain: false,
@@ -338,6 +346,9 @@ export const RANGES = {
   gridSize: { min: 9, max: 129, step: 2 },
   horizonMargin: { min: 0, max: 3, step: 0.05 },
   terrainWorkers: { min: 0, max: 12, step: 1 },
+  sunShadowStrength: { min: 0, max: 1, step: 0.01 },
+  sunShadowRadius: { min: 20, max: 400, step: 5 },
+  sunShadowSize: { min: 512, max: 4096, step: 512 },
   bloomStrength: { min: 0, max: 3, step: 0.01 },
   bloomRadius: { min: 0, max: 1.5, step: 0.01 },
   bloomThreshold: { min: 0, max: 2, step: 0.01 },

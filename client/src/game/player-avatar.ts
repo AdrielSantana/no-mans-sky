@@ -1,4 +1,5 @@
 import * as THREE from "three";
+import { SUN_SHADOW_CASTER_LAYER } from "./render-layers";
 import { FBXLoader } from "three/examples/jsm/loaders/FBXLoader.js";
 
 import astronautModelUrl from "../assets/models/astronaut/astronaut.fbx?url";
@@ -266,8 +267,12 @@ export class PlayerAvatar {
     model.traverse((child) => {
       if (!(child instanceof THREE.Mesh)) return;
       child.frustumCulled = false;
+      // castShadow/receiveShadow are three's own shadow system, which this
+      // project does not use -- the sun shadow is a hand-rolled pass keyed on
+      // a layer. Left set because they cost nothing and document the intent.
       child.castShadow = true;
       child.receiveShadow = true;
+      child.layers.enable(SUN_SHADOW_CASTER_LAYER);
       const previous = Array.isArray(child.material)
         ? child.material
         : [child.material];

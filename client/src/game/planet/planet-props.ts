@@ -1,4 +1,5 @@
 import * as THREE from 'three'
+import { SUN_SHADOW_CASTER_LAYER } from '../render-layers'
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js'
 // Geometry-only LOD tiers. Their embedded textures were shrunk to 8x8 because
 // only the geometry is read -- the material always comes from the base model.
@@ -1064,6 +1065,11 @@ export class PlanetPropLayer {
         const geometry = buildInstancedGeometry(part.tiers[0].geometry, attributes)
         tierGeometries[0] = geometry
         const mesh = new THREE.InstancedMesh(geometry, part.tiers[0].material, count)
+        // Casters keep their own material in the depth pass, so the trunk's
+        // wind sway and ground skirt land in the shadow map exactly where they
+        // land on screen. A stand-in depth material would have to duplicate
+        // both and would drift the moment either is tuned.
+        mesh.layers.enable(SUN_SHADOW_CASTER_LAYER)
         mesh.name = `planet-prop-${placement.model.id}`
         mesh.userData.planetProp = true
         mesh.userData.planetPropModel = placement.model.id
@@ -1091,6 +1097,10 @@ export class PlanetPropLayer {
         ])
         geometry.setDrawRange(0, foliageIndexCount(foliage.cardCount, 0))
         const mesh = new THREE.InstancedMesh(geometry, foliage.material, count)
+        // Same reasoning, and here it also buys the leaf silhouette for free:
+        // the foliage material's alpha-test discard is what makes the shadow
+        // leaf-shaped instead of a rectangle per card.
+        mesh.layers.enable(SUN_SHADOW_CASTER_LAYER)
         mesh.name = `planet-foliage-${placement.model.id}`
         mesh.userData.planetProp = true
         mesh.userData.planetPropModel = placement.model.id

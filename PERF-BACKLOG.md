@@ -216,13 +216,12 @@ Isso é seguro só porque os nomes não colidem: fonte usa `position`/`normal`/
 
 ### 1.6 Folhagem — o que ficou de fora
 
-- **O atlas é o mesmo para as duas espécies.** Um conífero quer ramo de agulha,
-  não tufo de folha larga. Na folhagem, o winter tree só se diferencia pela cor
-  — o tronco e a raiz já são outra malha.
-- **`alphaToCoverage` continua inerte** porque o renderer roda `antialias: false`.
-  Com MSAA ligado, folhagem seria o primeiro lugar a se beneficiar.
-- **Sem sombra de folha no chão.** As props recebem sombra do terreno e das
-  nuvens, mas não projetam nada.
+- **Atlas de agulha para o conífero: descartado.** O mesmo atlas de folha larga
+  serve as duas espécies e vai continuar assim — decisão do dono do projeto, não
+  pendência.
+- **`alphaToCoverage` continua inerte.** O SMAA do §5 é pós-tonemap e não
+  destrava isso; precisaria de MSAA de verdade, e aí folhagem seria o primeiro
+  lugar a se beneficiar.
 - **Sem fade por distância nos cards.** O LOD corta em degraus via draw range;
   um fade de tamanho no último tier tiraria o pop.
 
@@ -405,6 +404,75 @@ Caminhos, do mais barato ao mais certo:
    reembaralhamento some, porque a célula não muda quando o terreno divide. É a
    resposta certa e a mais cara — hoje a camada de prop pertence ao chunk, é
    anexada em `chunk.mesh` e some junto com ele.
+
+## 1.10 Sombra projetada de props e player — FEITO
+
+Props e player agora projetam sombra no terreno. Pedido do dono do projeto, e o
+que substituiu o atlas de agulha como próximo item visual.
+
+**Não é o `WebGLShadowMap` do three.** Aquele sistema exige que o material
+*receptor* carregue a UBO de luzes e os chunks de sombra, e aqui toda superfície
+é `ShaderMaterial` escrito à mão com iluminação própria — prop sombreia por
+vértice, terreno por fragmento via `applyPlanetLighting`. Adotar as sombras do
+three significaria adotar o modelo de luz dele inteiro. Ter o passe custa um
+render ortográfico de profundidade e uma matriz.
+
+**Receptor.** A iluminação do terreno é por fragmento e as três variantes de
+material passam pela mesma `applyPlanetLighting`, então o ponto de inserção é
+único: um multiplicador em `softDirect`, deixando o ambiente intacto — a sombra
+da árvore lê como sombra, não como buraco no chão. Os uniforms são objetos
+compartilhados mutados no lugar, então cada material só faz `...getSunShadowUniforms()`
+na construção e nunca precisa de update próprio.
+
+**Caster.** Os casters desenham com **o próprio material** no depth pass, não com
+um material de profundidade substituto. Isso dá de graça: o vento do tronco, a
+saia de chão do §1.7, o draw range de LOD da folhagem e — o que mais importa — o
+`discard` de alpha-test da folha, que é o que faz a sombra ter formato de folha
+em vez de retângulo por card. Um material substituto teria que duplicar tudo
+isso e desalinharia na primeira vez que qualquer um fosse ajustado. Quem entra é
+escolhido por layer (`SUN_SHADOW_CASTER_LAYER`), habilitada *além* da principal,
+e a câmera de sombra só enxerga essa layer — terreno, oceano, nuvem e skybox
+nunca entram no passe.
+
+O chunk de logdepth do three não atrapalha: `vIsPerspective` faz o fragment cair
+em `gl_FragCoord.z` quando a câmera é ortográfica.
+
+**Dois bugs achados por teste, não por leitura.** Escrevi um teste em node com
+um renderer falso (three faz a matemática sem GL) que projeta o topo de um
+caster e o ponto do chão onde a sombra dele deve cair, e exige que os dois caiam
+no mesmo texel:
+
+1. `_up` vinha de `focus.normalize()`. Isso só é o radial do planeta se o
+   planeta estiver na origem do mundo — e estes planetas orbitam. Com foco na
+   origem ainda degenerava o `lookAt` de vez. Dava 73–119 texels de
+   desalinhamento. Agora o up vem da direção do sol.
+2. **Sem snap de texel.** A caixa seguia a câmera continuamente, então o mapa
+   deslizava uma fração de texel por frame e toda borda de sombra rastejaria.
+   Agora o foco é arredondado para múltiplos de texel no espaço da luz.
+
+Depois: 13 asserções passando em elevação de sol de 20°, 35° e 60°, com foco em
+posição de planeta em órbita — alinhamento em 0,000 texel, profundidade na ordem
+certa, tudo dentro de [0,1], ponto a 500 m saindo da caixa, e raio 180 m cobrindo
+exatamente o dobro de 90 m.
+
+**Custo e ajustes.** 2048² cobrindo 120 m de raio dá ~0,12 m por texel, o que
+resolve tronco. PCF 3×3, bias que escala com o quanto o sol está rasante (bias
+constante gera acne em superfície de canto), e fade nos 18% externos da caixa
+para não arrastar um retângulo de sombra pelo chão. Em órbita não há caster no
+alcance e o passe degenera para um clear. Exposto no editor em *Diagnostics* com
+liga/desliga, força, raio e resolução.
+
+**Não verificado visualmente.** O SwiftShader desta máquina não completa um
+frame nem da página isolada de sombra (`client/shadow-preview.html`, que não
+carrega GLB nenhum) — o problema é o headless, não a cena. A matemática está
+testada; o que não está é como fica na tela: bias, força e raio são justamente
+os números que se ajustam olhando.
+
+**Fora do escopo:** grama não projeta (seria ruído a 0,12 m por texel), props
+não recebem sombra de props (só o terreno recebe), e não há cascata — fora dos
+120 m não há sombra projetada, só o raymarch de horizonte do §1.2.
+
+---
 
 ## 2. Pool global de workers — FEITO
 
