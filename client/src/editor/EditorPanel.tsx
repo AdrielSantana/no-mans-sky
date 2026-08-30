@@ -1370,6 +1370,19 @@ export function EditorPanel({ params, onChange }: Props) {
           <span className="editor-value">{params.sunShadowRadius}m</span>
         </div>
         <div className="editor-row">
+          <span className="editor-label">Shadow Softness</span>
+          <input
+            className="editor-slider"
+            type="range"
+            min={RANGES.sunShadowSoftness.min}
+            max={RANGES.sunShadowSoftness.max}
+            step={RANGES.sunShadowSoftness.step}
+            value={params.sunShadowSoftness}
+            onChange={e => set('sunShadowSoftness', Number(e.target.value))}
+          />
+          <span className="editor-value">{params.sunShadowSoftness.toFixed(2)}</span>
+        </div>
+        <div className="editor-row">
           <span className="editor-label">Shadow Map</span>
           <input
             className="editor-slider"

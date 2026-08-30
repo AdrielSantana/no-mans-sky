@@ -23,6 +23,21 @@ const DEFAULT_RADIUS = 120
 // Along the sun direction. Has to clear the tallest caster with room over it,
 // since the box is centred on the ground.
 const DEPTH_MARGIN = 260
+// How far the filter may spread, in shadow texels. Caps both the cost (the taps
+// thin out as the disk grows) and the leak: a penumbra wider than this starts
+// reaching under nearby casters.
+const MAX_PENUMBRA_TEXELS = 6
+// Floor, so a shadow at its contact point is still filtered rather than a hard
+// binary edge one texel wide.
+const MIN_PENUMBRA_TEXELS = 0.75
+// Metres of penumbra radius per metre of gap between caster and ground. The
+// physical value for a sun is ~0.0093 (its angular radius), which at 0.12 m per
+// texel is well under one texel and would look exactly as hard as no filtering
+// at all. This is the usual exaggeration.
+const DEFAULT_SOFTNESS = 0.25
+// In shadow-depth units, so DEPTH_MARGIN metres map to 1.0. Deliberately tiny:
+// see the note in sunShadowFactor about why there is no acne to bias away here.
+const DEFAULT_DEPTH_BIAS = 0.00025
 
 export interface SunShadowUniforms {
   uShadowMap: { value: THREE.Texture | null }
@@ -30,12 +45,16 @@ export interface SunShadowUniforms {
   // x: 1 when the map holds a usable frame, y: strength, z: texel size,
   // w: depth bias in shadow-space units.
   uShadowParams: { value: THREE.Vector4 }
+  // x: max penumbra radius in texels, y: texels of penumbra per unit of shadow
+  // depth, z: min penumbra radius in texels, w: unused.
+  uShadowSoft: { value: THREE.Vector4 }
 }
 
 const _uniforms: SunShadowUniforms = {
   uShadowMap: { value: null },
   uShadowMatrix: { value: new THREE.Matrix4() },
-  uShadowParams: { value: new THREE.Vector4(0, 0.75, 1 / DEFAULT_SIZE, 0.0015) },
+  uShadowParams: { value: new THREE.Vector4(0, 0.75, 1 / DEFAULT_SIZE, DEFAULT_DEPTH_BIAS) },
+  uShadowSoft: { value: new THREE.Vector4(MAX_PENUMBRA_TEXELS, 0, MIN_PENUMBRA_TEXELS, 0) },
 }
 
 // NDC is [-1, 1] and a texture lookup wants [0, 1].
@@ -72,8 +91,10 @@ export class SunShadowMap {
   // looks identical on screen to the map never being sampled -- worth the two
   // reads to tell those apart.
   private lastCasterDraws = 0
+  private softness = DEFAULT_SOFTNESS
 
   constructor() {
+    this.updateDerived()
     // Only casters, so the depth pass never touches terrain, ocean, clouds or
     // the skybox. Objects opt in by enabling the layer on themselves.
     this.camera.layers.set(SUN_SHADOW_CASTER_LAYER)
@@ -98,6 +119,27 @@ export class SunShadowMap {
 
   setRadius(radius: number): void {
     this.radius = Math.max(10, radius)
+    this.updateDerived()
+  }
+
+  /** Metres of penumbra radius per metre of gap between caster and receiver. */
+  setSoftness(softness: number): void {
+    this.softness = Math.max(0, softness)
+    this.updateDerived()
+  }
+
+  // The shader works in texels and shadow-depth units, both of which move when
+  // the box is resized. Folding the conversion in here keeps it off the GPU and
+  // out of the per-fragment loop.
+  private updateDerived(): void {
+    const texelWorld = (this.radius * 2) / this.size
+    _uniforms.uShadowParams.value.z = 1 / this.size
+    _uniforms.uShadowSoft.value.set(
+      MAX_PENUMBRA_TEXELS,
+      (this.softness * DEPTH_MARGIN) / texelWorld,
+      MIN_PENUMBRA_TEXELS,
+      0,
+    )
   }
 
   setSize(size: number): void {
@@ -106,7 +148,7 @@ export class SunShadowMap {
     this.size = next
     this.target?.dispose()
     this.target = null
-    _uniforms.uShadowParams.value.z = 1 / next
+    this.updateDerived()
   }
 
   private ensureTarget(): THREE.WebGLRenderTarget {
@@ -213,13 +255,17 @@ export class SunShadowMap {
     return this.hasFrame
   }
 
-  getStats(): { enabled: boolean, hasFrame: boolean, casterDraws: number, size: number, radius: number } {
+  getStats(): {
+    enabled: boolean, hasFrame: boolean, casterDraws: number,
+    size: number, radius: number, softness: number,
+  } {
     return {
       enabled: this.enabled,
       hasFrame: this.hasFrame,
       casterDraws: this.lastCasterDraws,
       size: this.size,
       radius: this.radius,
+      softness: this.softness,
     }
   }
 
@@ -239,12 +285,32 @@ export const SUN_SHADOW_PARS_GLSL = /* glsl */ `
 uniform sampler2D uShadowMap;
 uniform mat4 uShadowMatrix;
 uniform vec4 uShadowParams;
+uniform vec4 uShadowSoft;
+
+// Even-spread disk without a lookup table, which GLSL ES 1.00 cannot declare as
+// a const array. The golden angle keeps successive samples far apart, so any
+// prefix of the sequence is already well distributed.
+vec2 sunShadowDisk(float index, float count, float rotation) {
+  float radius = sqrt((index + 0.5) / count);
+  float theta = index * 2.39996323 + rotation;
+  return vec2(cos(theta), sin(theta)) * radius;
+}
+
+// Interleaved gradient noise, fed from the shadow coordinate rather than
+// gl_FragCoord. Screen-space noise would stay pinned to the display while the
+// shadow slid under it, which reads as a dirty window; keyed to shadow space it
+// sticks to the ground.
+float sunShadowDither(vec2 p) {
+  return fract(52.9829189 * fract(dot(p, vec2(0.06711056, 0.00583715))));
+}
 
 // 1.0 in full light, down to (1 - strength) in full shadow.
 //
-// The bias scales with how grazing the sun is: a surface nearly edge-on to the
-// light spans many depth units inside one shadow texel, which is what produces
-// acne when a constant bias is used instead.
+// Percentage-closer soft shadows: find what is blocking the light, then widen
+// the filter with the gap between blocker and receiver. A trunk meeting the
+// ground stays sharp at the contact and the canopy's shadow spreads out, which
+// is what the eye reads as a soft shadow -- a uniformly blurred one just looks
+// out of focus.
 float sunShadowFactor(vec3 worldPos, float nDotL) {
   if (uShadowParams.x < 0.5 || uShadowParams.y <= 0.0) return 1.0;
 
@@ -254,21 +320,54 @@ float sunShadowFactor(vec3 worldPos, float nDotL) {
   // guess that does not put a hard edge on the ground at the box boundary.
   if (coord.x < 0.0 || coord.x > 1.0 || coord.y < 0.0 || coord.y > 1.0 || coord.z > 1.0) return 1.0;
 
+  float texel = uShadowParams.z;
+  // Only props and the player are drawn into the map and neither of them
+  // receives from it, so no surface can shadow itself and there is no acne to
+  // push away -- this only has to clear depth quantisation. A large bias here
+  // would cost far more than it bought: it detaches a shadow from the foot of
+  // whatever casts it.
   float slope = clamp(1.0 - abs(nDotL), 0.0, 1.0);
   float bias = uShadowParams.w * (0.35 + slope * 3.0);
-  float texel = uShadowParams.z;
+  float maxRadius = uShadowSoft.x * texel;
+  float rotation = sunShadowDither(coord.xy / texel) * 6.28318531;
 
-  // 2x2 rotated-free PCF. Cheap, and at 0.12 m per texel it is enough to stop
-  // the edge reading as a staircase.
-  float lit = 0.0;
-  for (int y = -1; y <= 1; y++) {
-    for (int x = -1; x <= 1; x++) {
-      vec2 offset = vec2(float(x), float(y)) * texel;
-      float depth = texture2D(uShadowMap, coord.xy + offset).r;
-      lit += step(coord.z - bias, depth);
+  const float BLOCKER_TAPS = 8.0;
+  float blockerSum = 0.0;
+  float blockerCount = 0.0;
+  // The centre tap is unconditional: a trunk is narrow enough that a rotated
+  // ring can miss it entirely, and a missed blocker punches a lit hole in the
+  // middle of a shadow.
+  float centre = texture2D(uShadowMap, coord.xy).r;
+  if (centre < coord.z - bias) {
+    blockerSum = centre;
+    blockerCount = 1.0;
+  }
+  for (int i = 0; i < 8; i++) {
+    vec2 offset = sunShadowDisk(float(i), BLOCKER_TAPS, rotation) * maxRadius;
+    float depth = texture2D(uShadowMap, coord.xy + offset).r;
+    if (depth < coord.z - bias) {
+      blockerSum += depth;
+      blockerCount += 1.0;
     }
   }
-  lit /= 9.0;
+  // Nothing between this point and the sun. Most of the ground takes this exit,
+  // which makes the lit case cheaper than the fixed 3x3 it replaces.
+  if (blockerCount < 0.5) return 1.0;
+
+  float blockerDepth = blockerSum / blockerCount;
+  // uShadowSoft.y already carries the metres-per-texel and depth-range
+  // conversion, so this is a gap in depth units turned straight into texels.
+  float penumbra = (coord.z - blockerDepth) * uShadowSoft.y;
+  float radius = clamp(penumbra, uShadowSoft.z, uShadowSoft.x) * texel;
+
+  const float PCF_TAPS = 16.0;
+  float lit = 0.0;
+  for (int i = 0; i < 16; i++) {
+    vec2 offset = sunShadowDisk(float(i), PCF_TAPS, rotation) * radius;
+    float depth = texture2D(uShadowMap, coord.xy + offset).r;
+    lit += step(coord.z - bias, depth);
+  }
+  lit /= PCF_TAPS;
 
   // Fade the whole thing out towards the box edge so walking does not drag a
   // visible rectangle of shadow across the ground.

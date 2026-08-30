@@ -123,6 +123,7 @@ function applyDebugSettings(engine: GameEngine, planet: PlanetRenderer, params: 
     strength: params.sunShadowStrength,
     radius: params.sunShadowRadius,
     size: params.sunShadowSize,
+    softness: params.sunShadowSoftness,
   })
   engine.setBloomSettings({
     strength: params.bloomStrength,
@@ -347,7 +348,7 @@ export function EditorCanvas({ params }: Props) {
         // sampled", and both look like no shadows at all.
         const shadowStats = engine.getSunShadowStats()
         const shadowDiag = shadowStats.enabled
-          ? `${shadowStats.size}@${shadowStats.radius}m casters=${shadowStats.casterDraws}${shadowStats.hasFrame ? '' : ' NOFRAME'}`
+          ? `${shadowStats.size}@${shadowStats.radius}m soft=${shadowStats.softness.toFixed(2)} casters=${shadowStats.casterDraws}${shadowStats.hasFrame ? '' : ' NOFRAME'}`
           : 'off'
 
         perfOverlay.textContent = [

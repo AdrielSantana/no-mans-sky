@@ -544,10 +544,11 @@ export class GameEngine {
     this.sunShadow.setEnabled(enabled)
   }
 
-  setSunShadowSettings(settings: { strength: number; radius: number; size: number }) {
+  setSunShadowSettings(settings: { strength: number; radius: number; size: number; softness: number }) {
     this.sunShadow.setStrength(settings.strength)
     this.sunShadow.setRadius(settings.radius)
     this.sunShadow.setSize(settings.size)
+    this.sunShadow.setSoftness(settings.softness)
   }
 
   getSunShadowEnabled(): boolean {
