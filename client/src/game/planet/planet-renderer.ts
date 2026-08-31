@@ -105,9 +105,17 @@ const MAX_OCEAN_WORKERS = 3
 // Extra tiers drop in without a code change: models carrying fewer tiers are
 // clamped per part inside PlanetPropLayer.setLodTier, so adding a fraction here
 // before the assets exist is harmless.
-// 0.35/0.62/0.86 of 648m => ~227m, ~402m, ~557m. Sized against on-screen
-// height: a 15m tree is ~68px at 227m, ~39px at 402m and ~28px at 557m.
-const PROP_LOD_DISTANCE_FRACTIONS = [0.35, 0.62, 0.86]
+// In metres, not as a fraction of the draw distance. These were derived from
+// on-screen height -- a 15m tree is ~68px at 227m, ~39px at 402m and ~28px at
+// 557m -- and how tall a tree looks does not depend on how far away the
+// furthest drawn tree is. They used to be 0.35/0.62/0.86, which produced these
+// same numbers only while propDistance was 648m; raising the default to 2200m
+// stretched the ladder 3.4x and left tier 0, the full ~1500-card canopy, valid
+// out to 770m. Measured at ~3ms of frame time.
+//
+// A draw distance shorter than a threshold simply means that tier is never
+// reached, which is correct: everything drawn really is near.
+const PROP_LOD_DISTANCES = [227, 402, 557]
 const PROP_LOD_HYSTERESIS = 0.12
 // Cap on prop sun-light jobs queued on the dedicated worker. It processes
 // messages serially, so an unbounded queue would just accumulate results that
@@ -3186,11 +3194,10 @@ export class PlanetRenderer {
   }
 
   private resolvePropLodTier(dist: number, currentTier: number): number {
-    const distance = this.propSettings.distance
     let tier = 0
 
-    for (let i = 0; i < PROP_LOD_DISTANCE_FRACTIONS.length; i++) {
-      const threshold = distance * PROP_LOD_DISTANCE_FRACTIONS[i]
+    for (let i = 0; i < PROP_LOD_DISTANCES.length; i++) {
+      const threshold = PROP_LOD_DISTANCES[i]
       // Asymmetric bound: a boundary already crossed has to be re-crossed by
       // the hysteresis margin to step back down, so a chunk sitting on it does
       // not swap geometry every frame.
