@@ -58,6 +58,7 @@ import {
   PlanetPropLayer,
   getPlanetPropAssets,
   loadPlanetPropAssets,
+  setFoliageShadowLodTier,
   setPlanetPropFoliagePalettes,
   updatePlanetPropMaterials,
   type PlanetPropAssets,
@@ -1505,6 +1506,14 @@ export class PlanetRenderer {
     if (this.oceanMaterial) this.oceanMaterial.wireframe = enabled
     if (this.cloudMaterial) this.cloudMaterial.wireframe = enabled
     if (this.cloudBillboardMaterial) this.cloudBillboardMaterial.wireframe = enabled
+  }
+
+  /**
+   * Foliage LOD tier used while filling the shadow map, independent of what
+   * the camera sees. -1 keeps foliage out of the map entirely.
+   */
+  setFoliageShadowLodTier(tier: number) {
+    setFoliageShadowLodTier(tier)
   }
 
   setDebugRendering(options: {

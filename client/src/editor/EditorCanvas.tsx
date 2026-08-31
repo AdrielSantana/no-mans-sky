@@ -350,7 +350,7 @@ export function EditorCanvas({ params }: Props) {
         // sampled", and both look like no shadows at all.
         const shadowStats = engine.getSunShadowStats()
         const shadowDiag = shadowStats.enabled
-          ? `${shadowStats.size}@${shadowStats.radius}m soft=${shadowStats.softness.toFixed(2)} casters=${shadowStats.casterDraws}${shadowStats.hasFrame ? '' : ' NOFRAME'}`
+          ? `${shadowStats.size}@${shadowStats.radius}m soft=${shadowStats.softness.toFixed(2)} casters=${shadowStats.casterDraws}/${(shadowStats.casterTriangles/1e6).toFixed(2)}Mtri${shadowStats.hasFrame ? '' : ' NOFRAME'}`
           : 'off'
 
         const gpuTimings = engine.getGpuTimings()

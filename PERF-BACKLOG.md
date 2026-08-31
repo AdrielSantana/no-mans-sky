@@ -144,6 +144,40 @@ Nenhuma alavanca isolada fecha os ~24 ms. A ordem por retorno medido:
 
 ---
 
+## 0c. Folhagem no mapa de sombra — FEITO, mas rende menos do que eu estimei
+
+`onBeforeRender`/`onAfterRender` na malha de folhagem trocam o `drawRange` só
+durante o passe de profundidade, então a copa entra no mapa no tier 3 (15% dos
+cards) enquanto a câmera continua vendo o tier que a distância pede. Ajustável
+via `PlanetRenderer.setFoliageShadowLodTier`; -1 tira a folhagem do mapa.
+
+**Medido direto, contando triângulos do passe (imune à deriva térmica):**
+
+| tier no mapa | Mtri no mapa de sombra |
+|---|---|
+| 0 (como era) | 0,99 |
+| 3 (15% cards) | 0,72 |
+| sem folhagem (-1) | 0,66 |
+
+A folhagem é **0,33 Mtri de 0,99** — troncos e pedras são o dobro dela. A
+estimativa de ~3 ms do §0 foi derivada indiretamente (`sem sombra` menos `sem
+folhagem+sombra`) e estava **errada**: o efeito real é ~1 ms, abaixo do ruído
+de medição. A mudança fica porque corta 27% da geometria do passe de sombra de
+graça e sem diferença visível, não porque resolve o problema.
+
+**Resolução do mapa não é alavanca.** 2048 → 512 é 16x menos fill no passe de
+profundidade e não produziu mudança mensurável. O passe é limitado por
+geometria, não por rasterização — o que também significa que aumentar a
+resolução do mapa é mais barato do que parece.
+
+**Aviso sobre o ambiente de medição.** Ao final desta sessão a mesma cena que
+media 42 ms passou a medir 55–64 ms sem nenhuma mudança de código, e pares A/B
+repetidos deram faixas de ±13 ms. Efeitos de 1–2 ms não são mensuráveis nesse
+estado. Medir de novo em máquina fria antes de confiar em qualquer número
+pequeno daqui.
+
+---
+
 ## 1. Props — o subsistema mais pesado que sobrou
 
 Todos os quatro problemas identificados foram corrigidos: backface culling e

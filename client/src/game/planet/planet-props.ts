@@ -1,5 +1,6 @@
 import * as THREE from 'three'
 import { SUN_SHADOW_CASTER_LAYER } from '../render-layers'
+import { isSunShadowCamera } from './sun-shadow'
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js'
 // Geometry-only LOD tiers. Their embedded textures were shrunk to 8x8 because
 // only the geometry is read -- the material always comes from the base model.
@@ -1015,6 +1016,24 @@ function disposeInstancedGeometry(geometry: THREE.BufferGeometry, source: THREE.
   geometry.dispose()
 }
 
+// Foliage LOD tier used while drawing into the shadow map, independent of the
+// tier the camera sees.
+//
+// Every caster is inside the 120 m shadow box and therefore inside tier 0's
+// 770 m band, so the depth pass was drawing all ~1500 cards of every tree
+// within range -- measured at 3 ms, for a canopy blob whose outline survives a
+// fraction of that. -1 drops foliage from the map entirely, which leaves a bare
+// trunk shadow.
+let foliageShadowTier = 3
+
+export function setFoliageShadowLodTier(tier: number): void {
+  foliageShadowTier = Math.max(-1, Math.min(3, Math.round(tier)))
+}
+
+export function getFoliageShadowLodTier(): number {
+  return foliageShadowTier
+}
+
 function foliageIndexCount(cardCount: number, tier: number): number {
   const fraction = FOLIAGE_LOD_FRACTIONS[Math.min(tier, FOLIAGE_LOD_FRACTIONS.length - 1)]
   return Math.max(0, Math.round(cardCount * fraction)) * 6
@@ -1101,6 +1120,27 @@ export class PlanetPropLayer {
         // the foliage material's alpha-test discard is what makes the shadow
         // leaf-shaped instead of a rectangle per card.
         mesh.layers.enable(SUN_SHADOW_CASTER_LAYER)
+        // Swapped per draw rather than per frame: the same mesh is drawn twice,
+        // once for the camera and once for the depth pass, and only the second
+        // one wants the cheap card count. three reads drawRange after
+        // onBeforeRender and before onAfterRender, so this lands on the draw it
+        // is meant for.
+        const cameraRange = () => geometry.drawRange.count
+        let restoreRange = -1
+        mesh.onBeforeRender = (_renderer, _scene, camera) => {
+          if (!isSunShadowCamera(camera)) return
+          restoreRange = cameraRange()
+          const shadowRange = foliageShadowTier < 0
+            ? 0
+            : foliageIndexCount(foliage.cardCount, foliageShadowTier)
+          if (shadowRange < restoreRange) geometry.setDrawRange(0, shadowRange)
+          else restoreRange = -1
+        }
+        mesh.onAfterRender = () => {
+          if (restoreRange < 0) return
+          geometry.setDrawRange(0, restoreRange)
+          restoreRange = -1
+        }
         mesh.name = `planet-foliage-${placement.model.id}`
         mesh.userData.planetProp = true
         mesh.userData.planetPropModel = placement.model.id

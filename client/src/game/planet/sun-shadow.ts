@@ -14,6 +14,13 @@ import { SUN_SHADOW_CASTER_LAYER } from '../render-layers'
 // material spreads them once at construction and never needs a per-frame
 // update path of its own.
 
+export const SUN_SHADOW_CAMERA_FLAG = 'isSunShadowCamera'
+
+/** True while `camera` is the one drawing the shadow depth pass. */
+export function isSunShadowCamera(camera: THREE.Camera): boolean {
+  return camera.userData[SUN_SHADOW_CAMERA_FLAG] === true
+}
+
 const DEFAULT_SIZE = 2048
 // Metres of surface the map covers, as a radius around the focus point. The
 // shadow only has to hold up where the player is standing: at 120 m a 2048 map
@@ -91,10 +98,15 @@ export class SunShadowMap {
   // looks identical on screen to the map never being sampled -- worth the two
   // reads to tell those apart.
   private lastCasterDraws = 0
+  private lastCasterTriangles = 0
   private softness = DEFAULT_SOFTNESS
 
   constructor() {
     this.updateDerived()
+    // Lets a caster recognise the depth pass and draw itself more cheaply for
+    // it. Cheaper than threading a flag through render(), and it survives the
+    // object being drawn by anything else.
+    this.camera.userData[SUN_SHADOW_CAMERA_FLAG] = true
     // Only casters, so the depth pass never touches terrain, ocean, clouds or
     // the skybox. Objects opt in by enabling the layer on themselves.
     this.camera.layers.set(SUN_SHADOW_CASTER_LAYER)
@@ -105,6 +117,7 @@ export class SunShadowMap {
     if (!enabled) {
       this.hasFrame = false
       this.lastCasterDraws = 0
+      this.lastCasterTriangles = 0
       _uniforms.uShadowParams.value.x = 0
     }
   }
@@ -238,6 +251,7 @@ export class SunShadowMap {
     // The engine turns off info.autoReset and resets once per frame, so the
     // counter accumulates and the delta is this pass's own draws.
     const drawsBefore = renderer.info.render.calls
+    const trianglesBefore = renderer.info.render.triangles
     renderer.setRenderTarget(target)
     renderer.autoClear = true
     renderer.clear(true, true, false)
@@ -245,6 +259,7 @@ export class SunShadowMap {
     renderer.setRenderTarget(previousTarget)
     renderer.autoClear = previousAutoClear
     this.lastCasterDraws = Math.max(0, renderer.info.render.calls - drawsBefore)
+    this.lastCasterTriangles = Math.max(0, renderer.info.render.triangles - trianglesBefore)
 
     this.hasFrame = true
     _uniforms.uShadowMap.value = target.depthTexture
@@ -257,12 +272,13 @@ export class SunShadowMap {
 
   getStats(): {
     enabled: boolean, hasFrame: boolean, casterDraws: number,
-    size: number, radius: number, softness: number,
+    size: number, radius: number, softness: number, casterTriangles: number,
   } {
     return {
       enabled: this.enabled,
       hasFrame: this.hasFrame,
       casterDraws: this.lastCasterDraws,
+      casterTriangles: this.lastCasterTriangles,
       size: this.size,
       radius: this.radius,
       softness: this.softness,
@@ -276,6 +292,7 @@ export class SunShadowMap {
     _uniforms.uShadowParams.value.x = 0
     this.hasFrame = false
     this.lastCasterDraws = 0
+    this.lastCasterTriangles = 0
   }
 }
 
