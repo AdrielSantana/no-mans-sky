@@ -76,6 +76,74 @@ Medido submerso, com 1176 chunks visíveis: `planet.update` = **18,08 ms** de
 CPU por frame (p95 24,5), contra 4,8 ms em terra. `walker.update` é 0,05 ms nos
 dois casos. É um gargalo de CPU distinto do de vegetação e não foi investigado.
 
+## 0b. Onde exatamente está o custo da vegetação — 2026-08-31
+
+Segundo ponto de medição, mais denso que o de §0: 1412 draws, 9,9 M triângulos,
+~42 ms de frame, 3894 objetos de vegetação. Números não comparáveis 1:1 com os
+de §0 (outro local), mas as proporções internas valem.
+
+### Decomposição do custo (24 ms de vegetação a 1,07 MP)
+
+Variando a resolução e ajustando reta sobre três pontos (1,07 / 0,52 / 0,27 MP
+→ 23,87 / 18,15 / 15,08 ms): **custo = 12,1 ms fixo + 11,0 ms por megapixel.**
+
+| componente | ms | como foi medido |
+|---|---|---|
+| fill / overdraw | ~12 | inclinação da reta contra resolução |
+| vértices na GPU | ~10 | resto do fixo, menos a CPU abaixo |
+| submissão na CPU | 1,85 | `composer.render` com e sem vegetação, 1102 draws de diferença = 1,7 µs/draw |
+
+**Draw call não é o gargalo.** É metade fill, metade processamento de vértice.
+O vertex shader de prop faz iluminação por vértice, vento e o skirt — pesado, e
+roda em ~7 M de vértices.
+
+### Distribuição por distância (folhagem, 5,56 Mtri)
+
+| faixa | % dos triângulos | ms | ms por Mtri |
+|---|---|---|---|
+| 0–50 m | 1,0 | — | — |
+| 50–200 m | 18,5 | 8,89 | **3,80** |
+| 200–400 m | 20,5 | 3,06 | 2,03 |
+| 400–800 m | 21,1 | 2,88 | 1,70 |
+| 800 m+ | 38,9 | 2,96 | 1,06 |
+
+95% dos triângulos de folhagem estão além de 50 m e 80% além de 200 m — mas o
+custo **por triângulo** cai por um fator de 3,6 com a distância, porque o que
+está longe cobre poucos pixels. Cortar o desenho em 400 m devolve 5,84 ms de
+40,5 (14%), não os 60% que a contagem de triângulos sugere.
+
+### Apertar a escada de LOD rende pouco
+
+`PROP_LOD_DISTANCE_FRACTIONS = [0.35, 0.62, 0.86]` sobre `propDistance = 2200`
+deixa o tier 0 (100% dos cards) valendo até **770 m**. Testado em runtime
+sobrescrevendo `resolvePropLodTier`:
+
+| escada | tier0 até | Mtri | ganho |
+|---|---|---|---|
+| [0.35 0.62 0.86] (atual) | 770 m | 9,92 | — |
+| [0.15 0.30 0.55] | 330 m | 8,63 | 1,69 ms |
+| [0.07 0.18 0.40] | 154 m | 7,82 | 2,94 ms |
+| [0.03 0.09 0.25] | 66 m | 6,54 | **6,07 ms** |
+
+Mesmo o ajuste absurdo (tier 0 só até 66 m) tira 34% dos triângulos para ganhar
+14% de frame. `FOLIAGE_LOD_FRACTIONS` termina em 0,15: a escada não consegue
+descer o suficiente. **Impostor de 2 triângulos é o único degrau que falta.**
+
+### Consequência para o plano
+
+Nenhuma alavanca isolada fecha os ~24 ms. A ordem por retorno medido:
+
+1. **Impostores além de ~400 m.** Ataca vértice e fill ao mesmo tempo, nos ~60%
+   das instâncias que hoje custam 5,8 ms e ainda carregam geometria completa.
+2. **Folhagem fora do mapa de sombra.** Medido em §0: 5,33 ms com folhagem,
+   2,28 ms sem. Sombra de tronco entrega quase toda a leitura visual.
+3. **Apertar a escada de LOD** para algo como [0.10 0.25 0.50]. Barato, ~3 ms,
+   e complementa o impostor em vez de competir com ele.
+4. **Reduzir overdraw perto** — menos cards e maiores. Ataca os ~12 ms de fill,
+   mas mexe na aparência da copa e precisa de avaliação visual.
+
+---
+
 ## 1. Props — o subsistema mais pesado que sobrou
 
 Todos os quatro problemas identificados foram corrigidos: backface culling e
