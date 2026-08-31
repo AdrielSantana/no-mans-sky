@@ -115,7 +115,9 @@ const MAX_OCEAN_WORKERS = 3
 //
 // A draw distance shorter than a threshold simply means that tier is never
 // reached, which is correct: everything drawn really is near.
-const PROP_LOD_DISTANCES = [227, 402, 557]
+// 850m and 1300m put a 15m tree at ~18px and ~12px. Trunk models carry four
+// tiers and are clamped to their last one, so these two only move foliage.
+const PROP_LOD_DISTANCES = [227, 402, 557, 850, 1300]
 const _grassTint = new THREE.Color()
 const _grassTintB = new THREE.Color()
 const PROP_LOD_HYSTERESIS = 0.12
