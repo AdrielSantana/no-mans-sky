@@ -58,6 +58,19 @@ class CloudCompositePass extends Pass {
   private clearColor = new THREE.Color()
   private cloudRenderObjects: THREE.Object3D[] = []
   private cloudObjectRefreshFrame = CLOUD_OBJECT_REFRESH_INTERVAL
+  // The cloud pass draws two meshes and used to walk the whole planet twice a
+  // frame to find them: WebGLRenderer.projectObject prunes a subtree only on
+  // `visible === false`, never on a failed layer test, so setting the camera to
+  // the cloud layer hid the other 2600 nodes without saving the cost of
+  // visiting them. Measured at 0.93ms per empty traversal, 1.9ms a frame for
+  // four draw calls.
+  //
+  // These objects keep their real parent -- only `children` is borrowed -- so
+  // updateMatrixWorld still composes each one against the planet group's world
+  // matrix and they stay where they belong. Safe because the pass runs after
+  // the scene pass, so that matrix is already current for this frame, and
+  // because no cloud material asks for scene lights or fog.
+  private cloudScene = new THREE.Scene()
   private depthOnlyMaterial = new THREE.MeshBasicMaterial({
     colorWrite: false,
     depthWrite: true,
@@ -198,6 +211,7 @@ class CloudCompositePass extends Pass {
     this.scene.traverse(object => {
       if ((object.layers.mask & cloudLayerMask) !== 0) this.cloudRenderObjects.push(object)
     })
+    this.cloudScene.children = this.cloudRenderObjects
   }
 
   private isVisibleInHierarchy(object: THREE.Object3D): boolean {
@@ -212,34 +226,33 @@ class CloudCompositePass extends Pass {
   private renderClouds(renderer: THREE.WebGLRenderer) {
     const previousTarget = renderer.getRenderTarget()
     const previousAutoClear = renderer.autoClear
-    const previousBackground = this.scene.background
-    const previousOverrideMaterial = this.scene.overrideMaterial
     const previousCameraMask = this.camera.layers.mask
     const previousClearAlpha = renderer.getClearAlpha()
     renderer.getClearColor(this.clearColor)
 
+    // Nothing here touches the main scene any more. It used to have to blank
+    // its background and restore it, because it was the scene being drawn.
     try {
-      this.scene.background = null
-      renderer.setRenderTarget(this.cloudTarget)
       renderer.setClearColor(0x000000, 0)
 
-      this.scene.overrideMaterial = this.depthOnlyMaterial
-
+      // The camera mask still matters: it is what stops a cloud object that
+      // lost its layer from being drawn into the cloud buffer regardless.
       this.camera.layers.set(CLOUD_RENDER_LAYER)
+
+      this.cloudScene.overrideMaterial = this.depthOnlyMaterial
       renderer.setRenderTarget(this.cloudDepthTarget)
       renderer.clear(true, true, true)
-      renderer.render(this.scene, this.camera)
-      this.scene.overrideMaterial = previousOverrideMaterial
+      renderer.render(this.cloudScene, this.camera)
+      this.cloudScene.overrideMaterial = null
 
       renderer.autoClear = false
       renderer.setRenderTarget(this.cloudTarget)
       renderer.clear(true, true, true)
-      renderer.render(this.scene, this.camera)
+      renderer.render(this.cloudScene, this.camera)
     } finally {
-      this.scene.overrideMaterial = previousOverrideMaterial
+      this.cloudScene.overrideMaterial = null
       renderer.autoClear = previousAutoClear
       this.camera.layers.mask = previousCameraMask
-      this.scene.background = previousBackground
       renderer.setClearColor(this.clearColor, previousClearAlpha)
       renderer.setRenderTarget(previousTarget)
     }
