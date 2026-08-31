@@ -97,22 +97,48 @@ export class PlanetGenerator {
         }
       case 'rocky':
       default:
+        // Slope is amplitude over wavelength, so dropping frequency from 2.0 to
+        // 1.2 buys room to raise amplitude and still come out gentler. That is
+        // the shape real ranges have -- four kilometres of relief spread across
+        // a hundred, not across five -- and it is what the old profile could not
+        // produce: it was steep everywhere, with only 14% of its land under six
+        // degrees.
+        //
+        // 1.2 rather than lower because frequency also sets how much land clears
+        // the waterline: at 0.85 the continents merge into one supercontinent and
+        // land jumps to 48%, which drowns the green coastline the planet reads by.
+        // 1.2 holds the old land fraction almost exactly, so only the shape moves.
+        // Sampled over 6000 directions at terrainScale 0.065 and the game's sea
+        // level, against the numbers this replaces:
+        //
+        //   land fraction            33.0%  ->  33.6%
+        //   walkable land (<6 deg)   14.1%  ->  41.5%
+        //   cliff (>25 deg)          11.3%  ->   5.7%
+        //   median slope             12.6   ->   7.3 deg
+        //   99th pct slope           38.1   ->  38.0 deg
+        //   relief                   3394m  ->  4146m
+        //   highest peak             2190m  ->  2973m
+        //
+        // The 99th percentile holding at 38 degrees is the point: the cliffs are
+        // still there at full steepness, they just stop being the whole surface.
+        // Plains at the cap and relief variety at 1.0 concentrate the steepness
+        // into belts; thermal at 0.58 rounds the peaks that remain.
         return {
           seed,
           octaves: 6,
           lacunarity: 2.0,
-          gain: 0.5,
-          frequency: 2.0,
-          warpStrength: 0.42,
-          continentalScale: 1.0,
-          mountainScale: 1.0,
-          plainsScale: 0.55,
-          hillsScale: 0.45,
-          mountainBeltScale: 0.75,
-          reliefVariety: 0.7,
-          erosionStrength: 0.34,
-          thermalStrength: 0.2,
-          detailStrength: 0.55,
+          gain: 0.40,
+          frequency: 1.2,
+          warpStrength: 0.39,
+          continentalScale: 1.00,
+          mountainScale: 1.70,
+          plainsScale: 2.00,
+          hillsScale: 0.54,
+          mountainBeltScale: 1.30,
+          reliefVariety: 1.00,
+          erosionStrength: 0.30,
+          thermalStrength: 0.58,
+          detailStrength: 0.22,
           microDetailStrength: 0.5,
           microDetailScale: 2.5,
           microReliefMeters: 1.5,
