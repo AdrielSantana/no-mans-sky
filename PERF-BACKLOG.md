@@ -76,6 +76,81 @@ Medido submerso, com 1176 chunks visíveis: `planet.update` = **18,08 ms** de
 CPU por frame (p95 24,5), contra 4,8 ms em terra. `walker.update` é 0,05 ms nos
 dois casos. É um gargalo de CPU distinto do de vegetação e não foi investigado.
 
+## 0d. O frame é limitado pela GPU, não pela CPU — 2026-08-31
+
+Esta seção existe para impedir que a medição errada seja refeita. Anotada com a
+máquina sob carga (um job de Docker rodando em paralelo), então os valores
+absolutos estão inflados; as conclusões relativas e estruturais não dependem
+disso.
+
+### A armadilha
+
+Instrumentar `performance.now()` em volta de `renderer.render()` deu **16,56 ms
+num frame de 21 ms**, e eu li isso como "79% do frame é JavaScript". Está
+errado. `render()` submete comandos, e quando a fila do driver enche a chamada
+**bloqueia esperando a GPU**. O que aquele número mede é contrapressão, não
+trabalho de CPU.
+
+Três testes independentes confirmam que não é CPU:
+
+| removido | trabalho cortado | efeito no frame |
+|---|---|---|
+| escada de LOD apertada | 760 k triângulos (−27%) | nada (rodada 1 −4,5 ms, rodada 2 +1,6 ms) |
+| `scene.matrixWorldAutoUpdate = false` | ~2,4 ms de recomposição de matriz | **−0,10 ms** |
+| sombra de nuvem movida para o vertex shader | `atan`+`asin`+`pow`+fetch por fragmento | pior (19,9 contra 17,2 ms) |
+
+O teste de matriz é o mais forte: `updateMatrixWorld` medido isolado custa
+0,88 ms e o render vazio cai de 1,37 para 0,14 ms sem ele — trabalho real,
+removido, com zero efeito no frame.
+
+### O que responde
+
+Só resolução. Varrendo o pixel ratio numa cena assentada (692 draws, 2,85 M
+triângulos):
+
+| DPR | pixels | frame |
+|---|---|---|
+| 1,00 | 100% | 19,8 ms |
+| 0,50 | 25% | 15,4 ms |
+| 0,35 | 12% | 14,1 ms |
+
+Ajustando `frame = fixo + fragmento × dpr²`: **fragmento ≈ 5,9 ms, fixo ≈ 13,9
+ms**. O fill é real mas é menos de um terço. Os outros 13,9 ms não responderam
+a triângulo nem a CPU — o suspeito que sobra é contagem de draw call e troca de
+estado (692 draws), e isso ainda não foi testado isoladamente.
+
+### Como medir sem se enganar de novo
+
+A cena faz streaming por 2 a 4 minutos depois de pousar. Medir antes disso
+transforma carregamento em "resultado": qualquer configuração medida mais tarde
+parece mais cara. Duas medições inteiras foram perdidas assim. `assentar()` em
+`scratchpad/harness.mjs` só libera depois que draws e triângulos param de
+crescer **e** passam de um piso mínimo — sem o piso ele aprova uma cena vazia
+que ainda nem começou a carregar.
+
+### A cena é renderizada 4× por frame
+
+Não são 4 vezes a mesma imagem; são 4 passadas distintas sobre a mesma cena:
+
+| passada | resolução | layer | draws | CPU em `render()` |
+|---|---|---|---|---|
+| cor principal | 1470×745 | 0 | 508 | 5,57 ms |
+| shadow map do sol | 2048² orto | 3 | 124 | 3,48 ms |
+| profundidade da nuvem | 735×372 | 1 | 2 | 3,44 ms |
+| cor da nuvem | 735×372 | 1 | 2 | (as duas juntas) |
+
+As duas de nuvem gastavam 3,44 ms para emitir 4 draws porque
+`WebGLRenderer.projectObject` só poda subárvore em `visible === false` — falhar
+no teste de layer ainda desce em todos os filhos. Corrigido (a passada agora
+renderiza uma `Scene` enxuta apontada para os objetos que ela já coletava):
+3,44 → 0,17 ms. **Não foi demonstrado ganho de frame time**, pelo motivo acima;
+é folga de CPU, não fps.
+
+O shadow map ainda paga a travessia inteira para achar 124 casters. Mesma
+correção se aplica, mas a lista de casters muda a cada chunk que entra.
+
+---
+
 ## 0b. Onde exatamente está o custo da vegetação — 2026-08-31
 
 Segundo ponto de medição, mais denso que o de §0: 1412 draws, 9,9 M triângulos,
