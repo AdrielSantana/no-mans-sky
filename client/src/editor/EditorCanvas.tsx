@@ -118,9 +118,7 @@ function createPlanet(scene: THREE.Scene, renderer: THREE.WebGLRenderer, params:
 function applyDebugSettings(engine: GameEngine, planet: PlanetRenderer, params: EditorParams) {
   engine.setBloomEnabled(params.debugBloom)
   engine.setGpuProfilingEnabled(params.debugGpuProfiler)
-  if (engine.getPixelRatioLimit() !== Math.min(window.devicePixelRatio, params.pixelRatioLimit)) {
-    engine.setPixelRatioLimit(params.pixelRatioLimit)
-  }
+  engine.setPixelRatioCeiling(params.pixelRatioLimit)
   engine.setAntialiasEnabled(params.debugAntialias)
   engine.setSunShadowEnabled(params.debugSunShadow)
   engine.setSunShadowSettings({

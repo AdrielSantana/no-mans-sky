@@ -10,6 +10,72 @@ GPU sumiram. O HUD (`?perf`) agora reporta `draw`/`tri` de verdade.
 
 ---
 
+## 0. Baseline medido na superfície — 2026-08-31
+
+Primeira medição real deste branch. Chrome 152, Apple M5 (ANGLE Metal), modo
+walk em terra firme, DPR 1 (o walker já derruba de 2 para 1 em
+`planet-walker-controller.ts:262`), canvas 885x745, 941 draws, 7,0 M triângulos.
+
+Método: A/B diferencial por frame time via CDP. Cada grupo é escondido forçando
+`visible` a um getter constante — `o.visible = false` sozinho não funciona,
+porque `planet.update()` reatribui a visibilidade todo frame e desfaz o teste
+antes do próximo draw. Baselines pareados antes e depois de cada configuração
+para cancelar deriva; dispersão do baseline ±0,11 a ±0,45 ms.
+
+| configuração | fps | frame | ganho |
+|---|---|---|---|
+| baseline | 33,5 | 29,89 ms | — |
+| sem folhagem | 46,5 | 21,49 ms | **8,40 ms** |
+| sem sombra projetada | 40,7 | 24,56 ms | **5,33 ms** |
+| sem grama | 40,4 | 24,94 ms | **4,40 ms** |
+| sem props (tronco/pedra) | 40,1 | 25,26 ms | **4,29 ms** |
+| sem folhagem + sem sombra | 52,0 | 19,21 ms | 10,68 ms |
+| **sem vegetação nenhuma** | **60,1** | **16,65 ms** | **13,24 ms** |
+| sem vegetação + sem sombra | 60,0 | 16,66 ms | 13,23 ms |
+
+**Toda a distância até 60 fps é vegetação.** Sem ela o frame bate o teto de
+vsync com folga: terreno, nuvens, oceano, atmosfera, bloom, SMAA e a cadeia de
+pós inteira cabem no orçamento. Medidos separadamente, bloom e SMAA custam
+−0,08 ms cada — ou seja, zero dentro do ruído.
+
+Duas leituras que corrigem suposições anteriores:
+
+- **O terreno é praticamente de graça.** Escondê-lo aparentava 17,05 ms, mas
+  8,40 + 4,40 + 4,29 = 17,09: esconder os chunks esconde a vegetação presa a
+  eles. A geometria de terreno em si não aparece na conta.
+- **A sombra projetada é cara por causa da folhagem, não por si.** Sozinha
+  custa 5,33 ms; depois de remover a folhagem, só 2,28 ms. O passe está
+  redesenhando ~1,8 M de triângulos de cartões de folha num mapa 2048².
+
+Alvos, em ordem de retorno medido:
+
+1. **Folhagem (8,40 ms).** 600 objetos, 2037 instâncias, ~1,8 M triângulos —
+   cerca de 900 triângulos de cartão por árvore (`winter-tree: 321 anchors, 963
+   cards`; `oak-tree: 523 anchors, 1569 cards`). Alpha-test com `discard` mata
+   early-Z e o overdraw de copa é alto. LOD de contagem de cartões por
+   distância é o caminho.
+2. **Folhagem fora do mapa de sombra (≈3 ms).** Sombra de tronco entrega quase
+   toda a leitura visual; cartão de folha a 0,12 m por texel não resolve.
+3. **Batching de props (4,29 ms).** 3348 instâncias em ~396 draws são 8,5
+   instâncias por chamada — instanciar por chunk anula o ganho de instanciar.
+   Agrupar por modelo entre chunks levaria a ~8 draws.
+4. **Grama (4,40 ms)** para 800.854 instâncias em 753 draws. Batching aqui está
+   bom (1063 por draw); o custo é fill. Prioridade menor que os três acima.
+
+### Aviso sobre o profiler de GPU do HUD
+
+`EXT_disjoint_timer_query_webgl2` existe neste backend mas **mente**: a soma das
+regiões deu 54,8 ms num frame de 17,4 ms, com piso de ~7,5 ms por região (um
+quad fullscreen a 0,66 MP não custa 7,46 ms). ANGLE/Metal parece medir latência
+de command buffer, não trabalho. Use A/B diferencial de frame time; os números
+do `gpu ...` no HUD só servem para comparar um mesmo rótulo consigo mesmo.
+
+### Pendência separada: `planet.update` embaixo d'água
+
+Medido submerso, com 1176 chunks visíveis: `planet.update` = **18,08 ms** de
+CPU por frame (p95 24,5), contra 4,8 ms em terra. `walker.update` é 0,05 ms nos
+dois casos. É um gargalo de CPU distinto do de vegetação e não foi investigado.
+
 ## 1. Props — o subsistema mais pesado que sobrou
 
 Todos os quatro problemas identificados foram corrigidos: backface culling e

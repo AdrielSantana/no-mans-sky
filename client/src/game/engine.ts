@@ -408,6 +408,8 @@ export class GameEngine {
   private skybox: THREE.Mesh
   private clock = new THREE.Clock()
   private pixelRatioLimit = Math.min(window.devicePixelRatio, 2)
+  private pixelRatioCeiling = 2
+  private pixelRatioOverride = 2
   private sunLight: THREE.PointLight | null = null
   private bloomPass: UnrealBloomPass | null = null
   private outputPass: OutputPass | null = null
@@ -709,8 +711,27 @@ export class GameEngine {
     return this.gpuProfiler.isSupported()
   }
 
+  /**
+   * Ceiling the user asked for. Kept apart from the walker's override so the
+   * two cannot clobber each other: the walker drops to 1x on the surface, and
+   * before this split any editor slider change would have shoved it back to 2x
+   * mid-walk.
+   */
+  setPixelRatioCeiling(ceiling: number) {
+    this.pixelRatioCeiling = ceiling
+    this.applyPixelRatio()
+  }
+
   setPixelRatioLimit(limit: number) {
-    this.pixelRatioLimit = Math.min(window.devicePixelRatio, limit)
+    this.pixelRatioOverride = limit
+    this.applyPixelRatio()
+  }
+
+  private applyPixelRatio() {
+    const limit = Math.min(this.pixelRatioCeiling, this.pixelRatioOverride)
+    const next = Math.min(window.devicePixelRatio, limit)
+    if (next === this.pixelRatioLimit) return
+    this.pixelRatioLimit = next
     this.renderer.setPixelRatio(this.pixelRatioLimit)
     this.composer.setPixelRatio(this.pixelRatioLimit)
     // handleResize bails when the CSS size is unchanged, which it always is
