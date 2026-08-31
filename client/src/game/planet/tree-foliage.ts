@@ -70,23 +70,19 @@ export const DEFAULT_FOLIAGE_SETTINGS: FoliageSettings = {
 // Cards per LOD tier, as a fraction of the full set. Tier 3 keeps a sixth of
 // the cards but the material scales them up to hold roughly the same canopy
 // mass, so the silhouette survives even though the detail does not.
-//
-// Tiers 4 and 5 exist for distances where a tree is a couple of dozen pixels
-// tall. They hold the canopy *area* of tier 3 exactly -- 0.15 x 1.35^2 = 0.273,
-// and 0.06 x 2.13^2 and 0.025 x 3.31^2 are both 0.273 too -- so stepping into
-// them changes how much green is there by nothing at all, only how many cards
-// it is spread across. 1569 cards on an oak become 94 and then 39.
-export const FOLIAGE_LOD_FRACTIONS = [1, 0.55, 0.30, 0.15, 0.06, 0.025]
+// Tiers past 3 were tried and removed. They held tier 3's canopy area exactly
+// while collapsing an oak from 235 cards to 39, and the arithmetic was right --
+// but they sat at 850m and 1300m, and props stop being drawn at 648m in game
+// (WORLD_SCALE.localDetailFar * 3.6). They were unreachable, and the bounding
+// sphere below is padded by the *last* tier's boost, so they cost culling
+// everywhere to buy nothing. Measuring the editor's 2200m draw distance instead
+// of the game's is what hid that.
+export const FOLIAGE_LOD_FRACTIONS = [1, 0.55, 0.30, 0.15]
 // Deliberately well short of the 1/sqrt(fraction) that would hold leaf *area*
 // constant (that would be 2.6x at tier 3). Past roughly 1.35 a card stops
 // reading as a clump of leaves and starts reading as one enormous leaf, which
 // is far more noticeable than the canopy being slightly thinner.
-// The 1.35 ceiling is a near-field limit and stops applying once it stops being
-// possible to see a card. At 557m a 15m tree is ~28px tall, so a card spanning
-// a third of its canopy is ~9px: "one enormous leaf" and "a clump of leaves"
-// are the same handful of pixels, and the objection above is about detail that
-// no longer reaches the screen.
-export const FOLIAGE_LOD_SIZE_BOOST = [1, 1.10, 1.22, 1.35, 2.13, 3.31]
+export const FOLIAGE_LOD_SIZE_BOOST = [1, 1.10, 1.22, 1.35]
 
 // ── Deterministic RNG ─────────────────────────────────────
 function mulberry32(seed: number): () => number {
@@ -504,14 +500,10 @@ export function buildFoliageGeometry(
   // pivots. Frustum culling reads this, and a sphere sized to the pivots would
   // pop the canopy out at the screen edge.
   //
-  // "Largest" is the last tier's boost, so adding the far tiers grew this pad
-  // from 0.105 x 1.45 x 1.35 = 0.21 of tree height to 0.50 -- about +3.9m on a
-  // 13m tree. It is charged against culling at every distance, not just the one
-  // that needs it, because the geometry is shared by every chunk drawing this
-  // model and cannot be re-padded per tier. The sphere it lands on covers a
-  // whole chunk of trees, so the growth is small against that radius; if a
-  // profile ever shows foliage surviving culling it should not, this is where
-  // to look.
+  // Note this reads the *last* tier's boost, so any tier added to
+  // FOLIAGE_LOD_SIZE_BOOST widens every foliage sphere at every distance, not
+  // only where the new tier applies. The geometry is shared by every chunk
+  // drawing the model, so it cannot be re-padded per tier.
   geometry.computeBoundingSphere()
   if (geometry.boundingSphere) {
     geometry.boundingSphere.radius += DEFAULT_FOLIAGE_SETTINGS.size
