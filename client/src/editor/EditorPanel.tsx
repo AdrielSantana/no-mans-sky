@@ -1370,6 +1370,30 @@ export function EditorPanel({ params, onChange }: Props) {
           <span className="editor-value">{params.sunShadowRadius}m</span>
         </div>
         <div className="editor-row">
+          <label style={{ display: 'flex', alignItems: 'center', gap: 6, cursor: 'pointer' }}>
+            <input
+              type="checkbox"
+              checked={params.debugGpuProfiler}
+              onChange={e => set('debugGpuProfiler', e.target.checked)}
+              style={{ accentColor: '#2dd4a7' }}
+            />
+            <span className="editor-label" style={{ width: 'auto' }}>GPU Profiler</span>
+          </label>
+        </div>
+        <div className="editor-row">
+          <span className="editor-label">Pixel Ratio</span>
+          <input
+            className="editor-slider"
+            type="range"
+            min={RANGES.pixelRatioLimit.min}
+            max={RANGES.pixelRatioLimit.max}
+            step={RANGES.pixelRatioLimit.step}
+            value={params.pixelRatioLimit}
+            onChange={e => set('pixelRatioLimit', Number(e.target.value))}
+          />
+          <span className="editor-value">{params.pixelRatioLimit.toFixed(2)}x</span>
+        </div>
+        <div className="editor-row">
           <span className="editor-label">Shadow Softness</span>
           <input
             className="editor-slider"

@@ -117,6 +117,10 @@ function createPlanet(scene: THREE.Scene, renderer: THREE.WebGLRenderer, params:
 
 function applyDebugSettings(engine: GameEngine, planet: PlanetRenderer, params: EditorParams) {
   engine.setBloomEnabled(params.debugBloom)
+  engine.setGpuProfilingEnabled(params.debugGpuProfiler)
+  if (engine.getPixelRatioLimit() !== Math.min(window.devicePixelRatio, params.pixelRatioLimit)) {
+    engine.setPixelRatioLimit(params.pixelRatioLimit)
+  }
   engine.setAntialiasEnabled(params.debugAntialias)
   engine.setSunShadowEnabled(params.debugSunShadow)
   engine.setSunShadowSettings({
@@ -351,10 +355,21 @@ export function EditorCanvas({ params }: Props) {
           ? `${shadowStats.size}@${shadowStats.radius}m soft=${shadowStats.softness.toFixed(2)} casters=${shadowStats.casterDraws}${shadowStats.hasFrame ? '' : ' NOFRAME'}`
           : 'off'
 
+        const gpuTimings = engine.getGpuTimings()
+        const gpuTotal = gpuTimings.reduce((sum, t) => sum + t.ms, 0)
+        const gpuLine = !paramsRef.current.debugGpuProfiler
+          ? 'gpu profiler off'
+          : !engine.isGpuProfilingSupported()
+            ? 'gpu timer queries unsupported'
+            : gpuTotal <= 0
+              ? 'gpu measuring...'
+              : `gpu ${gpuTimings.map(t => `${t.label}=${t.ms.toFixed(2)}`).join(' ')} total=${gpuTotal.toFixed(2)}ms @${engine.getPixelRatioLimit().toFixed(2)}x`
+
         perfOverlay.textContent = [
           `fps=${(1000 / avg(frameSamples)).toFixed(1)} frame=${avg(frameSamples).toFixed(1)}ms p95=${pct(sortedFrames, 0.95).toFixed(1)}ms`,
           `update=${avg(updateSamples).toFixed(2)}ms p95=${pct(sortedUpdates, 0.95).toFixed(2)}ms`,
           `draw=${engine.renderer.info.render.calls} tri=${engine.renderer.info.render.triangles}`,
+          gpuLine,
           `geo=${engine.renderer.info.memory.geometries} tex=${engine.renderer.info.memory.textures}`,
           `diag bloom=${paramsRef.current.debugBloom ? 'on' : 'off'} aa=${paramsRef.current.debugAntialias ? 'smaa' : 'off'} shadow=${shadowDiag} atmosphere=${paramsRef.current.debugAtmosphere ? 'on' : 'off'} clouds=${paramsRef.current.debugClouds ? 'on' : 'off'} simpleTerrain=${paramsRef.current.debugSimpleTerrain ? 'on' : 'off'}`,
           bloom

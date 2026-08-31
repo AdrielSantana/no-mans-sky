@@ -119,6 +119,8 @@ export interface EditorParams {
   sunShadowRadius: number
   sunShadowSize: number
   sunShadowSoftness: number
+  debugGpuProfiler: boolean
+  pixelRatioLimit: number
   debugAtmosphere: boolean
   debugClouds: boolean
   debugSimpleTerrain: boolean
@@ -265,6 +267,8 @@ export const DEFAULT_PARAMS: EditorParams = {
   sunShadowRadius: 120,
   sunShadowSize: 2048,
   sunShadowSoftness: 0.25,
+  debugGpuProfiler: true,
+  pixelRatioLimit: 2,
   debugAtmosphere: true,
   debugClouds: true,
   debugSimpleTerrain: false,
@@ -352,6 +356,7 @@ export const RANGES = {
   sunShadowRadius: { min: 20, max: 400, step: 5 },
   sunShadowSize: { min: 512, max: 4096, step: 512 },
   sunShadowSoftness: { min: 0, max: 1, step: 0.01 },
+  pixelRatioLimit: { min: 0.5, max: 2, step: 0.25 },
   bloomStrength: { min: 0, max: 3, step: 0.01 },
   bloomRadius: { min: 0, max: 1.5, step: 0.01 },
   bloomThreshold: { min: 0, max: 2, step: 0.01 },

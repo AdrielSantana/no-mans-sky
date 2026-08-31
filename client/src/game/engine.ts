@@ -10,6 +10,7 @@ import { createSkybox } from './skybox'
 import { WORLD_SCALE } from './world-scale'
 import { CLOUD_RENDER_LAYER } from './render-layers'
 import { SunShadowMap } from './planet/sun-shadow'
+import { GpuProfiler } from './gpu-profiler'
 
 // Upper bound on a single frame's delta. Returning from a hidden tab hands
 // Clock.getDelta() the whole elapsed wall time.
@@ -411,6 +412,7 @@ export class GameEngine {
   private bloomPass: UnrealBloomPass | null = null
   private outputPass: OutputPass | null = null
   private smaaPass: SMAAPass | null = null
+  private gpuProfiler: GpuProfiler
   private sunShadow = new SunShadowMap()
   private sunShadowDir = new THREE.Vector3()
   private cloudPass: CloudCompositePass | null = null
@@ -501,6 +503,9 @@ export class GameEngine {
     // needs device pixels or its edge search walks the wrong texel distance.
     smaaPass.setSize(width * this.pixelRatioLimit, height * this.pixelRatioLimit)
     this.smaaPass = smaaPass
+
+    this.gpuProfiler = new GpuProfiler(this.renderer)
+    this.instrumentComposerPasses()
 
     this.setupLights()
 
@@ -669,11 +674,55 @@ export class GameEngine {
     this.controls.update()
   }
 
+  // Wraps each pass's render so the profiler sees it by name. Done by
+  // replacing the method rather than by subclassing every pass type, since
+  // three's passes come from examples/jsm and are not ours to extend. A
+  // disabled pass is simply never called, and the profiler zeroes it.
+  private instrumentComposerPasses(): void {
+    const labels = new Map<object, string>([
+      [this.cloudPass as object, 'clouds'],
+      [this.bloomPass as object, 'bloom'],
+      [this.underwaterPass as object, 'underwater'],
+      [this.outputPass as object, 'output'],
+      [this.smaaPass as object, 'smaa'],
+    ])
+    for (const pass of this.composer.passes) {
+      const label = labels.get(pass as object) ?? 'scene'
+      const original = pass.render.bind(pass)
+      pass.render = (...args: Parameters<typeof pass.render>) => {
+        this.gpuProfiler.begin(label)
+        original(...args)
+        this.gpuProfiler.end()
+      }
+    }
+  }
+
+  setGpuProfilingEnabled(enabled: boolean) {
+    this.gpuProfiler.setEnabled(enabled)
+  }
+
+  getGpuTimings() {
+    return this.gpuProfiler.getTimings()
+  }
+
+  isGpuProfilingSupported(): boolean {
+    return this.gpuProfiler.isSupported()
+  }
+
   setPixelRatioLimit(limit: number) {
     this.pixelRatioLimit = Math.min(window.devicePixelRatio, limit)
     this.renderer.setPixelRatio(this.pixelRatioLimit)
     this.composer.setPixelRatio(this.pixelRatioLimit)
+    // handleResize bails when the CSS size is unchanged, which it always is
+    // here -- only the device-pixel multiplier moved. Without this the render
+    // targets keep the old resolution and changing the limit does nothing.
+    this.lastWidth = 0
+    this.lastHeight = 0
     this.handleResize()
+  }
+
+  getPixelRatioLimit(): number {
+    return this.pixelRatioLimit
   }
 
   getDomElement(): HTMLCanvasElement {
@@ -740,6 +789,7 @@ export class GameEngine {
       const dt = Math.min(this.clock.getDelta(), MAX_FRAME_DELTA)
       this.elapsedTime += dt
       this.renderer.info.reset()
+      this.gpuProfiler.beginFrame()
       this.controls.update()
       onFrame?.(dt)
       this.underwaterPass?.setTime(this.elapsedTime)
@@ -749,7 +799,9 @@ export class GameEngine {
       // range and the pass degenerates to a clear.
       if (this.sunLight) {
         this.sunShadowDir.copy(this.sunLight.position).sub(this.camera.position).normalize()
+        this.gpuProfiler.begin('shadow')
         this.sunShadow.render(this.renderer, this.scene, this.sunShadowDir, this.camera.position)
+        this.gpuProfiler.end()
       }
       this.composer.render()
     }
@@ -766,6 +818,7 @@ export class GameEngine {
   dispose() {
     this.stop()
     this.sunShadow.dispose()
+    this.gpuProfiler.dispose()
     window.removeEventListener('resize', this.boundResize)
     this.resizeObserver?.disconnect()
     this.resizeObserver = null
