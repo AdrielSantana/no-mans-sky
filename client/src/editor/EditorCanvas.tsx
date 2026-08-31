@@ -140,6 +140,7 @@ function applyDebugSettings(engine: GameEngine, planet: PlanetRenderer, params: 
     distortion: params.underwaterDistortion,
     murk: params.underwaterMurk,
   })
+  planet.setGrassGroundTintStrength(params.grassGroundTint)
   planet.setDebugRendering({
     showAtmosphere: params.debugAtmosphere,
     showClouds: params.debugClouds,

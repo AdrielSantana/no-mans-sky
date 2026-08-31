@@ -116,6 +116,8 @@ const MAX_OCEAN_WORKERS = 3
 // A draw distance shorter than a threshold simply means that tier is never
 // reached, which is correct: everything drawn really is near.
 const PROP_LOD_DISTANCES = [227, 402, 557]
+const _grassTint = new THREE.Color()
+const _grassTintB = new THREE.Color()
 const PROP_LOD_HYSTERESIS = 0.12
 // Cap on prop sun-light jobs queued on the dedicated worker. It processes
 // messages serially, so an unbounded queue would just accumulate results that
@@ -328,6 +330,7 @@ export class PlanetRenderer {
   private cloudBillboardVisibleCount = 0
   private grassMaterial: THREE.ShaderMaterial | null = null
   private farGrassMaterial: THREE.ShaderMaterial | null = null
+  private grassGroundTintStrength = 0.7
   private grassLayers = new Map<string, FluffyGrassLayer>()
   private farGrassLayers = new Map<string, FluffyGrassLayer>()
   private grassSettings: FluffyGrassSettings = {
@@ -967,6 +970,10 @@ export class PlanetRenderer {
 
   private updateGrassGroundAoUniforms() {
     const strength = this.getGrassGroundAoStrength()
+    // Blades read as mix(colorA, colorB, tip), and tip averages out around the
+    // middle of the blade, so this is what a patch of grass looks like once it
+    // is too far away to resolve individual blades.
+    _grassTint.set(this.grassSettings.colorA).lerp(_grassTintB.set(this.grassSettings.colorB), 0.55)
     const materials = [
       this.material,
       ...this.farLodMaterials,
@@ -974,7 +981,20 @@ export class PlanetRenderer {
     ]
     for (const material of materials) {
       this.setFloatUniform(material, 'uGrassGroundAoStrength', strength)
+      this.setFloatUniform(material, 'uGrassGroundTintStrength', this.grassGroundTintStrength)
+      const tint = material.uniforms.uGrassGroundTint
+      if (tint) (tint.value as THREE.Color).copy(_grassTint)
     }
+  }
+
+  /**
+   * How strongly the ground takes on the grass colour where grass grows. This
+   * is what carries a meadow once the blades themselves have faded out, so it
+   * is what makes a short grass draw distance survivable.
+   */
+  setGrassGroundTintStrength(strength: number) {
+    this.grassGroundTintStrength = THREE.MathUtils.clamp(strength, 0, 1)
+    this.updateGrassGroundAoUniforms()
   }
 
   private updateLightColorUniforms() {

@@ -763,6 +763,19 @@ export function EditorPanel({ params, onChange }: Props) {
           <span className="editor-value">{params.grassDistance.toFixed(0)}m</span>
         </div>
         <div className="editor-row">
+          <span className="editor-label">Ground Tint</span>
+          <input
+            className="editor-slider"
+            type="range"
+            min={RANGES.grassGroundTint.min}
+            max={RANGES.grassGroundTint.max}
+            step={RANGES.grassGroundTint.step}
+            value={params.grassGroundTint}
+            onChange={e => set('grassGroundTint', Number(e.target.value))}
+          />
+          <span className="editor-value">{params.grassGroundTint.toFixed(2)}</span>
+        </div>
+        <div className="editor-row">
           <span className="editor-label">Base Color</span>
           <input
             className="editor-color"

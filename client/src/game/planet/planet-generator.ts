@@ -423,6 +423,8 @@ vec3 applyPlanetLighting(vec3 albedo, vec3 normal, vec3 radialNormal, vec3 world
 
 const TERRAIN_GRASS_AO_GLSL = /* glsl */ `
 uniform float uGrassGroundAoStrength;
+uniform vec3 uGrassGroundTint;
+uniform float uGrassGroundTintStrength;
 
 float terrainGrassGroundMask(float grassPatch, float heightNorm, float moisture, float slope, float coast, float rockMask, float snowMask) {
   if (uPlanetKind > 0.5) return 0.0;
@@ -443,7 +445,20 @@ vec3 applyGrassGroundAo(vec3 color, float grassPatch, float heightNorm, float mo
   float mask = terrainGrassGroundMask(grassPatch, heightNorm, moisture, slope, coast, rockMask, snowMask);
   float amount = clamp(mask * uGrassGroundAoStrength, 0.0, 0.48);
   vec3 occluded = color * vec3(0.58, 0.62, 0.52);
-  return mix(color, occluded, amount);
+  color = mix(color, occluded, amount);
+
+  // Paint the ground the colour of the blades that grow on it, wherever they
+  // grow -- not only out where they stop being drawn. Up close the blades hide
+  // this completely, so there is no distance term here and therefore no seam to
+  // hide when they fade: the tint is simply what is left behind.
+  //
+  // Luminance comes from the terrain and only the hue comes from the grass.
+  // Blending towards a flat colour instead would erase relief, AO and the
+  // ground noise over every meadow, which reads as a painted-on patch.
+  float lum = dot(color, vec3(0.2126, 0.7152, 0.0722));
+  float tintLum = max(dot(uGrassGroundTint, vec3(0.2126, 0.7152, 0.0722)), 1e-4);
+  vec3 grassAtThisLum = uGrassGroundTint * (lum / tintLum);
+  return mix(color, grassAtThisLum, clamp(mask * uGrassGroundTintStrength, 0.0, 1.0));
 }
 `
 
@@ -973,6 +988,8 @@ export function createPlanetMaterial(params: {
       uTextureFarStrength: { value: params.textureFarStrength },
       uTerrainAoStrength: { value: params.terrainAoStrength },
       uGrassGroundAoStrength: { value: 0 },
+      uGrassGroundTint: { value: new THREE.Color(0x5c7a43) },
+      uGrassGroundTintStrength: { value: 0 },
       uSurfaceLightingBlend: { value: 0 },
     },
   })
@@ -1273,6 +1290,8 @@ export function createPlanetFarMaterial(params: {
       uTextureFarStrength: { value: params.textureFarStrength },
       uTerrainAoStrength: { value: params.terrainAoStrength },
       uGrassGroundAoStrength: { value: 0 },
+      uGrassGroundTint: { value: new THREE.Color(0x5c7a43) },
+      uGrassGroundTintStrength: { value: 0 },
       uSurfaceLightingBlend: { value: 0 },
     },
   })

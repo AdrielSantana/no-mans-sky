@@ -53,6 +53,7 @@ export interface EditorParams {
   grassHeight: number
   grassWindStrength: number
   grassDistance: number
+  grassGroundTint: number
   grassColorA: string
   grassColorB: string
   propsEnabled: boolean
@@ -210,6 +211,7 @@ export const DEFAULT_PARAMS: EditorParams = {
   grassHeight: 1.15,
   grassWindStrength: 1.5,
   grassDistance: 1500,
+  grassGroundTint: 0.7,
   grassColorA: '#1f6f2e',
   grassColorB: '#64b94a',
   propsEnabled: true,
@@ -319,6 +321,7 @@ export const RANGES = {
   grassHeight: { min: 0.15, max: 8, step: 0.05 },
   grassWindStrength: { min: 0, max: 2, step: 0.01 },
   grassDistance: { min: 20, max: 2500, step: 10 },
+  grassGroundTint: { min: 0, max: 1, step: 0.01 },
   treeDensity: { min: 0, max: 1.5, step: 0.01 },
   rockDensity: { min: 0, max: 1.5, step: 0.01 },
   propDistance: { min: 100, max: 6000, step: 25 },
