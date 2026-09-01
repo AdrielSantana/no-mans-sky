@@ -151,6 +151,61 @@ correção se aplica, mas a lista de casters muda a cada chunk que entra.
 
 ---
 
+## 0e. Onde isto parou, e o que ficou por testar — 2026-08-31
+
+Parado por decisão do Adriel: o jogo roda a 60 fps e o que restava custava
+qualidade visível por ~1 ms de cada vez. Não é um beco sem saída, é um platô.
+
+### Linha de base para comparar no futuro
+
+Máquina ociosa (importante: com um job de Docker em paralelo os mesmos números
+oscilaram 5 ms), editor, modo walk, ponto de terra no percentil 80, DPR 1,
+cena assentada em **692 draws e 2,85 M triângulos**: frame ~17,5 ms. Pela
+varredura de pixel ratio, fill ≈ metade do frame.
+
+Densidades vigentes: `treeDensity 0.08`, `rockDensity 0.06`, `grassDensity
+0.75`. Isso importa para ler qualquer número antigo: com `treeDensity 0.2`,
+remover a folhagem inteira economizava 8,40 ms; com 0,08 economiza **1,9 ms**.
+O corte de densidade rendeu mais do que todas as otimizações de código
+somadas. Qualquer medição anterior a esse corte está superestimada.
+
+### Menu de LOD, medido e fotografado
+
+Ganho contra uma linha de base pareada tirada imediatamente antes de cada uma
+(o controle — repetir a escada atual — deu 0,2 ms, que é o piso de ruído):
+
+| escada | ganho | custo visual |
+|---|---|---|
+| `[227,402,557]` atual | — | — |
+| `[110,220,380]` | 0,4 ms | nenhum perceptível |
+| `[60,140,260]` | **1,1 ms** | copas visivelmente mais ralas a partir de ~60 m |
+| `[30,70,140]` | 1,2 ms | idem, mais forte |
+
+A escada preserva silhueta de propósito: `FOLIAGE_LOD_SIZE_BOOST` alarga os
+cards conforme o tier cai. É por isso que ela corta vértices sem cortar pixels,
+e por isso o ganho é pequeno num frame limitado por fill.
+
+### O que continua sem resposta
+
+1. **Draw calls nunca foram isolados.** São 692, e nada do que testei os
+   mexeu. O único teste que tentei — esconder metade dos chunks — abriu buracos
+   no céu e derrubou fill junto, além de ter rodado em DPR 2 por engano. Um
+   teste válido precisa mudar a contagem de chamadas sem mudar pixels nem
+   triângulos. É a maior pergunta aberta.
+2. **O shadow map ainda percorre a cena inteira** para achar 124 casters, pelo
+   mesmo motivo que a passada de nuvem percorria (ver 0d). A mesma correção
+   serve, mas a lista de casters muda a cada chunk que entra, então precisa de
+   invalidação, não de um refresh a cada N frames.
+3. **Early-Z na folhagem.** O `discard` do alpha test desliga o teste de
+   profundidade antecipado, então todo fragmento de folha sombreia antes de ser
+   descartado — exatamente o pior caso num frame limitado por fill. Nunca testei
+   um depth prepass.
+4. **`alphaToCoverage: alphaTest > 0` em `planet-props.ts`.** Só faz efeito com
+   MSAA ligado. Nunca verifiquei se o alvo de render tem MSAA: se tiver, é caro;
+   se não tiver, a linha é inerte e engana quem ler.
+
+---
+
 ## 0b. Onde exatamente está o custo da vegetação — 2026-08-31
 
 Segundo ponto de medição, mais denso que o de §0: 1412 draws, 9,9 M triângulos,
