@@ -51,7 +51,7 @@ export class CelestialSystem {
       if (this.disposed) { ship.dispose(); return }
       this.ship = ship
       this.landed = new LandedShip(ship)
-      engine.scene.add(ship.object, ship.sunLight)
+      engine.scene.add(ship.object)
       ship.object.visible = false
       this.boarding = new ShipBoardingController(engine, this.walkerController, ship, this.landed)
     }).catch(error => console.error('Falha ao carregar a nave', error))
@@ -141,7 +141,7 @@ export class CelestialSystem {
       const radius = this.ship.object.position.distanceTo(target.worldPosition)
       this.ship.setSunLighting(this.sunPosition, this.engine.getSunColor(new THREE.Color()),
         planetSunlightFactor(up.dot(sunlight), target.terrain.radius, radius,
-          atmosphereDepthAt(target.terrain.radius, target.terrain.radius, radius)))
+          atmosphereDepthAt(target.terrain.radius, target.terrain.radius, radius)), target)
     }
     this.sun?.update(dt)
     for (const renderer of this.planetRenderers.values()) renderer.update(this.engine.camera, dt)

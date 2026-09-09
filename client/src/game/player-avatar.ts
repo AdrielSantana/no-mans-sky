@@ -1,4 +1,5 @@
 import * as THREE from "three";
+import { EXPLORER_PALETTE_GLSL } from "./explorer-palette";
 import { useMeshLocalBoneMatrices, LOCAL_SKINNING_VERTEX, LOCAL_SKIN_NORMAL_VERTEX } from "./local-skinning";
 import { SUN_SHADOW_CASTER_LAYER } from "./render-layers";
 import { planetSunlightFactor } from "./planet-sunlight";
@@ -392,9 +393,9 @@ export class PlayerAvatar {
           vec3 atmosphericSunTint = mix(vec3(1.0), uAtmosphereLightColor, 0.70);
           atmosphericSunTint = mix(atmosphericSunTint, sunsetTint, lowSun * 0.59);
           vec3 sunTint = mix(uSunColor, atmosphericSunTint, atmosphereInfluence);
-          vec3 sunlight = sunTint * (direct * 1.12 + wrap * 0.22) * day;
+          vec3 sunlight = sunTint * (direct * 1.0 + wrap * 0.15) * day;
           vec3 terrain = vec3(0.23, 0.25, 0.20) * groundBounce;
-          vec3 minimumLight = mix(vec3(0.010, 0.014, 0.022), vec3(0.055), day);
+          vec3 minimumLight = mix(vec3(0.010, 0.014, 0.022), vec3(0.035), day);
           vLight = max(ambient + sunlight + terrain, minimumLight);
 
           // Compose the camera-relative transform on the CPU before float32 skinning.
@@ -416,6 +417,8 @@ export class PlayerAvatar {
 
         varying vec2 vUv;
         varying vec3 vLight;
+
+        ${EXPLORER_PALETTE_GLSL}
 
         vec2 cloudMaskUv(vec3 dir) {
           vec3 n = normalize(dir);
@@ -442,7 +445,7 @@ export class PlayerAvatar {
 
         void main() {
           vec3 texel = texture2D(uMap, vUv).rgb;
-          vec3 color = texel * vLight;
+          vec3 color = explorerPalette(texel, 0.55) * vLight;
           float cloudShadow = playerCloudShadowMask();
           vec3 coolShadow = color * vec3(0.11, 0.14, 0.19);
           color = mix(color, coolShadow, clamp(cloudShadow, 0.0, 0.96));

@@ -35,7 +35,7 @@ export class RemoteExplorers {
         void loadShipModel({ lengthMeters: 12, renderer: this.system.engine.renderer }).then(ship => {
           if (!created.alive) { ship.dispose(); return }
           created.ship = ship
-          this.system.engine.scene.add(ship.object, ship.sunLight)
+          this.system.engine.scene.add(ship.object)
         }).catch(error => console.error('Nave remota', error))
       } else if (actor.next.updatedAt.microsSinceUnixEpoch !== row.updatedAt.microsSinceUnixEpoch) {
         actor.previous = actor.next
@@ -100,7 +100,7 @@ export class RemoteExplorers {
         const light = planet ? planetSunlightFactor(
           ship.position.clone().sub(planet.worldPosition).normalize().dot(sun.clone().sub(ship.position).normalize()),
           planet.terrain.radius, radius, atmosphereDepthAt(planet.terrain.radius, planet.terrain.radius, radius)) : 1
-        actor.ship.setSunLighting(sun, engine.getSunColor(new THREE.Color()), light)
+        actor.ship.setSunLighting(sun, engine.getSunColor(new THREE.Color()), light, planet ?? undefined)
       }
     }
   }

@@ -1,0 +1,18 @@
+{
+  "jitter": {
+    "avatar": {
+      "changedPixels": 0,
+      "meanChannelError": 0
+    },
+    "world": {
+      "changedPixels": 0,
+      "legacyProjection": false,
+      "meanChannelError": 0
+    }
+  },
+  "lighting": {
+    "independentOfSceneLights": true,
+    "shaderErrors": 0,
+    "shadowToSunRatio": 0.012907836407522875
+  }
+}

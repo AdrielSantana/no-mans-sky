@@ -174,7 +174,6 @@ export function EditorCanvas({ params }: Props) {
         const landed = new LandedShip(ship)
         landed.place(spawnDirection.addScaledVector(east.normalize(), offset), 0)
         engine.scene.add(ship.object)
-        engine.scene.add(ship.sunLight)
         shipRef.current = ship
         landedShipRef.current = landed
         boardingRef.current = new ShipBoardingController(engine, walker, ship, landed)
@@ -352,6 +351,7 @@ export function EditorCanvas({ params }: Props) {
               shipRadius,
             ),
           ),
+          target,
         )
       }
       // After the walker: while piloting, the boarding controller owns the
