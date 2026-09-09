@@ -2,7 +2,12 @@ import { useEffect, useRef } from 'react'
 import * as THREE from 'three'
 import { GameEngine } from '../game/engine'
 import { PlanetRenderer } from '../game/planet/planet-renderer'
+import { createPlanet, applyDebugSettings, buildWalkerTarget } from '../game/planet-factory'
+import { atmosphereDepthAt, planetSunlightFactor } from '../game/planet-sunlight'
 import { PlanetWalkerController, type PlanetWalkerTarget } from '../game/planet-walker-controller'
+import { loadShipModel, type ShipModel } from '../game/ship/ship-model'
+import { LandedShip } from '../game/ship/landed-ship'
+import { ShipBoardingController } from '../game/ship/ship-boarding-controller'
 import type { EditorParams } from './editor-defaults'
 
 interface Props {
@@ -11,6 +16,12 @@ interface Props {
 
 const PERF_QUERY_PARAM = 'perf'
 const PLANET_ROTATION_AXIS = new THREE.Vector3(0, 1, 0)
+// Hull length in metres. A guess to be looked at, not a decision: the avatar is
+// 1.78 m, so this is a hull a little over six people long.
+const SHIP_LENGTH_METERS = 12
+// Tangential offset from the walker's spawn point, so pressing H drops the
+// player beside the ship rather than inside it.
+const SHIP_SPAWN_OFFSET_METERS = 14
 
 declare global {
   interface Window {
@@ -18,127 +29,13 @@ declare global {
       engine: GameEngine
       planet: PlanetRenderer
       walker: PlanetWalkerController
+      ship: ShipModel | null
+      boarding: ShipBoardingController | null
     }
   }
 }
 
-function getEffectiveWaterLevel(params: EditorParams): number {
-  return params.waterEnabled ? params.waterLevel : 0
-}
-
-function createPlanet(scene: THREE.Scene, renderer: THREE.WebGLRenderer, params: EditorParams): PlanetRenderer {
-  const waterLevel = getEffectiveWaterLevel(params)
-
-  return new PlanetRenderer(scene, params.planetRadius, {
-    seed: BigInt(params.seed),
-    planetType: params.planetType,
-    terrainScale: params.terrainScale,
-    waterLevel,
-    oceanDeepColor: params.oceanDeepColor,
-    oceanShallowColor: params.oceanShallowColor,
-    oceanFoamColor: params.oceanFoamColor,
-    oceanClarity: params.oceanClarity,
-    oceanAbsorption: params.oceanAbsorption,
-    oceanTurbidity: params.oceanTurbidity,
-    oceanReflectionStrength: params.oceanReflectionStrength,
-    oceanWaveHeight: params.oceanWaveHeight,
-    oceanWindSpeed: params.oceanWindSpeed,
-    oceanDetail: params.oceanDetail,
-    oceanChoppiness: params.oceanChoppiness,
-    oceanFoamStrength: params.oceanFoamStrength,
-    oceanSpecularStrength: params.oceanSpecularStrength,
-    colorA: params.colorA,
-    colorB: params.colorB,
-    textureScale: params.textureScale,
-    textureBlend: params.textureBlend,
-    textureNearDistance: params.textureNearDistance,
-    textureFadeDistance: params.textureFadeDistance,
-    terrainAoStrength: params.terrainAoStrength,
-    atmosphereColor: params.atmosphereColor,
-    atmosphereDensity: params.atmosphereDensity,
-    atmosphereSunGlare: params.atmosphereSunGlare,
-    atmosphereSunGlareSize: params.atmosphereSunGlareSize,
-    atmosphereTwilightColor: params.atmosphereTwilightColor,
-    atmosphereTwilightWidth: params.atmosphereTwilightWidth,
-    atmosphereTwilightStrength: params.atmosphereTwilightStrength,
-    atmosphereExtinctionStrength: params.atmosphereExtinctionStrength,
-    cloudCoverage: params.cloudCoverage,
-    cloudOpacity: params.cloudOpacity,
-    cloudScale: params.cloudScale,
-    cloudSoftness: params.cloudSoftness,
-    cloudHeight: params.cloudHeight,
-    cloudSpeed: params.cloudSpeed,
-    cloudShadow: params.cloudShadow,
-    cloudVolume: params.cloudVolume,
-    cloudStorms: params.cloudStorms,
-    cloudBands: params.cloudBands,
-    cloudDetail: params.cloudDetail,
-    cloudColor: params.cloudColor,
-    cloudBillboards: params.cloudBillboards,
-    cloudBillboardCount: params.cloudBillboardCount,
-    grassEnabled: params.grassEnabled,
-    grassDensity: params.grassDensity,
-    grassHeight: params.grassHeight,
-    grassWindStrength: params.grassWindStrength,
-    grassDistance: params.grassDistance,
-    grassColorA: params.grassColorA,
-    grassColorB: params.grassColorB,
-    propsEnabled: params.propsEnabled,
-    treeDensity: params.treeDensity,
-    rockDensity: params.rockDensity,
-    propDistance: params.propDistance,
-    sunColor: params.sunColor,
-    noiseProfile: {
-      octaves: params.octaves,
-      lacunarity: params.lacunarity,
-      gain: params.gain,
-      frequency: params.frequency,
-      warpStrength: params.warpStrength,
-      continentalScale: params.continentalScale,
-      mountainScale: params.mountainScale,
-      plainsScale: params.plainsScale,
-      hillsScale: params.hillsScale,
-      mountainBeltScale: params.mountainBeltScale,
-      reliefVariety: params.reliefVariety,
-      erosionStrength: params.erosionStrength,
-      thermalStrength: params.thermalStrength,
-      detailStrength: params.detailStrength,
-      microDetailStrength: params.microDetailStrength,
-      microDetailScale: params.microDetailScale,
-      microReliefMeters: params.microReliefMeters,
-    },
-    lodMultipliers: params.lodMultipliers,
-    gridSize: params.gridSize,
-    skirts: params.skirts,
-    horizonMargin: params.horizonMargin,
-    terrainWorkers: params.terrainWorkers,
-  }, renderer)
-}
-
-function applyDebugSettings(engine: GameEngine, planet: PlanetRenderer, params: EditorParams) {
-  engine.setBloomEnabled(params.debugBloom)
-  engine.setBloomSettings({
-    strength: params.bloomStrength,
-    radius: params.bloomRadius,
-    threshold: params.bloomThreshold,
-  })
-  engine.setToneMappingExposure(params.toneMappingExposure)
-  engine.setUnderwaterFilterSettings({
-    enabled: params.underwaterFilter,
-    tint: params.underwaterTint,
-    strength: params.underwaterStrength,
-    distortion: params.underwaterDistortion,
-    murk: params.underwaterMurk,
-  })
-  planet.setDebugRendering({
-    showAtmosphere: params.debugAtmosphere,
-    showClouds: params.debugClouds,
-    simpleTerrain: params.debugSimpleTerrain,
-    nearTerrainShader: params.debugNearTerrainShader,
-    farTerrainShader: params.debugFarTerrainShader,
-    fallbackTerrainShader: params.debugFallbackTerrainShader,
-  })
-}
+function getEffectiveWaterLevel(params: EditorParams) { return params.waterEnabled ? params.waterLevel : 0 }
 
 function buildSunPosition(params: EditorParams): THREE.Vector3 {
   const azimuth = THREE.MathUtils.degToRad(params.sunAzimuth)
@@ -207,41 +104,6 @@ function buildPlanetKey(params: EditorParams): string {
   })
 }
 
-function buildWalkerTarget(params: EditorParams, renderer: PlanetRenderer): PlanetWalkerTarget {
-  return {
-    id: 'editor-planet',
-    worldPosition: new THREE.Vector3(0, 0, 0),
-    worldQuaternion: new THREE.Quaternion(),
-    atmosphereColor: params.atmosphereColor,
-    atmosphereDensity: params.atmosphereDensity,
-    cloudShadow: renderer.getCloudShadowSettings(),
-    terrain: {
-      seed: params.seed,
-      planetType: params.planetType,
-      radius: params.planetRadius,
-      terrainScale: params.terrainScale,
-      frequency: params.frequency,
-      octaves: params.octaves,
-      lacunarity: params.lacunarity,
-      gain: params.gain,
-      warpStrength: params.warpStrength,
-      continentalScale: params.continentalScale,
-      mountainScale: params.mountainScale,
-      plainsScale: params.plainsScale,
-      hillsScale: params.hillsScale,
-      mountainBeltScale: params.mountainBeltScale,
-      reliefVariety: params.reliefVariety,
-      erosionStrength: params.erosionStrength,
-      thermalStrength: params.thermalStrength,
-      detailStrength: params.detailStrength,
-      microDetailStrength: params.microDetailStrength,
-      microDetailScale: params.microDetailScale,
-      microReliefMeters: params.microReliefMeters,
-    },
-    sampleSurfaceRadius: dir => renderer.sampleSurfaceRadius(dir),
-  }
-}
-
 function syncWalkerTargetRotation(target: PlanetWalkerTarget | null, rotationAngle: number) {
   target?.worldQuaternion.setFromAxisAngle(PLANET_ROTATION_AXIS, rotationAngle)
 }
@@ -252,6 +114,14 @@ export function EditorCanvas({ params }: Props) {
   const planetRef = useRef<PlanetRenderer | null>(null)
   const walkerRef = useRef<PlanetWalkerController | null>(null)
   const walkerTargetRef = useRef<PlanetWalkerTarget | null>(null)
+  const shipRef = useRef<ShipModel | null>(null)
+  const landedShipRef = useRef<LandedShip | null>(null)
+  const boardingRef = useRef<ShipBoardingController | null>(null)
+  const shipLocalUp = useRef(new THREE.Vector3(0, 1, 0)).current
+  const shipSunPosition = useRef(new THREE.Vector3()).current
+  const shipSunDirection = useRef(new THREE.Vector3()).current
+  const shipSunColor = useRef(new THREE.Color()).current
+  const inversePlanetRotation = useRef(new THREE.Quaternion()).current
   const paramsRef = useRef(params)
   const rotationAngleRef = useRef(0)
   const prevRadiusRef = useRef(params.planetRadius)
@@ -290,6 +160,32 @@ export function EditorCanvas({ params }: Props) {
     walkerTargetRef.current = walkerTarget
     walker.setTargets([walkerTarget])
 
+    // The walker spawns along the direction the camera is looking from, so the
+    // ship is anchored on that same direction, nudged sideways by its own
+    // length. Pressing H then lands the player next to it.
+    let shipCancelled = false
+    void loadShipModel({ lengthMeters: SHIP_LENGTH_METERS, renderer: engine.renderer })
+      .then((ship) => {
+        if (shipCancelled) { ship.dispose(); return }
+        const spawnDirection = engine.camera.position.clone().normalize()
+        const east = new THREE.Vector3(1, 0, 0).projectOnPlane(spawnDirection)
+        if (east.lengthSq() < 1e-8) east.set(0, 0, -1).projectOnPlane(spawnDirection)
+        const offset = SHIP_SPAWN_OFFSET_METERS / Math.max(paramsRef.current.planetRadius, 1)
+        const landed = new LandedShip(ship)
+        landed.place(spawnDirection.addScaledVector(east.normalize(), offset), 0)
+        engine.scene.add(ship.object)
+        shipRef.current = ship
+        landedShipRef.current = landed
+        boardingRef.current = new ShipBoardingController(engine, walker, ship, landed)
+        if (import.meta.env.DEV && window.__nmsEditorDebug) {
+          window.__nmsEditorDebug.ship = ship
+          window.__nmsEditorDebug.boarding = boardingRef.current
+        }
+      })
+      .catch((error) => {
+        console.error('Falha ao carregar a nave', error)
+      })
+
     const showPerf = import.meta.env.DEV && new URLSearchParams(window.location.search).has(PERF_QUERY_PARAM)
     const frameSamples: number[] = []
     const updateSamples: number[] = []
@@ -298,7 +194,7 @@ export function EditorCanvas({ params }: Props) {
     let perfInterval: number | null = null
 
     if (import.meta.env.DEV) {
-      window.__nmsEditorDebug = { engine, planet, walker }
+      window.__nmsEditorDebug = { engine, planet, walker, ship: shipRef.current, boarding: boardingRef.current }
     }
 
     if (showPerf) {
@@ -335,12 +231,31 @@ export function EditorCanvas({ params }: Props) {
             .join(' ')
           : ''
 
+        // From the pass, not from the params handed to it. A HUD that echoes its
+        // own inputs cannot tell "the box is empty" from "the map is never
+        // sampled", and both look like no shadows at all.
+        const shadowStats = engine.getSunShadowStats()
+        const shadowDiag = shadowStats.enabled
+          ? `${shadowStats.size}@${shadowStats.radius}m soft=${shadowStats.softness.toFixed(2)} casters=${shadowStats.casterDraws}/${(shadowStats.casterTriangles/1e6).toFixed(2)}Mtri${shadowStats.hasFrame ? '' : ' NOFRAME'}`
+          : 'off'
+
+        const gpuTimings = engine.getGpuTimings()
+        const gpuTotal = gpuTimings.reduce((sum, t) => sum + t.ms, 0)
+        const gpuLine = !paramsRef.current.debugGpuProfiler
+          ? 'gpu profiler off'
+          : !engine.isGpuProfilingSupported()
+            ? 'gpu timer queries unsupported'
+            : gpuTotal <= 0
+              ? 'gpu measuring...'
+              : `gpu ${gpuTimings.map(t => `${t.label}=${t.ms.toFixed(2)}`).join(' ')} total=${gpuTotal.toFixed(2)}ms @${engine.getPixelRatioLimit().toFixed(2)}x`
+
         perfOverlay.textContent = [
           `fps=${(1000 / avg(frameSamples)).toFixed(1)} frame=${avg(frameSamples).toFixed(1)}ms p95=${pct(sortedFrames, 0.95).toFixed(1)}ms`,
           `update=${avg(updateSamples).toFixed(2)}ms p95=${pct(sortedUpdates, 0.95).toFixed(2)}ms`,
           `draw=${engine.renderer.info.render.calls} tri=${engine.renderer.info.render.triangles}`,
+          gpuLine,
           `geo=${engine.renderer.info.memory.geometries} tex=${engine.renderer.info.memory.textures}`,
-          `diag bloom=${paramsRef.current.debugBloom ? 'on' : 'off'} atmosphere=${paramsRef.current.debugAtmosphere ? 'on' : 'off'} clouds=${paramsRef.current.debugClouds ? 'on' : 'off'} simpleTerrain=${paramsRef.current.debugSimpleTerrain ? 'on' : 'off'}`,
+          `diag bloom=${paramsRef.current.debugBloom ? 'on' : 'off'} aa=${paramsRef.current.debugAntialias ? 'smaa' : 'off'} shadow=${shadowDiag} atmosphere=${paramsRef.current.debugAtmosphere ? 'on' : 'off'} clouds=${paramsRef.current.debugClouds ? 'on' : 'off'} simpleTerrain=${paramsRef.current.debugSimpleTerrain ? 'on' : 'off'}`,
           bloom
             ? `bloom strength=${bloom.strength.toFixed(2)} radius=${bloom.radius.toFixed(2)} threshold=${bloom.threshold.toFixed(2)} enabled=${bloom.enabled ? 'on' : 'off'}`
             : 'bloom unavailable',
@@ -387,6 +302,64 @@ export function EditorCanvas({ params }: Props) {
       }
       walker.update(dt)
       planetRef.current?.update(engine.camera, dt)
+      const target = walkerTargetRef.current
+      const ship = shipRef.current
+      if (landedShipRef.current && ship && target?.sampleSurfaceRadius) {
+        const landed = landedShipRef.current
+        // While flying, the boarding controller writes the hull from the flight
+        // model instead. Running both would have the surface anchor fight the
+        // flight integrator for the same transform every frame.
+        if (!boardingRef.current?.isShipAirborne()) {
+          landed.update(target.worldPosition, target.worldQuaternion, target.sampleSurfaceRadius)
+        }
+        ship.updateLod(engine.camera.position)
+
+        // The hull is lit by three's light rig, which knows nothing about the
+        // planet, so day and night have to be handed to it. Same shadow test
+        // the avatar uses, evaluated at the hull instead of at the player --
+        // without it the ship sat there at full noon brightness at midnight.
+        const sunPosition = engine.getSunPosition(shipSunPosition)
+        // Radial direction of the hull itself rather than the landing site's:
+        // once airborne the two diverge, and the parked value would freeze the
+        // ship at whatever time of day it took off in.
+        const shipUp = boardingRef.current?.isShipAirborne()
+          ? shipLocalUp.copy(ship.object.position).sub(target.worldPosition)
+              .applyQuaternion(inversePlanetRotation.copy(target.worldQuaternion).invert())
+              .normalize()
+          : landed.getLocalDirection()
+        shipSunDirection.copy(sunPosition).sub(ship.object.position)
+        if (shipSunDirection.lengthSq() > 1e-6) {
+          shipSunDirection.normalize().applyQuaternion(
+            inversePlanetRotation.copy(target.worldQuaternion).invert(),
+          )
+        } else {
+          shipSunDirection.copy(shipUp)
+        }
+        const shipRadius = ship.object.position.distanceTo(target.worldPosition)
+        ship.setSunLighting(
+          sunPosition,
+          engine.getSunColor(shipSunColor),
+          planetSunlightFactor(
+            shipUp.dot(shipSunDirection),
+            target.terrain.radius,
+            shipRadius,
+            atmosphereDepthAt(
+              boardingRef.current?.isShipAirborne()
+                ? target.sampleSurfaceRadius(shipUp)
+                : landed.getSurfaceRadius(),
+              target.terrain.radius,
+              shipRadius,
+            ),
+          ),
+          target,
+        )
+      }
+      // After the walker: while piloting, the boarding controller owns the
+      // camera, and whoever writes last wins.
+      if (boardingRef.current) {
+        boardingRef.current.setTarget(target)
+        boardingRef.current.update(dt)
+      }
       engine.setUnderwaterState(
         paramsRef.current.underwaterFilter
           ? planetRef.current?.getUnderwaterViewState() ?? { factor: 0, depth: 0 }
@@ -411,6 +384,12 @@ export function EditorCanvas({ params }: Props) {
       planetRef.current = null
       walkerRef.current = null
       walkerTargetRef.current = null
+      shipCancelled = true
+      boardingRef.current?.dispose()
+      boardingRef.current = null
+      shipRef.current?.dispose()
+      shipRef.current = null
+      landedShipRef.current = null
       initializedRef.current = false
       if (window.__nmsEditorDebug?.engine === engine) {
         delete window.__nmsEditorDebug
@@ -543,7 +522,7 @@ export function EditorCanvas({ params }: Props) {
       planetRef.current = newPlanet
       planetKeyRef.current = buildPlanetKey(paramsRef.current)
       if (import.meta.env.DEV && window.__nmsEditorDebug?.engine === engine && walker) {
-        window.__nmsEditorDebug = { engine, planet: newPlanet, walker }
+        window.__nmsEditorDebug = { engine, planet: newPlanet, walker, ship: shipRef.current, boarding: boardingRef.current }
       }
 
       const walkerTarget = buildWalkerTarget(paramsRef.current, newPlanet)

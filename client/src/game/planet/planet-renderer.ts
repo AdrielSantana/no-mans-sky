@@ -49,13 +49,21 @@ import {
   type FluffyGrassSettings,
 } from './fluffy-grass'
 import {
+  acquireTerrainWorker,
+  releaseTerrainWorkersFor,
+  setTerrainWorkerPoolSize,
+  terrainWorkerPoolSize,
+} from './terrain-worker-pool'
+import {
   PlanetPropLayer,
   getPlanetPropAssets,
   loadPlanetPropAssets,
+  setFoliageShadowLodTier,
   setPlanetPropFoliagePalettes,
   updatePlanetPropMaterials,
   type PlanetPropAssets,
   type PlanetPropSettings,
+  type PlanetPropScatterCache,
 } from './planet-props'
 import {
   DEFAULT_FOLIAGE_SETTINGS,
@@ -71,12 +79,12 @@ import { CLOUD_OCCLUDER_RENDER_LAYER, CLOUD_RENDER_LAYER } from '../render-layer
 const SYNC_CHUNK_BUILD_BUDGET_MS = 4
 const WORKER_DISPATCH_BUDGET_MS = 0.8
 const CHUNK_INTEGRATION_BUDGET_MS = 2.5
-const MAX_TERRAIN_WORKERS = 8
 const DETAILED_MATERIAL_MIN_LOD = 6
 const DETAILED_MATERIAL_DISTANCE = WORLD_SCALE.localDetailFar
 const LOD_COLLAPSE_HYSTERESIS = 1.35
 const SCATTER_SETTLE_MS = 150
 const PROP_BUILD_DISTANCE_MARGIN = 1.15
+const PROP_SCATTER_BUDGET_MS = 1.5
 const CLOUD_CAP_ANGLE_MARGIN = 1.15
 const CLOUD_CAP_ANGLE_MIN = 0.12
 const CLOUD_CAP_ANGLE_MAX = 0.92
@@ -99,9 +107,19 @@ const MAX_OCEAN_WORKERS = 3
 // Extra tiers drop in without a code change: models carrying fewer tiers are
 // clamped per part inside PlanetPropLayer.setLodTier, so adding a fraction here
 // before the assets exist is harmless.
-// 0.35/0.62/0.86 of 648m => ~227m, ~402m, ~557m. Sized against on-screen
-// height: a 15m tree is ~68px at 227m, ~39px at 402m and ~28px at 557m.
-const PROP_LOD_DISTANCE_FRACTIONS = [0.35, 0.62, 0.86]
+// In metres, not as a fraction of the draw distance. These were derived from
+// on-screen height -- a 15m tree is ~68px at 227m, ~39px at 402m and ~28px at
+// 557m -- and how tall a tree looks does not depend on how far away the
+// furthest drawn tree is. They used to be 0.35/0.62/0.86, which produced these
+// same numbers only while propDistance was 648m; raising the default to 2200m
+// stretched the ladder 3.4x and left tier 0, the full ~1500-card canopy, valid
+// out to 770m. Measured at ~3ms of frame time.
+//
+// A draw distance shorter than a threshold simply means that tier is never
+// reached, which is correct: everything drawn really is near.
+const PROP_LOD_DISTANCES = [227, 402, 557]
+const _grassTint = new THREE.Color()
+const _grassTintB = new THREE.Color()
 const PROP_LOD_HYSTERESIS = 0.12
 // Cap on prop sun-light jobs queued on the dedicated worker. It processes
 // messages serially, so an unbounded queue would just accumulate results that
@@ -153,14 +171,6 @@ const FAR_TEXTURE_LOD_BANDS = [
 function smoothstepNumber(edge0: number, edge1: number, value: number): number {
   const t = THREE.MathUtils.clamp((value - edge0) / Math.max(edge1 - edge0, 1e-6), 0, 1)
   return t * t * (3 - 2 * t)
-}
-
-interface TerrainWorkerSlot {
-  worker: Worker
-  busy: boolean
-  key: string | null
-  jobId: number | null
-  epoch: number
 }
 
 export interface UnderwaterViewState {
@@ -322,6 +332,7 @@ export class PlanetRenderer {
   private cloudBillboardVisibleCount = 0
   private grassMaterial: THREE.ShaderMaterial | null = null
   private farGrassMaterial: THREE.ShaderMaterial | null = null
+  private grassGroundTintStrength = 0.7
   private grassLayers = new Map<string, FluffyGrassLayer>()
   private farGrassLayers = new Map<string, FluffyGrassLayer>()
   private grassSettings: FluffyGrassSettings = {
@@ -339,6 +350,10 @@ export class PlanetRenderer {
   private propAssets: PlanetPropAssets | null = getPlanetPropAssets()
   private propAssetLoadRequested = false
   private propLayers = new Map<string, PlanetPropLayer>()
+  private propScatterCache: PlanetPropScatterCache = new Map()
+  private propPrepareJobs = new Map<string, { chunk: TerrainChunk; steps: ReturnType<typeof PlanetPropLayer.preparePlacements> }>()
+  private propCoverage = new Map<string, boolean>()
+  private propPreparationMs = 0
   // Scatter rebuilds are deferred behind a settle timer. Editor sliders fire on
   // pointermove with steps (0.01 / 0.05) well above the rebuild thresholds
   // (0.001), and a rebuild clears and regenerates every grass/prop layer on
@@ -421,7 +436,6 @@ export class PlanetRenderer {
   private pendingCollapseKeys = new Set<string>()
   private pendingWorkerKeys = new Set<string>()
   private completedWorkerJobs: TerrainWorkerBuildResponse[] = []
-  private workerSlots: TerrainWorkerSlot[] = []
   private chunkBuildEpoch = 0
   private nextWorkerJobId = 1
   private generatedChunksLastFrame = 0
@@ -784,7 +798,11 @@ export class PlanetRenderer {
       this.quadtrees.push(createRoot(f as CubeFace))
     }
 
-    this.initTerrainWorkers()
+    // Shared across every PlanetRenderer -- see terrain-worker-pool.ts. Each
+    // renderer asking for its own pool is what put 40 workers on a ten-thread
+    // machine. Last explicit request wins; the game leaves all five at 0, which
+    // means "derive from hardware" and makes the call idempotent.
+    setTerrainWorkerPoolSize(this.requestedTerrainWorkers)
     this.ensurePropAssets()
   }
 
@@ -958,6 +976,10 @@ export class PlanetRenderer {
 
   private updateGrassGroundAoUniforms() {
     const strength = this.getGrassGroundAoStrength()
+    // Blades read as mix(colorA, colorB, tip), and tip averages out around the
+    // middle of the blade, so this is what a patch of grass looks like once it
+    // is too far away to resolve individual blades.
+    _grassTint.set(this.grassSettings.colorA).lerp(_grassTintB.set(this.grassSettings.colorB), 0.55)
     const materials = [
       this.material,
       ...this.farLodMaterials,
@@ -965,7 +987,20 @@ export class PlanetRenderer {
     ]
     for (const material of materials) {
       this.setFloatUniform(material, 'uGrassGroundAoStrength', strength)
+      this.setFloatUniform(material, 'uGrassGroundTintStrength', this.grassGroundTintStrength)
+      const tint = material.uniforms.uGrassGroundTint
+      if (tint) (tint.value as THREE.Color).copy(_grassTint)
     }
+  }
+
+  /**
+   * How strongly the ground takes on the grass colour where grass grows. This
+   * is what carries a meadow once the blades themselves have faded out, so it
+   * is what makes a short grass draw distance survivable.
+   */
+  setGrassGroundTintStrength(strength: number) {
+    this.grassGroundTintStrength = THREE.MathUtils.clamp(strength, 0, 1)
+    this.updateGrassGroundAoUniforms()
   }
 
   private updateLightColorUniforms() {
@@ -1460,7 +1495,11 @@ export class PlanetRenderer {
         const size = baseSize * (0.62 + r3 * 1.18) * (0.90 + this.cloudVolume * 0.16)
         const aspect = 0.52 + this.random01(cellKey + 83.0) * 0.72
         basisX.copy(right).multiplyScalar(size)
-        basisY.copy(up).multiplyScalar(size * aspect)
+        // A camera-facing card used to be taller than its altitude, cutting
+        // through land and water at the horizon. Bound its radial half-extent.
+        const radialProjection = Math.abs(up.dot(dir))
+        const clearance = Math.max(1, cloudRadius - Math.max(this.planetRadius, this.oceanSeaRadius))
+        basisY.copy(up).multiplyScalar(Math.min(size * aspect, clearance * 1.5 / Math.max(radialProjection, 0.1)))
         basisZ.copy(toCamera)
         matrix.makeBasis(basisX, basisY, basisZ)
         matrix.setPosition(pos)
@@ -1507,6 +1546,14 @@ export class PlanetRenderer {
     if (this.cloudBillboardMaterial) this.cloudBillboardMaterial.wireframe = enabled
   }
 
+  /**
+   * Foliage LOD tier used while filling the shadow map, independent of what
+   * the camera sees. -1 keeps foliage out of the map entirely.
+   */
+  setFoliageShadowLodTier(tier: number) {
+    setFoliageShadowLodTier(tier)
+  }
+
   setDebugRendering(options: {
     showAtmosphere?: boolean
     showClouds?: boolean
@@ -1524,76 +1571,6 @@ export class PlanetRenderer {
     if (options.nearTerrainShader !== undefined) this.debugNearTerrainShader = options.nearTerrainShader
     if (options.farTerrainShader !== undefined) this.debugFarTerrainShader = options.farTerrainShader
     if (options.fallbackTerrainShader !== undefined) this.debugFallbackTerrainShader = options.fallbackTerrainShader
-  }
-
-  private initTerrainWorkers() {
-    if (typeof Worker === 'undefined') return
-
-    const workerCount = this.resolveTerrainWorkerCount()
-    for (let i = 0; i < workerCount; i++) {
-      const worker = new Worker(new URL('./terrain-worker.ts', import.meta.url), { type: 'module' })
-      const slot: TerrainWorkerSlot = {
-        worker,
-        busy: false,
-        key: null,
-        jobId: null,
-        epoch: this.chunkBuildEpoch,
-      }
-
-      worker.onmessage = (event: MessageEvent<TerrainWorkerResponse>) => {
-        const response = event.data
-        // Ocean jobs go to their own dedicated worker; these slots only ever
-        // see chunk traffic. Narrowing here keeps the union honest.
-        if (
-          response.type === 'ocean-built' || response.type === 'ocean-error'
-          || response.type === 'prop-sun-built' || response.type === 'prop-sun-error'
-        ) return
-        slot.busy = false
-        slot.key = null
-        slot.jobId = null
-        slot.epoch = this.chunkBuildEpoch
-
-        if (response.epoch !== this.chunkBuildEpoch) return
-
-        if (response.type === 'error') {
-          this.pendingWorkerKeys.delete(response.key)
-          this.pendingKeys.add(response.key)
-          if (import.meta.env.DEV) {
-            console.warn(`Terrain worker failed for ${response.key}: ${response.message}`)
-          }
-          return
-        }
-
-        if (!this.pendingWorkerKeys.has(response.key)) return
-        this.completedWorkerJobs.push(response)
-      }
-
-      worker.onerror = () => {
-        if (slot.key) {
-          this.pendingWorkerKeys.delete(slot.key)
-          this.pendingKeys.add(slot.key)
-        }
-        slot.busy = false
-        slot.key = null
-        slot.jobId = null
-      }
-
-      this.workerSlots.push(slot)
-    }
-  }
-
-  private resolveTerrainWorkerCount(): number {
-    const hardwareThreads = typeof navigator === 'undefined'
-      ? 4
-      : Math.max(2, navigator.hardwareConcurrency ?? 4)
-    const hardwareCap = Math.max(1, Math.min(MAX_TERRAIN_WORKERS, hardwareThreads - 1))
-    const requested = Math.floor(this.requestedTerrainWorkers)
-
-    if (requested > 0) {
-      return Math.max(1, Math.min(requested, hardwareCap))
-    }
-
-    return hardwareCap
   }
 
   sampleSurfaceRadius(dir: Vec3Like): number {
@@ -1643,7 +1620,7 @@ export class PlanetRenderer {
       detailedMaterialChunks,
       pending: this.pendingKeys.size + this.pendingWorkerKeys.size + this.completedWorkerJobs.length,
       building: this.pendingWorkerKeys.size,
-      workers: this.workerSlots.length,
+      workers: terrainWorkerPoolSize(),
       completedBuilds: this.completedWorkerJobs.length,
       pendingCollapses: this.pendingCollapseKeys.size,
       skirtEdges,
@@ -1725,6 +1702,9 @@ export class PlanetRenderer {
       assetsLoaded: this.propAssets !== null,
       assetLoadRequested: this.propAssetLoadRequested,
       layers: this.propLayers.size,
+      preparing: this.propPrepareJobs.size,
+      preparationMs: this.propPreparationMs,
+      scatterCacheEntries: this.propScatterCache.size,
       visibleLayers,
       visibleLayersByLod: Array.from(lodTiers, count => count ?? 0),
       meshes,
@@ -1745,6 +1725,7 @@ export class PlanetRenderer {
   update(camera: THREE.Camera, _dt: number) {
     this.time += _dt
     this.propSunLightSpentMs = 0
+    this.propPreparationMs = 0
     this.consumePendingScatterRebuilds()
     this.generatedChunksLastFrame = 0
     this.chunkGenerationMsLastFrame = 0
@@ -1890,10 +1871,10 @@ export class PlanetRenderer {
       this.group.getWorldPosition(this.atmosphereMaterial.uniforms.uPlanetCenter.value)
     }
     // Decide: show fallback sphere or quadtree terrain
-    const useTerrain = surfaceDist < this.lodDistances[1]
+    const useTerrain = this.terrainParams.planetType !== 'gas' && surfaceDist < Math.min(this.lodDistances[1], this.planetRadius * 1.5)
 
     if (!useTerrain) {
-      this.updateOceanRenderState(false)
+      this.updateOceanRenderState()
       this.fallbackSphere.visible = true
       this.fallbackSphere.material = this.debugSimpleTerrain || !this.debugFallbackTerrainShader
         ? this.simpleTerrainMaterial
@@ -1928,6 +1909,7 @@ export class PlanetRenderer {
     // 2. Queue chunks that are needed for the next stable transition.
     //    updateQuadtree just created children with a default `covered` of
     //    false, so coverage has to be refreshed before collectLoadKeys reads it.
+    this.propCoverage.clear()
     for (const root of this.quadtrees) {
       this.markCovered(root)
     }
@@ -1945,13 +1927,15 @@ export class PlanetRenderer {
 
     // 4. Process pending chunks
     this.integrateCompletedChunkBuilds(localCamPos)
-    if (this.workerSlots.length > 0) {
+    if (terrainWorkerPoolSize() > 0) {
       this.dispatchPendingChunkBuilds(localCamPos)
     } else {
       this.processPendingChunksSync(localCamPos)
     }
 
-    // Complete deferred LOD collapses after their parent chunks exist.
+    this.advancePropPreparation()
+
+    // Complete deferred LOD collapses after parent geometry and props exist.
     for (const root of this.quadtrees) {
       this.applyPendingCollapses(root)
     }
@@ -1960,6 +1944,7 @@ export class PlanetRenderer {
     //     A second coverage pass is mandatory here: integrateCompletedChunkBuilds
     //     added chunks and applyPendingCollapses dropped subtrees, so the flags
     //     from the pass above are stale for both reasons.
+    this.propCoverage.clear()
     for (const root of this.quadtrees) {
       this.markCovered(root)
     }
@@ -1970,7 +1955,7 @@ export class PlanetRenderer {
       this.collectRetainKeys(root, retainKeys)
     }
     const terrainReady = this.hasQuadtreeTerrainCoverage()
-    this.updateOceanRenderState(terrainReady)
+    this.updateOceanRenderState()
     this.fallbackSphere.visible = !terrainReady
 
     // 5. Remove chunks no longer needed. Chunks can be retained while hidden so
@@ -2024,11 +2009,11 @@ export class PlanetRenderer {
     } else {
       if (node.children) {
         const key = node.key
-        if (this.chunks.has(key)) {
+        if (this.isPropReady(this.chunks.get(key))) {
           this.removeChildrenChunks(node)
           node.children = null
         } else {
-          this.pendingKeys.add(key)
+          if (!this.chunks.has(key)) this.pendingKeys.add(key)
           this.pendingCollapseKeys.add(key)
         }
       }
@@ -2039,7 +2024,7 @@ export class PlanetRenderer {
     if (!node.children) return
 
     const key = node.key
-    if (this.pendingCollapseKeys.has(key) && this.chunks.has(key)) {
+    if (this.pendingCollapseKeys.has(key) && this.isPropReady(this.chunks.get(key))) {
       this.removeChildrenChunks(node)
       node.children = null
       this.pendingCollapseKeys.delete(key)
@@ -2171,6 +2156,8 @@ export class PlanetRenderer {
         if (!this.markCovered(child)) childrenCovered = false
       }
     }
+    const propChildrenCovered = node.children !== null && node.children.every(child => this.propCoverage.get(child.key))
+    this.propCoverage.set(node.key, this.isPropReady(this.chunks.get(node.key)) || propChildrenCovered)
     node.covered = this.chunks.has(node.key) || (node.children !== null && childrenCovered)
     return node.covered
   }
@@ -2182,15 +2169,17 @@ export class PlanetRenderer {
     }
 
     const childrenCovered = node.children.every(child => child.covered)
-    if (!childrenCovered && !this.chunks.has(node.key)) out.add(node.key)
-
-    for (const child of node.children) {
-      if (!child.covered && !this.chunks.has(child.key)) {
-        out.add(child.key)
-      } else {
-        this.collectLoadKeys(child, out)
+    if (!childrenCovered) {
+      if (!this.chunks.has(node.key)) out.add(node.key)
+      // Finish all four siblings before requesting grandchildren. Otherwise
+      // fine chunks accumulate invisibly behind an incomplete parent patch.
+      for (const child of node.children) {
+        if (!child.covered) out.add(child.key)
       }
+      return
     }
+
+    for (const child of node.children) this.collectLoadKeys(child, out)
   }
 
   private collectRenderKeys(node: QuadtreeNode, out: Set<string>) {
@@ -2199,7 +2188,7 @@ export class PlanetRenderer {
       return
     }
 
-    const childrenCovered = node.children.every(child => child.covered)
+    const childrenCovered = node.children.every(child => child.covered && this.propCoverage.get(child.key))
     if (childrenCovered) {
       for (const child of node.children) this.collectRenderKeys(child, out)
     } else if (this.chunks.has(node.key)) {
@@ -2215,8 +2204,8 @@ export class PlanetRenderer {
       return
     }
 
-    const childrenCovered = node.children.every(child => child.covered)
-    if (!childrenCovered) out.add(node.key)
+    const childrenCovered = node.children.every(child => child.covered && this.propCoverage.get(child.key))
+    if (!childrenCovered || this.pendingCollapseKeys.has(node.key)) out.add(node.key)
     for (const child of node.children) this.collectRetainKeys(child, out)
   }
 
@@ -2275,10 +2264,12 @@ export class PlanetRenderer {
 
   private dispatchPendingChunkBuilds(localCamPos: THREE.Vector3) {
     if (this.pendingKeys.size === 0) return
+    // Applying geometry is frame-budgeted. Do not let workers outrun upload
+    // indefinitely, especially when the browser throttles a background tab.
+    if (this.completedWorkerJobs.length >= terrainWorkerPoolSize() * 2) return
 
     const dispatchStart = performance.now()
-    for (const slot of this.workerSlots) {
-      if (slot.busy) continue
+    for (;;) {
       if (performance.now() - dispatchStart >= WORKER_DISPATCH_BUDGET_MS) break
 
       const key = this.findBestPendingChunkKey(localCamPos)
@@ -2288,13 +2279,22 @@ export class PlanetRenderer {
       this.pendingKeys.delete(key)
       if (!node || this.chunks.has(key) || this.pendingWorkerKeys.has(key)) continue
 
+      const worker = acquireTerrainWorker(
+        this,
+        response => this.handleChunkWorkerResponse(response),
+        () => this.failChunkWorkerJob(key),
+      )
+      // Pool is saturated. Put the key back and let the next frame try again --
+      // a distant planet whose quadtree has settled asks for nothing, so in
+      // practice the planet under the player gets the whole pool.
+      if (!worker) {
+        this.pendingKeys.add(key)
+        break
+      }
+
       const jobId = this.nextWorkerJobId++
-      slot.busy = true
-      slot.key = key
-      slot.jobId = jobId
-      slot.epoch = this.chunkBuildEpoch
       this.pendingWorkerKeys.add(key)
-      slot.worker.postMessage({
+      worker.postMessage({
         type: 'build',
         id: jobId,
         epoch: this.chunkBuildEpoch,
@@ -2305,6 +2305,33 @@ export class PlanetRenderer {
         skirts: { bottom: false, top: false, left: false, right: false },
       })
     }
+  }
+
+  // Was the per-slot onmessage closure. The pool frees the worker before this
+  // runs, so a chunk that lands early can be replaced on the next dispatch.
+  private handleChunkWorkerResponse(response: TerrainWorkerResponse) {
+    if (
+      response.type === 'ocean-built' || response.type === 'ocean-error'
+      || response.type === 'prop-sun-built' || response.type === 'prop-sun-error'
+    ) return
+    if (response.epoch !== this.chunkBuildEpoch) return
+
+    if (response.type === 'error') {
+      this.pendingWorkerKeys.delete(response.key)
+      this.pendingKeys.add(response.key)
+      if (import.meta.env.DEV) {
+        console.warn(`Terrain worker failed for ${response.key}: ${response.message}`)
+      }
+      return
+    }
+
+    if (!this.pendingWorkerKeys.has(response.key)) return
+    this.completedWorkerJobs.push(response)
+  }
+
+  private failChunkWorkerJob(key: string) {
+    this.pendingWorkerKeys.delete(key)
+    this.pendingKeys.add(key)
   }
 
   private processPendingChunksSync(localCamPos: THREE.Vector3) {
@@ -2345,6 +2372,9 @@ export class PlanetRenderer {
     const b = this.parseChunkKey(bKey)
     if (!a || !b) return a ? -1 : b ? 1 : aKey.localeCompare(bKey)
 
+    // Complete the planetary safety net before refining local detail.
+    if ((a.lod <= 2) !== (b.lod <= 2)) return a.lod <= 2 ? -1 : 1
+
     const distDelta = this.getChunkBuildPriority(aKey, a, localCamPos) - this.getChunkBuildPriority(bKey, b, localCamPos)
     if (Math.abs(distDelta) > 0.0001) return distDelta
 
@@ -2360,7 +2390,14 @@ export class PlanetRenderer {
     const cached = this.chunkPriorityCache.get(key)
     if (cached !== undefined) return cached
 
-    const priority = this.getLocalChunkDistToCamera(node, localCamPos)
+    // Bounding spheres overlap generously. Distance-to-bound alone is zero
+    // for hundreds of patches, starving the ground under the player while
+    // unrelated coarse patches win the tie. Retain coverage priority, but
+    // distinguish those overlaps by their actual distance to the patch centre.
+    const surfaceRadius = this.getNodeSurfaceRadius(node)
+    const centerDistance = getNodeCenter(node, _nodeDir).multiplyScalar(surfaceRadius).distanceTo(localCamPos)
+    const priority = Math.max(0, centerDistance - this.getNodeBoundingRadius(node, surfaceRadius))
+      + centerDistance * 0.08
     this.chunkPriorityCache.set(key, priority)
     return priority
   }
@@ -2468,34 +2505,58 @@ export class PlanetRenderer {
       < this.propSettings.distance * PROP_BUILD_DISTANCE_MARGIN
   }
 
-  private attachPropLayer(chunk: TerrainChunk) {
-    if (!this.shouldHavePropLayer(chunk)) return
-    if (this.propLayers.has(chunk.key)) return
-    const assets = this.propAssets
-    if (!assets) return
-
-    const props = new PlanetPropLayer({
+  private propLayerParams(chunk: TerrainChunk) {
+    return {
       node: chunk.node,
-      surface: chunk.getSurfaceData(),
-      assets,
+      scatterCache: this.propScatterCache,
+      assets: this.propAssets!,
       settings: this.propSettings,
       terrain: this.terrainParams,
       seed: this.noiseProfile.seed,
       seaHeight: this.seaHeight,
       planetType: this.terrainParams.planetType,
-    })
-    if (props.instanceCount <= 0) {
-      props.dispose()
-      return
     }
+  }
 
-    // Approximate lighting only: the horizon raymarch is ~3.4ms per chunk and
-    // this runs inside the 2.5ms chunk integration budget. The layer reports as
-    // stale afterwards, so the budgeted pass in updateChunkPropVisibility does
-    // the real work over the following frames.
-    props.updateSunLight(this.cloudLocalSunDirection, true)
-    chunk.mesh.add(props.group)
-    this.propLayers.set(chunk.key, props)
+  private attachPropLayer(chunk: TerrainChunk) {
+    if (!this.shouldHavePropLayer(chunk) || this.propLayers.has(chunk.key) || this.propPrepareJobs.has(chunk.key)) return
+    this.propPrepareJobs.set(chunk.key, {
+      chunk,
+      steps: PlanetPropLayer.preparePlacements(this.propLayerParams(chunk)),
+    })
+  }
+
+  private advancePropPreparation() {
+    const start = performance.now()
+    // Finish coarse coverage first, then the closest patch. Interrupted jobs
+    // retain their iterator; a frame never restarts an expensive scatter.
+    const jobs = [...this.propPrepareJobs.values()].sort((a, b) =>
+      a.chunk.node.lod - b.chunk.node.lod
+      || this.getLocalChunkDistToCamera(a.chunk.node, this.lastLocalCamPos)
+        - this.getLocalChunkDistToCamera(b.chunk.node, this.lastLocalCamPos))
+    for (const job of jobs) {
+      if (performance.now() - start >= PROP_SCATTER_BUDGET_MS) break
+      if (this.chunks.get(job.chunk.key) !== job.chunk || !this.shouldHavePropLayer(job.chunk)) {
+        this.propPrepareJobs.delete(job.chunk.key)
+        continue
+      }
+      while (performance.now() - start < PROP_SCATTER_BUDGET_MS) {
+        const result = job.steps.next()
+        if (!result.done) continue
+        this.propPrepareJobs.delete(job.chunk.key)
+        const props = new PlanetPropLayer({ ...this.propLayerParams(job.chunk), preparedPlacements: result.value })
+        props.updateSunLight(this.cloudLocalSunDirection, true)
+        job.chunk.mesh.add(props.group)
+        // Empty habitat is ready too; don't resample it every frame.
+        this.propLayers.set(job.chunk.key, props)
+        break
+      }
+    }
+    this.propPreparationMs = performance.now() - start
+  }
+
+  private isPropReady(chunk: TerrainChunk | undefined): boolean {
+    return !!chunk && (!this.shouldHavePropLayer(chunk) || this.propLayers.has(chunk.key))
   }
 
   private rebuildPropLayers() {
@@ -2508,6 +2569,10 @@ export class PlanetRenderer {
   }
 
   private clearPropLayers() {
+    this.propScatterCache.clear()
+    this.propPrepareJobs.clear()
+    this.propSunJobs.clear()
+    this.propSunInFlightChunks.clear()
     for (const [, props] of this.propLayers) {
       props.dispose()
     }
@@ -2669,6 +2734,9 @@ export class PlanetRenderer {
       directions[i * 3 + 2] = z / length
     }
 
+    positions.needsUpdate = true
+    geometry.computeVertexNormals()
+    geometry.computeBoundingSphere()
     geometry.setAttribute('terrainHeight', new THREE.BufferAttribute(heights, 1))
     return directions
   }
@@ -2868,14 +2936,15 @@ export class PlanetRenderer {
     return maxInset
   }
 
-  private updateOceanRenderState(useTerrain: boolean) {
+  private updateOceanRenderState() {
     if (!this.oceanMesh || !this.oceanMaterial) return
 
     // Stays hidden until the worker returns the per-vertex terrain heights and
     // the shore mask; without them the mesh would render as a smooth sphere
     // with no coastline.
     this.oceanMesh.visible = this.seaHeight >= -1 && this.oceanDataReady
-    this.oceanMaterial.depthTest = useTerrain
+    // Orbital oceans must respect ships and every other celestial body too.
+    this.oceanMaterial.depthTest = true
     this.setFloatUniform(this.oceanMaterial, 'uOceanQuality', 2)
     this.setFloatUniform(this.oceanMaterial, 'uOceanAlpha', 1)
   }
@@ -3212,11 +3281,10 @@ export class PlanetRenderer {
   }
 
   private resolvePropLodTier(dist: number, currentTier: number): number {
-    const distance = this.propSettings.distance
     let tier = 0
 
-    for (let i = 0; i < PROP_LOD_DISTANCE_FRACTIONS.length; i++) {
-      const threshold = distance * PROP_LOD_DISTANCE_FRACTIONS[i]
+    for (let i = 0; i < PROP_LOD_DISTANCES.length; i++) {
+      const threshold = PROP_LOD_DISTANCES[i]
       // Asymmetric bound: a boundary already crossed has to be re-crossed by
       // the hysteresis margin to step back down, so a chunk sitting on it does
       // not swap geometry every frame.
@@ -3240,6 +3308,7 @@ export class PlanetRenderer {
       farGrass.dispose()
       this.farGrassLayers.delete(chunk.key)
     }
+    this.propPrepareJobs.delete(chunk.key)
     const props = this.propLayers.get(chunk.key)
     if (props) {
       props.dispose()
@@ -3327,7 +3396,7 @@ export class PlanetRenderer {
   }
 
   private createFallbackGeometry(planetRadius: number): THREE.SphereGeometry {
-    const geometry = new THREE.SphereGeometry(planetRadius, 32, 32)
+    const geometry = new THREE.SphereGeometry(planetRadius, 64, 48)
     this.addTerrainHeightAttribute(geometry)
     return geometry
   }
@@ -3341,9 +3410,16 @@ export class PlanetRenderer {
     for (let i = 0; i < positions.count; i++) {
       dir.fromBufferAttribute(positions, i).normalize()
       heights[i] = samplePlanetHeight(dir, this.terrainParams)
+      // The orbital mesh needs real seabed depth. A flat sphere at the base
+      // radius intersects the lower ocean sphere in a regular pattern of facets.
+      const radius = this.terrainParams.radius * (1 + heights[i] * this.terrainParams.terrainScale)
+      positions.setXYZ(i, dir.x * radius, dir.y * radius, dir.z * radius)
       macroAo[i] = this.sampleFallbackMacroAo(dir, heights[i])
     }
 
+    positions.needsUpdate = true
+    geometry.computeVertexNormals()
+    geometry.computeBoundingSphere()
     geometry.setAttribute('terrainHeight', new THREE.BufferAttribute(heights, 1))
     geometry.setAttribute('terrainMacroAo', new THREE.BufferAttribute(macroAo, 1))
   }
@@ -3405,6 +3481,8 @@ export class PlanetRenderer {
       this.disposeChunk(chunk)
     }
     this.chunks.clear()
+    this.propCoverage.clear()
+    this.propPrepareJobs.clear()
     this.pendingKeys.clear()
     this.pendingWorkerKeys.clear()
     this.completedWorkerJobs.length = 0
@@ -3427,10 +3505,11 @@ export class PlanetRenderer {
   dispose() {
     this.disposed = true
     this.removeAllChunks()
-    for (const slot of this.workerSlots) {
-      slot.worker.terminate()
-    }
-    this.workerSlots.length = 0
+    this.propScatterCache.clear()
+    this.propPrepareJobs.clear()
+    // Not terminate: the pool is shared with every other planet. This only
+    // says the results still in the air are no longer wanted.
+    releaseTerrainWorkersFor(this)
     this.material.dispose()
     for (const material of this.farLodMaterials) {
       material.dispose()

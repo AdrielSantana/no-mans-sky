@@ -1,4 +1,6 @@
+import { PLANET_TYPE_BIOMES_GLSL } from './planet-type-shaders'
 import * as THREE from 'three'
+import { SUN_SHADOW_PARS_GLSL, getSunShadowUniforms } from './sun-shadow'
 import grassTextureUrl from '../../assets/terrain/grass_soil_tile.webp'
 import rockTextureUrl from '../../assets/terrain/rock_tile.webp'
 import sandTextureUrl from '../../assets/terrain/sand_tile.webp'
@@ -96,22 +98,48 @@ export class PlanetGenerator {
         }
       case 'rocky':
       default:
+        // Slope is amplitude over wavelength, so dropping frequency from 2.0 to
+        // 1.2 buys room to raise amplitude and still come out gentler. That is
+        // the shape real ranges have -- four kilometres of relief spread across
+        // a hundred, not across five -- and it is what the old profile could not
+        // produce: it was steep everywhere, with only 14% of its land under six
+        // degrees.
+        //
+        // 1.2 rather than lower because frequency also sets how much land clears
+        // the waterline: at 0.85 the continents merge into one supercontinent and
+        // land jumps to 48%, which drowns the green coastline the planet reads by.
+        // 1.2 holds the old land fraction almost exactly, so only the shape moves.
+        // Sampled over 6000 directions at terrainScale 0.065 and the game's sea
+        // level, against the numbers this replaces:
+        //
+        //   land fraction            33.0%  ->  33.6%
+        //   walkable land (<6 deg)   14.1%  ->  41.5%
+        //   cliff (>25 deg)          11.3%  ->   5.7%
+        //   median slope             12.6   ->   7.3 deg
+        //   99th pct slope           38.1   ->  38.0 deg
+        //   relief                   3394m  ->  4146m
+        //   highest peak             2190m  ->  2973m
+        //
+        // The 99th percentile holding at 38 degrees is the point: the cliffs are
+        // still there at full steepness, they just stop being the whole surface.
+        // Plains at the cap and relief variety at 1.0 concentrate the steepness
+        // into belts; thermal at 0.58 rounds the peaks that remain.
         return {
           seed,
           octaves: 6,
           lacunarity: 2.0,
-          gain: 0.5,
-          frequency: 2.0,
-          warpStrength: 0.42,
-          continentalScale: 1.0,
-          mountainScale: 1.0,
-          plainsScale: 0.55,
-          hillsScale: 0.45,
-          mountainBeltScale: 0.75,
-          reliefVariety: 0.7,
-          erosionStrength: 0.34,
-          thermalStrength: 0.2,
-          detailStrength: 0.55,
+          gain: 0.40,
+          frequency: 1.2,
+          warpStrength: 0.39,
+          continentalScale: 1.00,
+          mountainScale: 1.70,
+          plainsScale: 2.00,
+          hillsScale: 0.54,
+          mountainBeltScale: 1.30,
+          reliefVariety: 1.00,
+          erosionStrength: 0.30,
+          thermalStrength: 0.58,
+          detailStrength: 0.22,
           microDetailStrength: 0.5,
           microDetailScale: 2.5,
           microReliefMeters: 1.5,
@@ -178,10 +206,42 @@ vec2 terrainTextureUv(vec3 sphereDir, float scale) {
   return uv * scale * 0.5;
 }
 
+// Two decorrelated samples with a continuous world-space blend. Explicit
+// gradients keep mip selection stable when the stochastic offsets change.
+float surfaceHash(vec3 p) {
+  p = fract(p * 0.1031);
+  p += dot(p, p.yzx + 33.33);
+  return fract((p.x + p.y) * p.z);
+}
+
+float surfaceNoise(vec3 p) {
+  vec3 i = floor(p), f = fract(p);
+  f = f * f * (3.0 - 2.0 * f);
+  // Hash integer corners themselves: dot(i)+offset rounded differently on
+  // adjacent cells, leaving discontinuities amplified by bump derivatives.
+  float a = surfaceHash(i);
+  float b = surfaceHash(i + vec3(1,0,0));
+  float c = surfaceHash(i + vec3(0,1,0));
+  float d = surfaceHash(i + vec3(1,1,0));
+  float e = surfaceHash(i + vec3(0,0,1));
+  float f1 = surfaceHash(i + vec3(1,0,1));
+  float g = surfaceHash(i + vec3(0,1,1));
+  float h = surfaceHash(i + vec3(1,1,1));
+  return mix(mix(mix(a,b,f.x),mix(c,d,f.x),f.y),
+    mix(mix(e,f1,f.x),mix(g,h,f.x),f.y),f.z);
+}
+
 vec3 sampleTerrainTexture(sampler2D tex, vec3 sphereDir, float materialScale, float offset, float scaleMultiplier) {
   vec2 uv = terrainTextureUv(sphereDir, uTextureScale * materialScale * scaleMultiplier);
-  vec2 baseOffset = vec2(offset * 0.137, offset * 0.071);
-  return texture2D(tex, uv + baseOffset).rgb;
+  uv += vec2(offset * 0.137, offset * 0.071);
+  vec2 dx = dFdx(uv), dy = dFdy(uv);
+  float field = surfaceNoise(normalize(sphereDir) * uTextureScale * scaleMultiplier * 0.11 + offset) * 7.0;
+  float cell = floor(field);
+  vec2 a = sin(vec2(3.0, 7.0) * (cell + 1.0)) * 13.0;
+  vec2 b = sin(vec2(3.0, 7.0) * (cell + 2.0)) * 13.0;
+  vec3 first = textureGrad(tex, uv + a, dx, dy).rgb;
+  vec3 second = textureGrad(tex, uv + b, dx, dy).rgb;
+  return mix(first, second, smoothstep(0.15, 0.85, fract(field)));
 }
 
 vec3 sampleBiomeTexture(vec3 dir, float coast, float rockMask, float snowMask, float moisture, float scaleMultiplier) {
@@ -210,25 +270,35 @@ vec3 applyTerrainTexture(vec3 baseColor, vec3 sphereDir, float planetKind, float
   if (planetKind > 0.5 && planetKind < 1.5 || uTextureBlend <= 0.001) return baseColor;
 
   vec3 dir = normalize(sphereDir);
+  float mineral = surfaceNoise(dir * uTextureScale * 0.006 + 71.0);
+  float strata = surfaceNoise(dir * uTextureScale * 0.028 + 19.0);
+  baseColor *= 0.83 + mineral * 0.28 + strata * 0.08;
+  baseColor = mix(baseColor, baseColor * vec3(1.12, 0.96, 0.82),
+    smoothstep(0.42, 0.75, mineral) * (0.12 + rockMask * 0.26) * (1.0 - snowMask));
+  // Broad mineral beds follow elevation; suppress unresolved bands in orbit.
+  float bedPhase = heightNorm * 720.0 + mineral * 1.5;
+  float bedFilter = 1.0 - smoothstep(0.5, 2.0, fwidth(bedPhase));
+  baseColor *= 1.0 + sin(bedPhase) * 0.085 * rockMask * (1.0 - snowMask)
+    * bedFilter * (1.0 - step(0.5, planetKind));
   float detailFade = 1.0 - smoothstep(
     uTextureNearDistance,
     uTextureNearDistance + max(uTextureFadeDistance, 0.001),
     cameraDistance
   );
-  float farAmount = uTextureBlend * uTextureFarStrength;
+  float farAmount = uTextureBlend * 0.42;
 
   if (detailFade >= 0.999) {
-    vec3 nearTex = sampleBiomeTexture(dir, coast, rockMask, snowMask, moisture, uTextureDetailScale);
+    vec3 nearTex = sampleBiomeTexture(dir, coast, rockMask, snowMask, moisture, 1.0);
     return blendTerrainTexture(baseColor, nearTex, uTextureBlend);
   }
 
   if (detailFade <= 0.001) {
-    vec3 farTex = sampleBiomeTexture(dir, coast, rockMask, snowMask, moisture, uTextureFarScale);
+    vec3 farTex = sampleBiomeTexture(dir, coast, rockMask, snowMask, moisture, 0.14);
     return blendTerrainTexture(baseColor, farTex, farAmount);
   }
 
-  vec3 nearTex = sampleBiomeTexture(dir, coast, rockMask, snowMask, moisture, uTextureDetailScale);
-  vec3 farTex = sampleBiomeTexture(dir, coast, rockMask, snowMask, moisture, uTextureFarScale);
+  vec3 nearTex = sampleBiomeTexture(dir, coast, rockMask, snowMask, moisture, 1.0);
+  vec3 farTex = sampleBiomeTexture(dir, coast, rockMask, snowMask, moisture, 0.14);
   vec3 texColor = mix(farTex, nearTex, detailFade);
   float textureAmount = mix(farAmount, uTextureBlend, detailFade);
   return blendTerrainTexture(baseColor, texColor, textureAmount);
@@ -293,7 +363,7 @@ float realisticTerrainHeight(vec3 sphereDir) {
 
   float thermalTalus = max(0.0, mountains - 0.10) * uThermalStrength * 0.23;
   float fineNoise = terrainFbm(warped * uFrequency * 10.5 + vec3(41.0, -11.0, 29.0), uSeed + 251.7, min(octaveCount, 5), 2.28, 0.42);
-  float badlands = pow(1.0 - abs(fineNoise), 4.2)
+  float badlands = pow(1.0 - clamp(abs(fineNoise), 0.0, 1.0), 4.2)
     * smoothstep(0.22, 0.76, continentMask)
     * (1.0 - smoothstep(0.05, 0.22, mountains));
   float detail = (fineNoise * 0.026 + badlands * 0.032) * uDetailStrength * (1.0 - uThermalStrength * 0.35);
@@ -312,7 +382,11 @@ float realisticTerrainHeight(vec3 sphereDir) {
 }
 `
 
+// Prepended to the shared lighting block, so all three terrain materials pick
+// up shadow receiving without any of them mentioning it.
 const PLANET_LIGHTING_GLSL = /* glsl */ `
+${SUN_SHADOW_PARS_GLSL}
+
 uniform float uSurfaceLightingBlend;
 uniform float uTerrainAoStrength;
 
@@ -355,10 +429,20 @@ vec3 applyPlanetLighting(vec3 albedo, vec3 normal, vec3 radialNormal, vec3 world
   float surfaceBlend = clamp(uSurfaceLightingBlend, 0.0, 1.0);
   if (uPlanetKind > 0.5 && uPlanetKind < 1.5) surfaceBlend = 0.0;
   float reliefOcclusion = terrainReliefOcclusion(heightNorm, slope);
+  // Cast shadows dim the sun term and leave ambient alone, so what a tree drops
+  // on the ground reads as shade rather than a hole in it.
+  //
+  // Sampled once and applied to both direct terms. This function carries two
+  // lighting models and mixes between them on uSurfaceLightingBlend, and the
+  // surface model below is the only one alive where props exist -- putting the
+  // shadow on softDirect alone means the mix throws it away exactly where it
+  // was meant to show.
+  float castShadow = sunShadowFactor(worldPos, nDotL);
   float softDirect = direct * 0.78 + direct * direct * 0.24;
   softDirect *= mix(0.82, 1.0, reliefOcclusion);
+  softDirect *= castShadow;
   float ambient = mix(0.055, 0.22, day) * reliefOcclusion;
-  float rim = pow(1.0 - max(dot(n, viewDir), 0.0), 2.3) * smoothstep(-0.05, 0.50, nDotL);
+  float rim = pow(1.0 - clamp(dot(n, viewDir), 0.0, 1.0), 2.3) * smoothstep(-0.05, 0.50, nDotL);
   float highland = smoothstep(0.60, 0.90, heightNorm) * 0.055;
   float cavity = 1.0 - slope * mix(0.12, 0.05, day);
   const float atmosphereLightInfluence = 0.85;
@@ -384,7 +468,7 @@ vec3 applyPlanetLighting(vec3 albedo, vec3 normal, vec3 radialNormal, vec3 world
 
   float skyVisibility = clamp(dot(n, r) * 0.54 + 0.46, 0.18, 1.0);
   float wrappedDay = smoothstep(-0.42, 0.58, nDotL);
-  float surfaceDirect = direct * 0.70 + wrappedDay * 0.22 + direct * direct * 0.18;
+  float surfaceDirect = (direct * 0.70 + wrappedDay * 0.22 + direct * direct * 0.18) * castShadow;
   float microCavity = smoothstep(0.035, 0.32, slope) * (1.0 - smoothstep(0.80, 1.0, heightNorm));
   float lowAngleRelief = 1.0 - smoothstep(0.16, 0.72, nDotL);
   float directionalReliefShadow = clamp(1.0 - microCavity * lowAngleRelief * surfaceBlend * 0.34, 0.66, 1.0);
@@ -402,12 +486,20 @@ vec3 applyPlanetLighting(vec3 albedo, vec3 normal, vec3 radialNormal, vec3 world
   surfaceLit += mix(vec3(0.22, 0.34, 0.48), uAtmosphereLightColor, atmosphereLightInfluence * 0.46) * rim * 0.10;
 
   lit = mix(lit, surfaceLit, surfaceBlend);
+  float airDistance = max(0.0, distance(cameraPosition, worldPos) - 100.0);
+  float haze = (1.0 - exp2(-airDistance / max(650.0, uPlanetRadius * 0.065)))
+    * surfaceBlend * clamp(extinctionStrength, 0.0, 1.0) * 0.68;
+  vec3 airColor = mix(uAtmosphereColor * 0.42, uAtmosphereLightColor * 0.62, 0.35);
+  airColor = mix(airColor, uTwilightColor * 0.35, terminator * 0.45);
+  lit = mix(lit, airColor * smoothstep(-0.28, 0.52, dot(r, lightDir)), haze);
   return lit;
 }
 `
 
 const TERRAIN_GRASS_AO_GLSL = /* glsl */ `
 uniform float uGrassGroundAoStrength;
+uniform vec3 uGrassGroundTint;
+uniform float uGrassGroundTintStrength;
 
 float terrainGrassGroundMask(float grassPatch, float heightNorm, float moisture, float slope, float coast, float rockMask, float snowMask) {
   if (uPlanetKind > 0.5) return 0.0;
@@ -428,7 +520,20 @@ vec3 applyGrassGroundAo(vec3 color, float grassPatch, float heightNorm, float mo
   float mask = terrainGrassGroundMask(grassPatch, heightNorm, moisture, slope, coast, rockMask, snowMask);
   float amount = clamp(mask * uGrassGroundAoStrength, 0.0, 0.48);
   vec3 occluded = color * vec3(0.58, 0.62, 0.52);
-  return mix(color, occluded, amount);
+  color = mix(color, occluded, amount);
+
+  // Paint the ground the colour of the blades that grow on it, wherever they
+  // grow -- not only out where they stop being drawn. Up close the blades hide
+  // this completely, so there is no distance term here and therefore no seam to
+  // hide when they fade: the tint is simply what is left behind.
+  //
+  // Luminance comes from the terrain and only the hue comes from the grass.
+  // Blending towards a flat colour instead would erase relief, AO and the
+  // ground noise over every meadow, which reads as a painted-on patch.
+  float lum = dot(color, vec3(0.2126, 0.7152, 0.0722));
+  float tintLum = max(dot(uGrassGroundTint, vec3(0.2126, 0.7152, 0.0722)), 1e-4);
+  vec3 grassAtThisLum = uGrassGroundTint * (lum / tintLum);
+  return mix(color, grassAtThisLum, clamp(mask * uGrassGroundTintStrength, 0.0, 1.0));
 }
 `
 
@@ -682,6 +787,7 @@ export function createPlanetMaterial(params: {
   varying vec3 vNormal;
   varying vec3 vRadialNormal;
   varying vec3 vWorldPos;
+  varying vec3 vViewPosition;
   varying float vHeight;
   varying vec3 vSphereDir;
   varying float vDetail;
@@ -723,7 +829,9 @@ export function createPlanetMaterial(params: {
     if (dot(vNormal, vRadialNormal) < 0.0) vNormal = -vNormal;
 
     vWorldPos = worldPos.xyz;
-    gl_Position = projectionMatrix * viewMatrix * worldPos;
+    vec4 viewPosition = modelViewMatrix * vec4(position, 1.0);
+    vViewPosition = viewPosition.xyz;
+    gl_Position = projectionMatrix * viewPosition;
     #include <logdepthbuf_vertex>
   }
   `
@@ -753,6 +861,7 @@ export function createPlanetMaterial(params: {
   varying vec3 vNormal;
   varying vec3 vRadialNormal;
   varying vec3 vWorldPos;
+  varying vec3 vViewPosition;
   varying float vHeight;
   varying vec3 vSphereDir;
   varying float vDetail;
@@ -782,28 +891,13 @@ export function createPlanetMaterial(params: {
     color = mix(color, beach, coast);
     color = mix(color, highRock, smoothstep(0.58, 0.70, heightNorm));
     color = mix(color, snow, smoothstep(0.74, 0.84, heightNorm + latitude * 0.18) * smoothstep(0.54, 0.78, latitude));
-    color = mix(color, highRock, saturate(slope * 0.95));
+    color = mix(color, highRock, smoothstep(0.055, 0.27, slope));
     float luma = dot(color, vec3(0.299, 0.587, 0.114));
     color = mix(vec3(luma), color, 0.78);
     return color;
   }
 
-  vec3 iceBiome(float heightNorm, float latitude, float moisture, float slope) {
-    vec3 blueIce = vec3(0.46, 0.68, 0.80);
-    vec3 snow = vec3(0.86, 0.91, 0.95);
-    vec3 rock = vec3(0.32, 0.36, 0.38);
-    vec3 color = mix(blueIce, snow, smoothstep(0.28, 0.8, heightNorm + latitude * 0.25 + moisture * 0.1));
-    return mix(color, rock, smoothstep(0.45, 0.95, slope));
-  }
-
-  vec3 gasBands(float latitude, float bands, float turbulence) {
-    vec3 bandA = mix(uColorA, vec3(0.95, 0.74, 0.48), 0.35);
-    vec3 bandB = mix(uColorB, vec3(0.60, 0.34, 0.18), 0.35);
-    vec3 storms = vec3(1.0, 0.88, 0.62);
-    vec3 color = mix(bandA, bandB, bands);
-    color = mix(color, storms, smoothstep(0.62, 0.95, turbulence) * (1.0 - latitude * 0.45));
-    return color;
-  }
+  ${PLANET_TYPE_BIOMES_GLSL}
 
   vec3 materialAlbedoDetail(vec3 color, float heightNorm, float latitude, float moisture, float slope, float coast) {
     if (uPlanetKind > 0.5 && uPlanetKind < 1.5) return color;
@@ -840,29 +934,35 @@ export function createPlanetMaterial(params: {
   }
 
   vec3 detailNormal(vec3 baseNormal, float latitude, float moisture, float slope, float coast) {
-    if (uPlanetKind > 0.5 && uPlanetKind < 1.5) return baseNormal;
-
-    vec3 sphereDir = normalize(vSphereDir);
-    vec3 tangent = normalize(cross(sphereDir, vec3(0.0, 1.0, 0.0)));
-    if (length(tangent) < 0.01) {
-      tangent = normalize(cross(sphereDir, vec3(1.0, 0.0, 0.0)));
-    }
-    vec3 bitangent = normalize(cross(sphereDir, tangent));
-
-    float rock = terrainFbm(sphereDir * 95.0 + 41.0, uSeed + 301.0, 3, 2.2, 0.48);
-    float grit = vDetail;
-    float dune = moisture * 2.0 - 1.0;
-
-    float snow = smoothstep(0.68, 0.88, smoothstep(-1.0, 1.0, vHeight) + latitude * 0.18) * smoothstep(0.48, 0.88, latitude);
-    float dry = saturate(1.0 - moisture);
-    float strength = 0.025 + vNearDetail * 0.055;
-    strength += slope * (0.065 + vNearDetail * 0.05);
-    strength += dry * (1.0 - coast) * (0.022 + vNearDetail * 0.03);
-    strength *= 1.0 - snow * 0.55;
-    strength *= 1.0 - coast * 0.45;
-
-    vec2 detail = vec2(rock + grit * 0.45, dune * dry + grit * 0.25);
-    return normalize(baseNormal + tangent * detail.x * strength + bitangent * detail.y * strength);
+    // Centimetre relief affects lighting, not collision or chunk boundaries.
+    vec3 p = normalize(vSphereDir) * uPlanetRadius;
+    float footprint = max(length(dFdx(p)), length(dFdy(p)));
+    float fineFade = 1.0 - smoothstep(0.10, 0.65, footprint);
+    float mediumFade = 1.0 - smoothstep(0.6, 3.0, footprint);
+    float grain = surfaceNoise(p * 5.2 + 17.0);
+    float stone = surfaceNoise(p * 0.85 + 43.0);
+    float ripplePhase = dot(p, vec3(0.71, 0.23, 0.66)) * 18.0 + stone * 3.0;
+    float ripple = sin(ripplePhase);
+    float rippleFade = 1.0 - smoothstep(0.5, 3.0, fwidth(ripplePhase));
+    // Filter the gradient, not the height: differentiating a footprint-based
+    // fade would require undefined second derivatives on some GPUs.
+    vec2 gradientFine = vec2(dFdx(grain), dFdy(grain)) * 0.035 * fineFade;
+    vec2 gradientStone = vec2(dFdx(stone), dFdy(stone)) * 0.12 * mediumFade * (0.35 + slope);
+    vec2 gradientRipple = vec2(dFdx(ripple), dFdy(ripple)) * coast * 0.009 * fineFade * rippleFade;
+    vec2 heightGradient = gradientFine + gradientStone + gradientRipple;
+    float dhdx = heightGradient.x, dhdy = heightGradient.y;
+    // Differentiate small camera-relative coordinates, then rotate the vectors
+    // back to world space. Derivatives of orbital positions quantize centimetres
+    // and make otherwise stationary grain change its lighting every frame.
+    vec3 dpdx = (vec4(dFdx(vViewPosition), 0.0) * viewMatrix).xyz;
+    vec3 dpdy = (vec4(dFdy(vViewPosition), 0.0) * viewMatrix).xyz;
+    vec3 r1 = cross(dpdy, baseNormal), r2 = cross(baseNormal, dpdx);
+    float determinant = dot(dpdx, r1);
+    vec3 gradient = sign(determinant) * (dhdx * r1 + dhdy * r2);
+    vec3 perturbed = normalize(max(abs(determinant), 0.00000001) * baseNormal - gradient);
+    float strength = (1.0 - smoothstep(90.0, 180.0, distance(cameraPosition, vWorldPos)))
+      * (1.0 - step(0.5, uPlanetKind));
+    return normalize(mix(baseNormal, perturbed, strength));
   }
 
   void main() {
@@ -884,7 +984,8 @@ export function createPlanetMaterial(params: {
     }
 
     terrainColor = applyOceanFloor(terrainColor, vHeight, slope);
-    float rockMask = saturate(slope * 0.75 + smoothstep(0.60, 0.72, heightNorm));
+    float slopeRock = uPlanetKind < 0.5 ? smoothstep(0.055, 0.27, slope) : slope * 0.75;
+    float rockMask = saturate(slopeRock + smoothstep(0.60, 0.72, heightNorm));
     float snowMask = smoothstep(0.74, 0.84, heightNorm + latitude * 0.18) * smoothstep(0.54, 0.78, latitude);
     terrainColor = applyTerrainTexture(terrainColor, vSphereDir, uPlanetKind, heightNorm, coast, rockMask, snowMask, moisture, distance(cameraPosition, vWorldPos));
     float wetShore = smoothstep(uSeaHeight + 0.002, uSeaHeight + 0.020, vHeight)
@@ -911,6 +1012,7 @@ export function createPlanetMaterial(params: {
     fragmentShader,
     side: THREE.DoubleSide,
     uniforms: {
+      ...getSunShadowUniforms(),
       uSeed: { value: params.seed },
       uTerrainScale: { value: params.terrainScale },
       uPlanetRadius: { value: params.planetRadius },
@@ -957,6 +1059,8 @@ export function createPlanetMaterial(params: {
       uTextureFarStrength: { value: params.textureFarStrength },
       uTerrainAoStrength: { value: params.terrainAoStrength },
       uGrassGroundAoStrength: { value: 0 },
+      uGrassGroundTint: { value: new THREE.Color(0x5c7a43) },
+      uGrassGroundTintStrength: { value: 0 },
       uSurfaceLightingBlend: { value: 0 },
     },
   })
@@ -1071,7 +1175,7 @@ export function createPlanetFarMaterial(params: {
     vRadialNormal = normalize((modelMatrix * vec4(sphereDir, 0.0)).xyz);
     vNormal = normalize((modelMatrix * vec4(normal, 0.0)).xyz);
     if (dot(vNormal, vRadialNormal) < 0.0) vNormal = -vNormal;
-    gl_Position = projectionMatrix * viewMatrix * worldPos;
+    gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
     #include <logdepthbuf_vertex>
   }
   `
@@ -1124,28 +1228,13 @@ export function createPlanetFarMaterial(params: {
     color = mix(color, beach, coast);
     color = mix(color, highRock, smoothstep(0.58, 0.70, heightNorm));
     color = mix(color, snow, smoothstep(0.74, 0.84, heightNorm + latitude * 0.18) * smoothstep(0.54, 0.78, latitude));
-    color = mix(color, highRock, saturate(slope * 0.95));
+    color = mix(color, highRock, smoothstep(0.055, 0.27, slope));
     float luma = dot(color, vec3(0.299, 0.587, 0.114));
     color = mix(vec3(luma), color, 0.78);
     return color;
   }
 
-  vec3 iceBiome(float heightNorm, float latitude, float moisture, float slope) {
-    vec3 blueIce = vec3(0.46, 0.68, 0.80);
-    vec3 snow = vec3(0.86, 0.91, 0.95);
-    vec3 rock = vec3(0.32, 0.36, 0.38);
-    vec3 color = mix(blueIce, snow, smoothstep(0.28, 0.8, heightNorm + latitude * 0.25 + moisture * 0.1));
-    return mix(color, rock, smoothstep(0.45, 0.95, slope));
-  }
-
-  vec3 gasBands(float latitude, float bands, float turbulence) {
-    vec3 bandA = mix(uColorA, vec3(0.95, 0.74, 0.48), 0.35);
-    vec3 bandB = mix(uColorB, vec3(0.60, 0.34, 0.18), 0.35);
-    vec3 storms = vec3(1.0, 0.88, 0.62);
-    vec3 color = mix(bandA, bandB, bands);
-    color = mix(color, storms, smoothstep(0.62, 0.95, turbulence) * (1.0 - latitude * 0.45));
-    return color;
-  }
+  ${PLANET_TYPE_BIOMES_GLSL}
 
   vec3 applyOceanFloor(vec3 color, float height, float slope) {
     if (uPlanetKind > 0.5 && uPlanetKind < 1.5 || uSeaHeight < -1.0) return color;
@@ -1179,7 +1268,8 @@ export function createPlanetFarMaterial(params: {
     }
 
     terrain = applyOceanFloor(terrain, visualHeight, slope);
-    float rockMask = saturate(slope * 0.75 + smoothstep(0.60, 0.72, heightNorm));
+    float slopeRock = uPlanetKind < 0.5 ? smoothstep(0.055, 0.27, slope) : slope * 0.75;
+    float rockMask = saturate(slopeRock + smoothstep(0.60, 0.72, heightNorm));
     float snowMask = smoothstep(0.74, 0.84, heightNorm + latitude * 0.18) * smoothstep(0.54, 0.78, latitude);
     terrain = applyTerrainTexture(terrain, vSphereDir, uPlanetKind, heightNorm, coast, rockMask, snowMask, moisture, distance(cameraPosition, vWorldPos));
     float wetShore = smoothstep(uSeaHeight + 0.002, uSeaHeight + 0.020, visualHeight)
@@ -1204,6 +1294,7 @@ export function createPlanetFarMaterial(params: {
     fragmentShader,
     side: THREE.DoubleSide,
     uniforms: {
+      ...getSunShadowUniforms(),
       uSeed: { value: params.seed },
       uTerrainScale: { value: params.terrainScale },
       uPlanetRadius: { value: params.planetRadius },
@@ -1256,6 +1347,8 @@ export function createPlanetFarMaterial(params: {
       uTextureFarStrength: { value: params.textureFarStrength },
       uTerrainAoStrength: { value: params.terrainAoStrength },
       uGrassGroundAoStrength: { value: 0 },
+      uGrassGroundTint: { value: new THREE.Color(0x5c7a43) },
+      uGrassGroundTintStrength: { value: 0 },
       uSurfaceLightingBlend: { value: 0 },
     },
   })
@@ -1339,7 +1432,7 @@ export function createPlanetFallbackMaterial(params: {
     if (dot(vNormal, vRadialNormal) < 0.0) vNormal = -vNormal;
     vec4 worldPos = modelMatrix * vec4(position, 1.0);
     vWorldPos = worldPos.xyz;
-    gl_Position = projectionMatrix * viewMatrix * worldPos;
+    gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
     #include <logdepthbuf_vertex>
   }
   `
@@ -1390,28 +1483,13 @@ export function createPlanetFallbackMaterial(params: {
     color = mix(color, beach, coast);
     color = mix(color, highRock, smoothstep(0.58, 0.70, heightNorm));
     color = mix(color, snow, smoothstep(0.74, 0.84, heightNorm + latitude * 0.18) * smoothstep(0.54, 0.78, latitude));
-    color = mix(color, highRock, saturate(slope * 0.95));
+    color = mix(color, highRock, smoothstep(0.055, 0.27, slope));
     float luma = dot(color, vec3(0.299, 0.587, 0.114));
     color = mix(vec3(luma), color, 0.78);
     return color;
   }
 
-  vec3 iceBiome(float heightNorm, float latitude, float moisture, float slope) {
-    vec3 blueIce = vec3(0.46, 0.68, 0.80);
-    vec3 snow = vec3(0.86, 0.91, 0.95);
-    vec3 rock = vec3(0.32, 0.36, 0.38);
-    vec3 color = mix(blueIce, snow, smoothstep(0.28, 0.8, heightNorm + latitude * 0.25 + moisture * 0.1));
-    return mix(color, rock, smoothstep(0.45, 0.95, slope));
-  }
-
-  vec3 gasBands(float latitude, float bands, float turbulence) {
-    vec3 bandA = mix(uColorA, vec3(0.95, 0.74, 0.48), 0.35);
-    vec3 bandB = mix(uColorB, vec3(0.60, 0.34, 0.18), 0.35);
-    vec3 storms = vec3(1.0, 0.88, 0.62);
-    vec3 color = mix(bandA, bandB, bands);
-    color = mix(color, storms, smoothstep(0.62, 0.95, turbulence) * (1.0 - latitude * 0.45));
-    return color;
-  }
+  ${PLANET_TYPE_BIOMES_GLSL}
 
   vec3 applyOceanFloor(vec3 color, float height, float slope) {
     if (uPlanetKind > 0.5 && uPlanetKind < 1.5 || uSeaHeight < -1.0) return color;
@@ -1445,7 +1523,8 @@ export function createPlanetFallbackMaterial(params: {
     }
 
     terrain = applyOceanFloor(terrain, visualHeight, slope);
-    float rockMask = saturate(slope * 0.75 + smoothstep(0.60, 0.72, heightNorm));
+    float slopeRock = uPlanetKind < 0.5 ? smoothstep(0.055, 0.27, slope) : slope * 0.75;
+    float rockMask = saturate(slopeRock + smoothstep(0.60, 0.72, heightNorm));
     float snowMask = smoothstep(0.74, 0.84, heightNorm + latitude * 0.18) * smoothstep(0.54, 0.78, latitude);
     terrain = applyTerrainTexture(terrain, vSphereDir, uPlanetKind, heightNorm, coast, rockMask, snowMask, moisture, distance(cameraPosition, vWorldPos));
     float wetShore = smoothstep(uSeaHeight + 0.002, uSeaHeight + 0.020, visualHeight)
@@ -1469,6 +1548,7 @@ export function createPlanetFallbackMaterial(params: {
     fragmentShader,
     side: THREE.FrontSide,
     uniforms: {
+      ...getSunShadowUniforms(),
       uSeed: { value: params.seed },
       uFrequency: { value: params.frequency },
       uOctaves: { value: params.octaves },
@@ -1554,7 +1634,7 @@ export function createAtmosphereMaterial(params: {
     vNormal = normalize((modelMatrix * vec4(normal, 0.0)).xyz);
     vec4 worldPos = modelMatrix * vec4(position, 1.0);
     vWorldPos = worldPos.xyz;
-    gl_Position = projectionMatrix * viewMatrix * worldPos;
+    gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
     #include <logdepthbuf_vertex>
   }
   `
@@ -1592,7 +1672,7 @@ export function createAtmosphereMaterial(params: {
     float inside = 1.0 - smoothstep(uAtmosphereRadius * 0.995, uAtmosphereRadius * 1.01, cameraRadius);
 
     vec3 toCamera = normalize(cameraPosition - vWorldPos);
-    float nDotV = max(dot(toCamera, shellNormal), 0.0);
+    float nDotV = clamp(dot(toCamera, shellNormal), 0.0, 1.0);
     float rim = pow(1.0 - nDotV, 2.55);
     float outerFade = smoothstep(0.03, 0.78, rim) * (1.0 - smoothstep(0.90, 1.0, rim) * 0.22);
     float shellThicknessRatio = clamp((uAtmosphereRadius - uPlanetRadius) / max(uAtmosphereRadius, 0.001), 0.001, 0.25);
@@ -1692,6 +1772,23 @@ export function createAtmosphereMaterial(params: {
   })
 }
 
+// Main-scene depth is logarithmic, just like these cloud shaders. Test before
+// evaluating noise so hidden fragments also avoid expensive density work.
+const CLOUD_SCENE_DEPTH_GLSL = /* glsl */ `
+uniform sampler2D uCloudSceneDepth;
+uniform vec2 uCloudViewport;
+uniform float uCloudDepthEnabled;
+void clipCloudAgainstScene() {
+  if (uCloudDepthEnabled < 0.5) return;
+  float sceneDepth = texture2D(uCloudSceneDepth, gl_FragCoord.xy / uCloudViewport).r;
+  float cloudDepth = gl_FragCoord.z;
+  #ifdef USE_LOGARITHMIC_DEPTH_BUFFER
+    cloudDepth = vIsPerspective == 0.0 ? gl_FragCoord.z : log2(vFragDepth) * logDepthBufFC * 0.5;
+  #endif
+  if (sceneDepth < 1.0 && cloudDepth > sceneDepth + 0.0000002) discard;
+}
+`
+
 export function createCloudMaterial(params: {
   seed: number
   cloudMask: THREE.Texture
@@ -1730,13 +1827,14 @@ export function createCloudMaterial(params: {
     vNormal = normalize((modelMatrix * vec4(normal, 0.0)).xyz);
     vec4 worldPos = modelMatrix * vec4(position, 1.0);
     vWorldPos = worldPos.xyz;
-    gl_Position = projectionMatrix * viewMatrix * worldPos;
+    gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
     #include <logdepthbuf_vertex>
   }
   `
 
   const fragmentShader = /* glsl */ `
   #include <logdepthbuf_pars_fragment>
+  ${CLOUD_SCENE_DEPTH_GLSL}
   ${TERRAIN_NOISE}
   ${CLOUD_PATTERN_GLSL}
 
@@ -1756,6 +1854,7 @@ export function createCloudMaterial(params: {
   varying vec3 vLocalDir;
 
   void main() {
+    clipCloudAgainstScene();
     vec3 dir = normalize(vLocalDir);
     vec3 shellNormal = normalize(vNormal);
     vec3 localSunDir = normalize(uCloudLocalSunDirection);
@@ -1764,7 +1863,7 @@ export function createCloudMaterial(params: {
     float nDotL = dot(dir, localSunDir);
     float day = smoothstep(-0.18, 0.60, nDotL);
     float direct = clamp(nDotL, 0.0, 1.0);
-    float rim = pow(1.0 - max(dot(toCamera, shellNormal), 0.0), 2.1);
+    float rim = pow(1.0 - clamp(dot(toCamera, shellNormal), 0.0, 1.0), 2.1);
 
     float opacity = clamp(uOpacity, 0.0, 1.0);
     float macroMask = sharedCloudMask(dir);
@@ -1791,7 +1890,7 @@ export function createCloudMaterial(params: {
     float terminator = smoothstep(-0.34, 0.16, nDotL) * (1.0 - smoothstep(0.08, 0.56, nDotL));
     float lowSun = pow(1.0 - clamp(nDotL * 0.90 + 0.10, 0.0, 1.0), 2.0) * smoothstep(-0.26, 0.46, nDotL);
     float forwardGlow = pow(max(dot(toCamera, sunDir), 0.0), 7.5);
-    float rimLight = pow(1.0 - max(dot(toCamera, shellNormal), 0.0), 3.0);
+    float rimLight = pow(1.0 - clamp(dot(toCamera, shellNormal), 0.0, 1.0), 3.0);
 
     vec3 coolWhite = mix(uCloudColor, uAtmosphereColor, 0.10) * 0.92;
     vec3 sunWhite = mix(vec3(0.82), uSunColor, 0.24);
@@ -1838,6 +1937,9 @@ export function createCloudMaterial(params: {
     blending: THREE.NormalBlending,
     side: THREE.FrontSide,
     uniforms: {
+      uCloudSceneDepth: { value: null },
+      uCloudViewport: { value: new THREE.Vector2(1, 1) },
+      uCloudDepthEnabled: { value: 0 },
       uAtmosphereColor: { value: atmosphereColor },
       uSunColor: { value: sunColor },
       uAtmosphereLightColor: { value: atmosphereLightColor },
@@ -1897,15 +1999,17 @@ export function createCloudBillboardMaterial(params: {
     vAlpha = instanceAlpha;
     vSeed = instanceSeed;
 
-    vec4 worldPos = modelMatrix * instanceMatrix * vec4(position, 1.0);
+    vec4 localPos = instanceMatrix * vec4(position, 1.0);
+    vec4 worldPos = modelMatrix * localPos;
     vWorldPos = worldPos.xyz;
-    gl_Position = projectionMatrix * viewMatrix * worldPos;
+    gl_Position = projectionMatrix * modelViewMatrix * localPos;
     #include <logdepthbuf_vertex>
   }
   `
 
   const fragmentShader = /* glsl */ `
   #include <logdepthbuf_pars_fragment>
+  ${CLOUD_SCENE_DEPTH_GLSL}
 
   uniform vec3 uAtmosphereColor;
   uniform vec3 uSunColor;
@@ -1938,20 +2042,22 @@ export function createCloudBillboardMaterial(params: {
   }
 
   void main() {
+    clipCloudAgainstScene();
     vec2 p = vUv * 2.0 - 1.0;
     p.x *= 1.08;
-    float radial = length(p);
-    float core = smoothstep(1.02, 0.16, radial);
-    float feather = smoothstep(1.08, 0.66, radial);
+    // A cluster of lobes with an eroded silhouette, rather than a soft disc.
     vec2 flow = vec2(uTime * 0.018, -uTime * 0.011);
-    float softNoise = valueNoise(p * 2.15 + vSeed * 19.0 + flow);
-    float broadNoise = valueNoise(p * 1.05 + vSeed * 7.0 - flow * 0.6);
-    float streak = sin((p.x * 3.2 + p.y * 1.4 + vSeed * 9.7) + uTime * 0.08) * 0.5 + 0.5;
-    float edgeBreakup = smoothstep(0.22, 0.92, softNoise * 0.62 + broadNoise * 0.38);
-    float mask = core * mix(0.86, 1.10, broadNoise);
-    mask += feather * streak * edgeBreakup * 0.16;
-    mask *= smoothstep(1.08, 0.84, radial);
-    mask *= 0.84 + softNoise * 0.22;
+    float softNoise = valueNoise(p * 4.2 + vSeed * 19.0 + flow);
+    float broadNoise = valueNoise(p * 1.65 + vSeed * 7.0 - flow * 0.6);
+    float leftLobe = length((p - vec2(-0.38, -0.04)) / vec2(0.56, 0.54));
+    float crown = length((p - vec2(0.02, 0.20)) / vec2(0.55, 0.68));
+    float rightLobe = length((p - vec2(0.43, -0.06)) / vec2(0.48, 0.46));
+    float radial = min(crown, min(leftLobe, rightLobe));
+    float boundary = radial + (softNoise - 0.5) * 0.23;
+    float core = 1.0 - smoothstep(0.22, 1.02, boundary);
+    float feather = (1.0 - smoothstep(0.72, 1.10, boundary)) * smoothstep(0.20, 0.85, boundary);
+    float mask = (1.0 - exp(-core * (1.8 + broadNoise)))
+      * (1.0 - smoothstep(0.88, 1.0, max(abs(p.x), abs(p.y))));
 
     vec3 dir = normalize(vWorldPos - uPlanetCenter);
     vec3 sunDir = normalize(uSunPosition - uPlanetCenter);
@@ -1965,7 +2071,8 @@ export function createCloudBillboardMaterial(params: {
     vec3 cloudNight = mix(vec3(0.010, 0.016, 0.032) * 0.34, uAtmosphereLightColor * 0.045, 0.22);
     vec3 color = mix(cloudNight, cloudDay, day);
     float edgeLight = feather * pow(max(dot(normalize(cameraPosition - vWorldPos), sunDir), 0.0), 4.5);
-    float innerShade = core * (1.0 - direct) * 0.28;
+    float innerShade = core * (0.12 + (1.0 - direct) * 0.20)
+      + (1.0 - smoothstep(-0.55, 0.38, p.y)) * core * 0.18;
     color = mix(color, color * vec3(0.46, 0.52, 0.62), innerShade);
     color += mix(uAtmosphereLightColor, uSunColor, 0.35) * (feather * day * 0.035 + edgeLight * 0.10);
 
@@ -1992,6 +2099,9 @@ export function createCloudBillboardMaterial(params: {
     blending: THREE.NormalBlending,
     side: THREE.FrontSide,
     uniforms: {
+      uCloudSceneDepth: { value: null },
+      uCloudViewport: { value: new THREE.Vector2(1, 1) },
+      uCloudDepthEnabled: { value: 0 },
       uAtmosphereColor: { value: atmosphereColor },
       uSunColor: { value: sunColor },
       uAtmosphereLightColor: { value: atmosphereLightColor },

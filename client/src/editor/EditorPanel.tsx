@@ -1,5 +1,8 @@
+import { useState } from 'react'
 import type { EditorParams } from './editor-defaults'
-import { DEFAULT_PARAMS, RANGES, TYPE_PRESETS } from './editor-defaults'
+import { DEFAULT_PARAMS, RANGES } from './editor-defaults'
+import { MINERAL_DAWN, captureVisualLook, type VisualLook } from './visual-presets'
+import { MINERAL_WORLD, ICE_WORLD, GAS_WORLD } from '../../../server/spacetimedb/src/shared/world-catalog'
 import './EditorPanel.css'
 
 interface Props {
@@ -8,18 +11,35 @@ interface Props {
 }
 
 export function EditorPanel({ params, onChange }: Props) {
+  const [previousLook, setPreviousLook] = useState<VisualLook | null>(null)
   const set = <K extends keyof EditorParams>(key: K, value: EditorParams[K]) => {
     onChange({ ...params, [key]: value })
   }
 
   const setPlanetType = (planetType: string) => {
-    const preset = TYPE_PRESETS[planetType]
-    onChange({ ...params, planetType, ...preset })
+    const preset = planetType === 'ice' ? ICE_WORLD : planetType === 'gas' ? GAS_WORLD : MINERAL_WORLD
+    onChange({ ...params, ...preset, seed: params.seed, planetRadius: params.planetRadius, planetRotationSpeed: params.planetRotationSpeed })
   }
 
   return (
     <div className="editor-panel">
       <div className="editor-title">Planet Editor</div>
+
+      <div className="editor-section">
+        <div className="editor-section-title">Art Direction</div>
+        <p className="editor-look-description">Mineral Dawn — sage meadows, copper rock and a pale mineral sky.</p>
+        <div className="editor-btn-row">
+          <button className="editor-btn" disabled={previousLook !== null} onClick={() => {
+            setPreviousLook(captureVisualLook(params))
+            onChange({ ...params, ...MINERAL_DAWN })
+          }}>Apply Mineral Dawn</button>
+          <button className="editor-btn" disabled={previousLook === null} onClick={() => {
+            if (!previousLook) return
+            onChange({ ...params, ...previousLook })
+            setPreviousLook(null)
+          }}>Restore Look</button>
+        </div>
+      </div>
 
       <div className="editor-section">
         <div className="editor-section-title">Planet Type</div>
@@ -763,6 +783,19 @@ export function EditorPanel({ params, onChange }: Props) {
           <span className="editor-value">{params.grassDistance.toFixed(0)}m</span>
         </div>
         <div className="editor-row">
+          <span className="editor-label">Ground Tint</span>
+          <input
+            className="editor-slider"
+            type="range"
+            min={RANGES.grassGroundTint.min}
+            max={RANGES.grassGroundTint.max}
+            step={RANGES.grassGroundTint.step}
+            value={params.grassGroundTint}
+            onChange={e => set('grassGroundTint', Number(e.target.value))}
+          />
+          <span className="editor-value">{params.grassGroundTint.toFixed(2)}</span>
+        </div>
+        <div className="editor-row">
           <span className="editor-label">Base Color</span>
           <input
             className="editor-color"
@@ -1320,6 +1353,104 @@ export function EditorPanel({ params, onChange }: Props) {
             />
             <span className="editor-label" style={{ width: 'auto' }}>Bloom</span>
           </label>
+        </div>
+        <div className="editor-row">
+          <label style={{ display: 'flex', alignItems: 'center', gap: 6, cursor: 'pointer' }}>
+            <input
+              type="checkbox"
+              checked={params.debugAntialias}
+              onChange={e => set('debugAntialias', e.target.checked)}
+              style={{ accentColor: '#2dd4a7' }}
+            />
+            <span className="editor-label" style={{ width: 'auto' }}>Antialias (SMAA)</span>
+          </label>
+        </div>
+        <div className="editor-row">
+          <label style={{ display: 'flex', alignItems: 'center', gap: 6, cursor: 'pointer' }}>
+            <input
+              type="checkbox"
+              checked={params.debugSunShadow}
+              onChange={e => set('debugSunShadow', e.target.checked)}
+              style={{ accentColor: '#2dd4a7' }}
+            />
+            <span className="editor-label" style={{ width: 'auto' }}>Sun Shadows</span>
+          </label>
+        </div>
+        <div className="editor-row">
+          <span className="editor-label">Shadow Strength</span>
+          <input
+            className="editor-slider"
+            type="range"
+            min={RANGES.sunShadowStrength.min}
+            max={RANGES.sunShadowStrength.max}
+            step={RANGES.sunShadowStrength.step}
+            value={params.sunShadowStrength}
+            onChange={e => set('sunShadowStrength', Number(e.target.value))}
+          />
+          <span className="editor-value">{params.sunShadowStrength.toFixed(2)}</span>
+        </div>
+        <div className="editor-row">
+          <span className="editor-label">Shadow Radius</span>
+          <input
+            className="editor-slider"
+            type="range"
+            min={RANGES.sunShadowRadius.min}
+            max={RANGES.sunShadowRadius.max}
+            step={RANGES.sunShadowRadius.step}
+            value={params.sunShadowRadius}
+            onChange={e => set('sunShadowRadius', Number(e.target.value))}
+          />
+          <span className="editor-value">{params.sunShadowRadius}m</span>
+        </div>
+        <div className="editor-row">
+          <label style={{ display: 'flex', alignItems: 'center', gap: 6, cursor: 'pointer' }}>
+            <input
+              type="checkbox"
+              checked={params.debugGpuProfiler}
+              onChange={e => set('debugGpuProfiler', e.target.checked)}
+              style={{ accentColor: '#2dd4a7' }}
+            />
+            <span className="editor-label" style={{ width: 'auto' }}>GPU Profiler</span>
+          </label>
+        </div>
+        <div className="editor-row">
+          <span className="editor-label">Pixel Ratio</span>
+          <input
+            className="editor-slider"
+            type="range"
+            min={RANGES.pixelRatioLimit.min}
+            max={RANGES.pixelRatioLimit.max}
+            step={RANGES.pixelRatioLimit.step}
+            value={params.pixelRatioLimit}
+            onChange={e => set('pixelRatioLimit', Number(e.target.value))}
+          />
+          <span className="editor-value">{params.pixelRatioLimit.toFixed(2)}x</span>
+        </div>
+        <div className="editor-row">
+          <span className="editor-label">Shadow Softness</span>
+          <input
+            className="editor-slider"
+            type="range"
+            min={RANGES.sunShadowSoftness.min}
+            max={RANGES.sunShadowSoftness.max}
+            step={RANGES.sunShadowSoftness.step}
+            value={params.sunShadowSoftness}
+            onChange={e => set('sunShadowSoftness', Number(e.target.value))}
+          />
+          <span className="editor-value">{params.sunShadowSoftness.toFixed(2)}</span>
+        </div>
+        <div className="editor-row">
+          <span className="editor-label">Shadow Map</span>
+          <input
+            className="editor-slider"
+            type="range"
+            min={RANGES.sunShadowSize.min}
+            max={RANGES.sunShadowSize.max}
+            step={RANGES.sunShadowSize.step}
+            value={params.sunShadowSize}
+            onChange={e => set('sunShadowSize', Number(e.target.value))}
+          />
+          <span className="editor-value">{params.sunShadowSize}</span>
         </div>
         <div className="editor-row">
           <span className="editor-label">Bloom Strength</span>

@@ -1,3 +1,4 @@
+import { valueNoise3 } from './terrain-noise'
 import { clamp, normalize, type Vec3Like } from './vector'
 
 export interface PlanetTerrainParams {
@@ -215,6 +216,8 @@ export function samplePlanetHeight(
   // detailed sample, duplicated.
   warpedDir?: Vec3Like,
 ): number {
+  // Gas is a weather shell, not a displaced solid terrain.
+  if (params.planetType === 'gas') return 0
   const lacunarity = params.lacunarity ?? 2
   const gain = params.gain ?? 0.5
   const baseDir = normalize(dir)
@@ -354,22 +357,35 @@ export function samplePlanetHeight(
     detail = (fineNoise * 0.026 + badlands * 0.032) * detailStrength * (1 - thermalStrength * 0.35) * detailRegion
   }
 
-  if (params.planetType === 'gas') {
-    return terrainFbm({ x: baseDir.x * frequency, y: baseDir.y * frequency, z: baseDir.z * frequency }, params.seed, Math.min(octaves, 4), lacunarity, gain) * 0.05
+  if (params.planetType === 'ice') {
+    // Glacial troughs and fractured shelves, in spherical metre coordinates.
+    // Continuous across cube faces and independent of terrain mesh resolution.
+    const x = baseDir.x * params.radius, y = baseDir.y * params.radius, z = baseDir.z * params.radius
+    // Simplex gradients and a vector warp avoid the axis-aligned shelves of
+    // thresholded Cartesian value noise. Broad valleys survive orbital LOD.
+    const seed = params.seed + 832
+    const wx = snoise4(x / 2600, y / 2600, z / 2600, seed) * 650
+    const wy = snoise4(x / 2600, y / 2600, z / 2600, seed + 17) * 650
+    const wz = snoise4(x / 2600, y / 2600, z / 2600, seed + 31) * 650
+    const shelf = snoise4((x + wx) / 1900, (y + wy) / 1900, (z + wz) / 1900, seed + 7)
+    const flow = snoise4((x + wx) / 1100, (y + wy) / 1100, (z + wz) / 1100, seed + 21)
+    const trough = 1 - smoothstep(0.04, 0.42, Math.abs(flow))
+    const glacialMeters = shelf * 42 - trough * 48
+    return continentHeight * 0.48 + lowlandUndulation * 0.35
+      + hills * 0.28 + mountains * 1.12 - hydraulicCut * 0.32
+      - thermalTalus * 0.32 + detail * 0.2
+      + glacialMeters * Math.min(1, params.radius / 12000) / Math.max(params.terrainScale * params.radius, 1)
   }
 
-  if (params.planetType === 'ice') {
-    return continentHeight * 0.72
-      + lowlandUndulation * 0.55
-      + hills * 0.42
-      + mountains * 0.58
-      - hydraulicCut * 0.38
-      - thermalTalus * 0.45
-      + detail * 0.42
-      + smoothstep(0.50, 0.95, Math.abs(baseDir.y)) * 0.045
-  }
+  // Metre-scale geology between continental relief and walking micro-detail.
+  // Sample in unwarped planet space: the continental domain warp otherwise
+  // stretches these escarpments unpredictably, and face-local UVs make seams.
+  const landforms = samplePlanetLandformHeight(baseDir, params)
+    * smoothstep(0.12, 0.55, continentMask)
+    * (0.55 + mountainBeltMask * 0.45)
 
   return continentHeight
+    + landforms
     + lowlandUndulation
     + hills
     + mountains
@@ -377,6 +393,28 @@ export function samplePlanetHeight(
     + sedimentFill
     - thermalTalus
     + detail
+}
+
+/** Signed, continuous local relief, in normalized terrain-height units.
+ * Three value-noise taps, no erosion iterations or per-sample allocations.
+ * Broad plateaus have narrow rounded scarps; a separate drainage field cuts
+ * through them instead of stacking another octave of rounded hills.
+ */
+export function samplePlanetLandformHeight(dir: Vec3Like, params: PlanetTerrainParams): number {
+  if (params.planetType !== 'rocky' || params.terrainScale <= 0) return 0
+  const strength = clamp(params.reliefVariety ?? 0.7, 0, 2)
+  if (strength === 0) return 0
+  const r = params.radius
+  const x = dir.x * r, y = dir.y * r, z = dir.z * r
+  const region = 2 * valueNoise3(x / 2400 + 13.1, y / 2400 - 8.7, z / 2400 + 3.4, params.seed + 613) - 1
+  const strata = 2 * valueNoise3(x / 780 + region * 0.65, y / 780, z / 780, params.seed + 719) - 1
+  const drainage = Math.abs(2 * valueNoise3(x / 1150 - 17.2, y / 1150 + 9.6, z / 1150, params.seed + 827) - 1)
+  const plateau = smoothstep(-0.13, 0.16, strata)
+  const valley = 1 - smoothstep(0.025, 0.20, drainage)
+  const province = smoothstep(-0.42, 0.38, region)
+  const meters = ((plateau - 0.38) * 105 - valley * (22 + plateau * 36)) * province
+  // Small planets keep relief proportional; large planets keep walkable sizes.
+  return meters * Math.min(1, r / 12000) * strength / (params.terrainScale * r)
 }
 
 export function samplePlanetMicroHeight(
@@ -456,6 +494,7 @@ export function samplePlanetHeightDetailed(
   params: PlanetTerrainParams,
   microAmount = 1,
 ): number {
+  if (params.planetType === 'gas') return 0
   // Derive the warp once and hand it to both samplers.
   const lacunarity = params.lacunarity ?? 2
   const gain = params.gain ?? 0.5

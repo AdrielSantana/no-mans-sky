@@ -70,6 +70,13 @@ export const DEFAULT_FOLIAGE_SETTINGS: FoliageSettings = {
 // Cards per LOD tier, as a fraction of the full set. Tier 3 keeps a sixth of
 // the cards but the material scales them up to hold roughly the same canopy
 // mass, so the silhouette survives even though the detail does not.
+// Tiers past 3 were tried and removed. They held tier 3's canopy area exactly
+// while collapsing an oak from 235 cards to 39, and the arithmetic was right --
+// but they sat at 850m and 1300m, and props stop being drawn at 648m in game
+// (WORLD_SCALE.localDetailFar * 3.6). They were unreachable, and the bounding
+// sphere below is padded by the *last* tier's boost, so they cost culling
+// everywhere to buy nothing. Measuring the editor's 2200m draw distance instead
+// of the game's is what hid that.
 export const FOLIAGE_LOD_FRACTIONS = [1, 0.55, 0.30, 0.15]
 // Deliberately well short of the 1/sqrt(fraction) that would hold leaf *area*
 // constant (that would be 2.6x at tier 3). Past roughly 1.35 a card stops
@@ -492,6 +499,11 @@ export function buildFoliageGeometry(
   // The bounding sphere has to cover the cards at their largest, not the
   // pivots. Frustum culling reads this, and a sphere sized to the pivots would
   // pop the canopy out at the screen edge.
+  //
+  // Note this reads the *last* tier's boost, so any tier added to
+  // FOLIAGE_LOD_SIZE_BOOST widens every foliage sphere at every distance, not
+  // only where the new tier applies. The geometry is shared by every chunk
+  // drawing the model, so it cannot be re-padded per tier.
   geometry.computeBoundingSphere()
   if (geometry.boundingSphere) {
     geometry.boundingSphere.radius += DEFAULT_FOLIAGE_SETTINGS.size
@@ -754,7 +766,7 @@ export function createFoliageMaterial(
         vec3 albedo = mix(uLeafColorA, uLeafColorB, clamp(canopyT * 0.62 + drift + 0.26, 0.0, 1.0));
         vAlbedo = albedo;
 
-        gl_Position = projectionMatrix * viewMatrix * worldPos;
+        gl_Position = projectionMatrix * modelViewMatrix * localPosition;
         #include <logdepthbuf_vertex>
       }
     `,

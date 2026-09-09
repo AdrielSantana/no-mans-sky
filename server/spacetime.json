@@ -1,4 +1,11 @@
 {
-  "server": "maincloud",
-  "module-path": "./spacetimedb"
+  "server": "http://127.0.0.1:3000",
+  "module-path": "./spacetimedb",
+  "database": "no-mans-sky",
+  "generate": [
+    {
+      "language": "typescript",
+      "out-dir": "../client/src/module_bindings"
+    }
+  ]
 }

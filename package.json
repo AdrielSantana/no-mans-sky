@@ -10,9 +10,12 @@
     "dev:server": "pnpm --dir server/spacetimedb dev",
     "build": "pnpm -r build",
     "lint": "pnpm --dir client lint",
-    "spacetime:start": "spacetime start",
+    "spacetime:start": "node scripts/spacetime.mjs start --listen-addr 127.0.0.1:3000",
     "spacetime:build": "pnpm --dir server/spacetimedb build",
     "spacetime:generate": "pnpm --dir server/spacetimedb generate",
     "spacetime:publish:local": "pnpm --dir server/spacetimedb publish:local"
+  },
+  "devDependencies": {
+    "sharp": "^0.35.4"
   }
 }

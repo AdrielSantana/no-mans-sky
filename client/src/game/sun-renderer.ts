@@ -151,7 +151,7 @@ float plasma(){
 
 void main(){
   vec3 Vview = normalize((viewMatrix * vec4(vWorld - cameraPosition, 0.0)).xyz);
-  float nDotV = dot(vNormalView, -Vview);
+  float nDotV = clamp(dot(normalize(vNormalView), -Vview), 0.0, 1.0);
   float fresnel = pow(1.0 - nDotV, uFresnelPower) * uFresnelInfluence;
   float brightness = plasma() * uBase + uBrightnessOffset + fresnel;
   vec3 col = clamp(brightnessToColor(brightness, uTint, uBrightness), 0.0, 1.0);

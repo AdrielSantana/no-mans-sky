@@ -5,9 +5,12 @@ import { FullScreenQuad, Pass } from 'three/examples/jsm/postprocessing/Pass.js'
 import { RenderPass } from 'three/examples/jsm/postprocessing/RenderPass.js'
 import { UnrealBloomPass } from 'three/examples/jsm/postprocessing/UnrealBloomPass.js'
 import { OutputPass } from 'three/examples/jsm/postprocessing/OutputPass.js'
+import { SMAAPass } from 'three/examples/jsm/postprocessing/SMAAPass.js'
 import { createSkybox } from './skybox'
 import { WORLD_SCALE } from './world-scale'
 import { CLOUD_RENDER_LAYER } from './render-layers'
+import { SunShadowMap } from './planet/sun-shadow'
+import { GpuProfiler } from './gpu-profiler'
 
 // Upper bound on a single frame's delta. Returning from a hidden tab hands
 // Clock.getDelta() the whole elapsed wall time.
@@ -49,30 +52,24 @@ class CloudCompositePass extends Pass {
   private scene: THREE.Scene
   private camera: THREE.Camera
   private cloudTarget: THREE.WebGLRenderTarget
-  private cloudDepthTarget: THREE.WebGLRenderTarget
   private material: THREE.ShaderMaterial
   private fsQuad: FullScreenQuad
   private clearColor = new THREE.Color()
   private cloudRenderObjects: THREE.Object3D[] = []
   private cloudObjectRefreshFrame = CLOUD_OBJECT_REFRESH_INTERVAL
-  private depthOnlyMaterial = new THREE.MeshBasicMaterial({
-    colorWrite: false,
-    depthWrite: true,
-    depthTest: true,
-    // DoubleSide, not FrontSide. PlanetRenderer.updateCloudRenderSide flips the
-    // cloud shell to BackSide as soon as the camera is inside it — i.e. any time
-    // you are walking on the surface. With a FrontSide override the shell's
-    // outward-facing polygons are all facing away, so this pre-pass wrote no
-    // depth at all, tCloudDepth stayed at the cleared 1.0, and the composite
-    // then read every pixel with geometry as "cloud is behind the scene" and
-    // multiplied the cloud alpha to zero. The result was a cloud deck that got
-    // cut off with a hard edge along the terrain horizon and only survived
-    // against empty sky.
-    //
-    // DoubleSide is a no-op from outside the shell: a ray from outside hits the
-    // near (front-facing) surface first either way, and the depth test keeps it.
-    side: THREE.DoubleSide,
-  })
+  // The cloud pass draws two meshes and used to walk the whole planet twice a
+  // frame to find them: WebGLRenderer.projectObject prunes a subtree only on
+  // `visible === false`, never on a failed layer test, so setting the camera to
+  // the cloud layer hid the other 2600 nodes without saving the cost of
+  // visiting them. Measured at 0.93ms per empty traversal, 1.9ms a frame for
+  // four draw calls.
+  //
+  // These objects keep their real parent -- only `children` is borrowed -- so
+  // updateMatrixWorld still composes each one against the planet group's world
+  // matrix and they stay where they belong. Safe because the pass runs after
+  // the scene pass, so that matrix is already current for this frame, and
+  // because no cloud material asks for scene lights or fog.
+  private cloudScene = new THREE.Scene()
 
   constructor(scene: THREE.Scene, camera: THREE.Camera) {
     super()
@@ -80,17 +77,13 @@ class CloudCompositePass extends Pass {
     this.camera = camera
     this.needsSwap = true
     this.cloudTarget = this.createCloudTarget(1, 1)
-    this.cloudDepthTarget = this.createDepthTarget(1, 1, 'cloud-depth')
     this.material = new THREE.ShaderMaterial({
       depthTest: false,
       depthWrite: false,
       uniforms: {
         tDiffuse: { value: null },
         tClouds: { value: this.cloudTarget.texture },
-        tCloudDepth: { value: this.cloudDepthTarget.depthTexture },
-        tSceneDepth: { value: null },
         uCloudEnabled: { value: 1 },
-        uDepthBias: { value: 0.000002 },
       },
       vertexShader: /* glsl */ `
         varying vec2 vUv;
@@ -103,22 +96,17 @@ class CloudCompositePass extends Pass {
       fragmentShader: /* glsl */ `
         uniform sampler2D tDiffuse;
         uniform sampler2D tClouds;
-        uniform sampler2D tCloudDepth;
-        uniform sampler2D tSceneDepth;
         uniform float uCloudEnabled;
-        uniform float uDepthBias;
         varying vec2 vUv;
 
         void main() {
           vec4 base = texture2D(tDiffuse, vUv);
           vec4 clouds = texture2D(tClouds, vUv);
-          float sceneDepth = texture2D(tSceneDepth, vUv).x;
-          float cloudDepth = texture2D(tCloudDepth, vUv).x;
-          float hasSceneDepth = 1.0 - step(0.9999, sceneDepth);
-          float cloudBehindScene = step(sceneDepth - uDepthBias, cloudDepth) * hasSceneDepth;
-          clouds.a *= 1.0 - cloudBehindScene;
-          clouds.a *= uCloudEnabled;
-          gl_FragColor = vec4(mix(base.rgb, clouds.rgb, clouds.a), max(base.a, clouds.a));
+          // Normal blending into a transparent target already premultiplies RGB.
+          // Multiplying it by alpha again produces dark, muddy cloud edges.
+          clouds *= uCloudEnabled;
+          gl_FragColor = vec4(base.rgb * (1.0 - clouds.a) + clouds.rgb,
+            base.a * (1.0 - clouds.a) + clouds.a);
         }
       `,
     })
@@ -130,6 +118,7 @@ class CloudCompositePass extends Pass {
       minFilter: THREE.LinearFilter,
       magFilter: THREE.LinearFilter,
       format: THREE.RGBAFormat,
+      type: THREE.HalfFloatType,
       depthBuffer: true,
       stencilBuffer: false,
     })
@@ -138,24 +127,10 @@ class CloudCompositePass extends Pass {
     return target
   }
 
-  private createDepthTarget(width: number, height: number, name: string): THREE.WebGLRenderTarget {
-    const target = new THREE.WebGLRenderTarget(width, height, {
-      minFilter: THREE.NearestFilter,
-      magFilter: THREE.NearestFilter,
-      format: THREE.RGBAFormat,
-      depthBuffer: true,
-      stencilBuffer: false,
-    })
-    target.texture.name = name
-    target.depthTexture = createDepthTexture(width, height, `${name}-texture`)
-    return target
-  }
-
   setSize(width: number, height: number) {
     const targetWidth = Math.max(1, Math.floor(width * CLOUD_RENDER_SCALE))
     const targetHeight = Math.max(1, Math.floor(height * CLOUD_RENDER_SCALE))
     this.cloudTarget.setSize(targetWidth, targetHeight)
-    this.cloudDepthTarget.setSize(targetWidth, targetHeight)
   }
 
   render(renderer: THREE.WebGLRenderer, writeBuffer: THREE.WebGLRenderTarget, readBuffer: THREE.WebGLRenderTarget) {
@@ -163,12 +138,10 @@ class CloudCompositePass extends Pass {
     this.needsSwap = hasClouds
     if (!hasClouds) return
 
-    this.renderClouds(renderer)
+    this.renderClouds(renderer, readBuffer.depthTexture)
 
     this.material.uniforms.tDiffuse.value = readBuffer.texture
     this.material.uniforms.tClouds.value = this.cloudTarget.texture
-    this.material.uniforms.tCloudDepth.value = this.cloudDepthTarget.depthTexture
-    this.material.uniforms.tSceneDepth.value = readBuffer.depthTexture
     this.material.uniforms.uCloudEnabled.value = hasClouds ? 1 : 0
     renderer.setRenderTarget(this.renderToScreen ? null : writeBuffer)
     this.fsQuad.render(renderer)
@@ -195,6 +168,7 @@ class CloudCompositePass extends Pass {
     this.scene.traverse(object => {
       if ((object.layers.mask & cloudLayerMask) !== 0) this.cloudRenderObjects.push(object)
     })
+    this.cloudScene.children = this.cloudRenderObjects
   }
 
   private isVisibleInHierarchy(object: THREE.Object3D): boolean {
@@ -206,37 +180,45 @@ class CloudCompositePass extends Pass {
     return true
   }
 
-  private renderClouds(renderer: THREE.WebGLRenderer) {
+  private renderClouds(renderer: THREE.WebGLRenderer, sceneDepth: THREE.DepthTexture | null) {
     const previousTarget = renderer.getRenderTarget()
     const previousAutoClear = renderer.autoClear
-    const previousBackground = this.scene.background
-    const previousOverrideMaterial = this.scene.overrideMaterial
     const previousCameraMask = this.camera.layers.mask
     const previousClearAlpha = renderer.getClearAlpha()
     renderer.getClearColor(this.clearColor)
 
+    // Nothing here touches the main scene any more. It used to have to blank
+    // its background and restore it, because it was the scene being drawn.
     try {
-      this.scene.background = null
-      renderer.setRenderTarget(this.cloudTarget)
       renderer.setClearColor(0x000000, 0)
 
-      this.scene.overrideMaterial = this.depthOnlyMaterial
-
+      // The camera mask still matters: it is what stops a cloud object that
+      // lost its layer from being drawn into the cloud buffer regardless.
       this.camera.layers.set(CLOUD_RENDER_LAYER)
-      renderer.setRenderTarget(this.cloudDepthTarget)
-      renderer.clear(true, true, true)
-      renderer.render(this.scene, this.camera)
-      this.scene.overrideMaterial = previousOverrideMaterial
+
+      this.cloudScene.children = this.cloudRenderObjects.filter(object => this.isVisibleInHierarchy(object))
+
+      // Test the actual cloud fragments against opaque terrain AND the ocean.
+      // A separate solid-shell depth pass cannot represent holes in billboards
+      // or several overlapping clouds at different distances.
+      for (const object of this.cloudRenderObjects) {
+        const material = (object as THREE.Mesh).material
+        if (!(material instanceof THREE.ShaderMaterial)) continue
+        const uniforms = material.uniforms
+        if (!uniforms.uCloudSceneDepth) continue
+        uniforms.uCloudSceneDepth.value = sceneDepth
+        uniforms.uCloudDepthEnabled.value = sceneDepth ? 1 : 0
+        uniforms.uCloudViewport.value.set(this.cloudTarget.width, this.cloudTarget.height)
+      }
 
       renderer.autoClear = false
       renderer.setRenderTarget(this.cloudTarget)
       renderer.clear(true, true, true)
-      renderer.render(this.scene, this.camera)
+      renderer.render(this.cloudScene, this.camera)
     } finally {
-      this.scene.overrideMaterial = previousOverrideMaterial
+      this.cloudScene.overrideMaterial = null
       renderer.autoClear = previousAutoClear
       this.camera.layers.mask = previousCameraMask
-      this.scene.background = previousBackground
       renderer.setClearColor(this.clearColor, previousClearAlpha)
       renderer.setRenderTarget(previousTarget)
     }
@@ -244,9 +226,7 @@ class CloudCompositePass extends Pass {
 
   dispose() {
     this.cloudTarget.dispose()
-    this.cloudDepthTarget.dispose()
     this.material.dispose()
-    this.depthOnlyMaterial.dispose()
     this.fsQuad.dispose()
   }
 }
@@ -405,9 +385,15 @@ export class GameEngine {
   private skybox: THREE.Mesh
   private clock = new THREE.Clock()
   private pixelRatioLimit = Math.min(window.devicePixelRatio, 2)
+  private pixelRatioCeiling = 2
+  private pixelRatioOverride = 2
   private sunLight: THREE.PointLight | null = null
   private bloomPass: UnrealBloomPass | null = null
   private outputPass: OutputPass | null = null
+  private smaaPass: SMAAPass | null = null
+  private gpuProfiler: GpuProfiler
+  private sunShadow = new SunShadowMap()
+  private sunShadowDir = new THREE.Vector3()
   private cloudPass: CloudCompositePass | null = null
   private underwaterPass: UnderwaterPass | null = null
   private elapsedTime = 0
@@ -429,9 +415,9 @@ export class GameEngine {
     // draw reaching the default framebuffer is OutputPass's fullscreen quad,
     // where MSAA has no edges to resolve — so `antialias: true` allocated a
     // multisampled backbuffer and resolved it every frame for nothing.
-    // Geometry AA, if wanted, belongs in a post-tonemap pass (see the pass
-    // chain below); it cannot be bolted onto one composer target because
-    // RenderPass draws into readBuffer and the swap parity is dynamic.
+    // Geometry AA is instead the SMAA pass at the end of the chain below; it
+    // cannot be bolted onto one composer target because RenderPass draws into
+    // readBuffer and the swap parity is dynamic.
     this.renderer = new THREE.WebGLRenderer({ antialias: false, logarithmicDepthBuffer: true })
     this.renderer.setSize(width, height)
     this.renderer.setPixelRatio(this.pixelRatioLimit)
@@ -482,6 +468,23 @@ export class GameEngine {
     const outputPass = new OutputPass()
     this.composer.addPass(outputPass)
     this.outputPass = outputPass
+    // After OutputPass on purpose: SMAA detects edges by luma, so it wants the
+    // tonemapped LDR image, not the HalfFloat scene target. Running it here
+    // also leaves those targets single-sampled and the cloud pass's depth read
+    // untouched, which composer-level MSAA would not.
+    //
+    // Its two lookup textures are inline base64, so nothing is fetched -- but
+    // they decode asynchronously, so the very first frames pass through
+    // un-antialiased rather than blocking.
+    const smaaPass = new SMAAPass()
+    this.composer.addPass(smaaPass)
+    // Passes added after the composer's own setSize never got one, and SMAA
+    // needs device pixels or its edge search walks the wrong texel distance.
+    smaaPass.setSize(width * this.pixelRatioLimit, height * this.pixelRatioLimit)
+    this.smaaPass = smaaPass
+
+    this.gpuProfiler = new GpuProfiler(this.renderer)
+    this.instrumentComposerPasses()
 
     this.setupLights()
 
@@ -521,8 +524,40 @@ export class GameEngine {
     return this.sunLight ? target.copy(this.sunLight.color) : target.set(0xffffff)
   }
 
+  setSunShadowEnabled(enabled: boolean) {
+    this.sunShadow.setEnabled(enabled)
+  }
+
+  setSunShadowSettings(settings: { strength: number; radius: number; size: number; softness: number }) {
+    this.sunShadow.setStrength(settings.strength)
+    this.sunShadow.setRadius(settings.radius)
+    this.sunShadow.setSize(settings.size)
+    this.sunShadow.setSoftness(settings.softness)
+  }
+
+  getSunShadowEnabled(): boolean {
+    return this.sunShadow.isEnabled()
+  }
+
+  /** Live state of the shadow pass, for the HUD. Reads the pass, not the params
+   * that were handed to it -- the two disagreeing is exactly the bug worth
+   * seeing. */
+  getSunShadowStats() {
+    return this.sunShadow.getStats()
+  }
+
   setBloomEnabled(enabled: boolean) {
     if (this.bloomPass) this.bloomPass.enabled = enabled
+  }
+
+  // EffectComposer points renderToScreen at the last *enabled* pass, so turning
+  // this off hands the screen back to OutputPass with nothing else to change.
+  setAntialiasEnabled(enabled: boolean) {
+    if (this.smaaPass) this.smaaPass.enabled = enabled
+  }
+
+  getAntialiasEnabled(): boolean {
+    return this.smaaPass?.enabled ?? false
   }
 
   setBloomSettings(settings: { strength: number; radius: number; threshold: number }) {
@@ -618,11 +653,74 @@ export class GameEngine {
     this.controls.update()
   }
 
+  // Wraps each pass's render so the profiler sees it by name. Done by
+  // replacing the method rather than by subclassing every pass type, since
+  // three's passes come from examples/jsm and are not ours to extend. A
+  // disabled pass is simply never called, and the profiler zeroes it.
+  private instrumentComposerPasses(): void {
+    const labels = new Map<object, string>([
+      [this.cloudPass as object, 'clouds'],
+      [this.bloomPass as object, 'bloom'],
+      [this.underwaterPass as object, 'underwater'],
+      [this.outputPass as object, 'output'],
+      [this.smaaPass as object, 'smaa'],
+    ])
+    for (const pass of this.composer.passes) {
+      const label = labels.get(pass as object) ?? 'scene'
+      const original = pass.render.bind(pass)
+      pass.render = (...args: Parameters<typeof pass.render>) => {
+        this.gpuProfiler.begin(label)
+        original(...args)
+        this.gpuProfiler.end()
+      }
+    }
+  }
+
+  setGpuProfilingEnabled(enabled: boolean) {
+    this.gpuProfiler.setEnabled(enabled)
+  }
+
+  getGpuTimings() {
+    return this.gpuProfiler.getTimings()
+  }
+
+  isGpuProfilingSupported(): boolean {
+    return this.gpuProfiler.isSupported()
+  }
+
+  /**
+   * Ceiling the user asked for. Kept apart from the walker's override so the
+   * two cannot clobber each other: the walker drops to 1x on the surface, and
+   * before this split any editor slider change would have shoved it back to 2x
+   * mid-walk.
+   */
+  setPixelRatioCeiling(ceiling: number) {
+    this.pixelRatioCeiling = ceiling
+    this.applyPixelRatio()
+  }
+
   setPixelRatioLimit(limit: number) {
-    this.pixelRatioLimit = Math.min(window.devicePixelRatio, limit)
+    this.pixelRatioOverride = limit
+    this.applyPixelRatio()
+  }
+
+  private applyPixelRatio() {
+    const limit = Math.min(this.pixelRatioCeiling, this.pixelRatioOverride)
+    const next = Math.min(window.devicePixelRatio, limit)
+    if (next === this.pixelRatioLimit) return
+    this.pixelRatioLimit = next
     this.renderer.setPixelRatio(this.pixelRatioLimit)
     this.composer.setPixelRatio(this.pixelRatioLimit)
+    // handleResize bails when the CSS size is unchanged, which it always is
+    // here -- only the device-pixel multiplier moved. Without this the render
+    // targets keep the old resolution and changing the limit does nothing.
+    this.lastWidth = 0
+    this.lastHeight = 0
     this.handleResize()
+  }
+
+  getPixelRatioLimit(): number {
+    return this.pixelRatioLimit
   }
 
   getDomElement(): HTMLCanvasElement {
@@ -689,9 +787,20 @@ export class GameEngine {
       const dt = Math.min(this.clock.getDelta(), MAX_FRAME_DELTA)
       this.elapsedTime += dt
       this.renderer.info.reset()
-      this.controls.update()
+      this.gpuProfiler.beginFrame()
+      if (this.controls.enabled) this.controls.update()
       onFrame?.(dt)
       this.underwaterPass?.setTime(this.elapsedTime)
+      // Before the composer, and centred on the camera rather than on any one
+      // planet: the box is 260 m deep along the sun, so wherever the camera is
+      // standing the ground under it is inside. Out in orbit no caster is in
+      // range and the pass degenerates to a clear.
+      if (this.sunLight) {
+        this.sunShadowDir.copy(this.sunLight.position).sub(this.camera.position).normalize()
+        this.gpuProfiler.begin('shadow')
+        this.sunShadow.render(this.renderer, this.scene, this.sunShadowDir, this.camera.position)
+        this.gpuProfiler.end()
+      }
       this.composer.render()
     }
     loop()
@@ -706,6 +815,8 @@ export class GameEngine {
 
   dispose() {
     this.stop()
+    this.sunShadow.dispose()
+    this.gpuProfiler.dispose()
     window.removeEventListener('resize', this.boundResize)
     this.resizeObserver?.disconnect()
     this.resizeObserver = null

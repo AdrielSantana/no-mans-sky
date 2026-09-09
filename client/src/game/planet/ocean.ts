@@ -245,7 +245,7 @@ export function createOceanMaterial(params: OceanMaterialParams): THREE.ShaderMa
     vWorldPos = worldPos.xyz;
     vRadialNormal = normalize((modelMatrix * vec4(sphereDir, 0.0)).xyz);
 
-    gl_Position = projectionMatrix * viewMatrix * worldPos;
+    gl_Position = projectionMatrix * modelViewMatrix * vec4(displaced, 1.0);
     #include <logdepthbuf_vertex>
   }
   `
@@ -420,13 +420,18 @@ export function createOceanMaterial(params: OceanMaterialParams): THREE.ShaderMa
       microSlope = (abs(microA) + abs(microB)) * microWeight * 0.42;
       fragmentIfftSlope += microSlope;
     }
+    // Unresolved wave normals cause orbit-scale glitter and temporal aliasing.
+    // Fade them with the pixel footprint of the simulation, preserving swells nearby.
+    float waveFootprint = max(length(dFdx(vSphereDir)), length(dFdy(vSphereDir))) * uWaveScale;
+    float resolvedWaves = 1.0 - smoothstep(0.025, 0.22, waveFootprint);
+    normal = normalize(mix(radial, normal, resolvedWaves));
     vec3 lightDir = normalize(uSunPosition - vWorldPos);
     vec3 viewDir = normalize(cameraPosition - vWorldPos);
     float sunFacing = dot(radial, lightDir);
     float day = smoothstep(-0.28, 0.52, sunFacing);
     float reflectionLight = smoothstep(-0.10, 0.58, sunFacing);
     float direct = max(dot(normal, lightDir), 0.0);
-    float viewFacing = max(dot(normal, viewDir), 0.0);
+    float viewFacing = clamp(dot(normal, viewDir), 0.0, 1.0);
     float fresnel = pow(1.0 - viewFacing, 4.6);
     float litFresnel = fresnel * (0.035 + reflectionLight * 0.965);
 
@@ -455,7 +460,7 @@ export function createOceanMaterial(params: OceanMaterialParams): THREE.ShaderMa
     waterColor = mix(waterColor, suspendedColor, turbidity * (1.0 - abyss * 0.76) * (0.10 + shoal * 0.18));
     waterColor = oceanDesaturate(waterColor, shoal * 0.16 + turbidity * 0.10);
 
-    float horizonReflection = pow(1.0 - abs(dot(viewDir, radial)), 2.2);
+    float horizonReflection = pow(clamp(1.0 - abs(dot(viewDir, radial)), 0.0, 1.0), 2.2);
     float reflectionAmount = litFresnel * (0.30 + day * 0.18 + horizonReflection * 0.42) * uOceanReflectionStrength;
     vec3 skyReflection = mix(
       uAtmosphereColor * 0.30 + deepColor * 0.38,
@@ -475,7 +480,7 @@ export function createOceanMaterial(params: OceanMaterialParams): THREE.ShaderMa
       float glintField = glintNoise * 0.54 + fragmentIfftSlope * 0.46 + max(vWave, 0.0) * 0.08;
       glitter = smoothstep(0.92, 1.32, glintField) * pow(direct, 3.2);
     }
-    vec3 specular = uSunColor * day * (halfSpec * 0.82 + broadSpec * 0.18 + glitter * 0.055) * uOceanSpecularStrength;
+    vec3 specular = uSunColor * day * (halfSpec * 0.82 + broadSpec * 0.18 + glitter * 0.055 * resolvedWaves) * uOceanSpecularStrength;
     float sunMirror = pow(max(dot(reflect(-viewDir, normal), lightDir), 0.0), 34.0) * day * reflectionLight;
     specular += uSunColor * sunMirror * uOceanReflectionStrength * (0.035 + uOceanClarity * 0.060);
     float cloudShadow = cloudShadowMask(normalize(vSphereDir), normalize(uCloudLocalSunDirection));
@@ -507,7 +512,7 @@ export function createOceanMaterial(params: OceanMaterialParams): THREE.ShaderMa
     crestFoam = max(crestFoam, smoothstep(0.46, 1.10, detailSlopeAmount + detailIfft.foam * 0.42) * detailWeight * uIfftDetailFoamStrength * 0.18);
     crestFoam *= smoothstep(0.045, 0.24, waterDepthRaw) * uIfftFoamStrength * 0.62;
     crestFoam *= mix(0.54, 0.96, clamp(uIfftChoppiness / 2.5, 0.0, 1.0));
-    float foamMask = pow(max(shoreFoam, crestFoam), 1.35) * (0.04 + foamVisibility * 0.96);
+    float foamMask = pow(max(shoreFoam, crestFoam * resolvedWaves), 1.35) * (0.04 + foamVisibility * 0.96);
     vec3 foam = uOceanFoamColor * (0.030 + foamLight * 0.970);
 
     vec3 nightColor = deepColor * vec3(0.035, 0.046, 0.078);

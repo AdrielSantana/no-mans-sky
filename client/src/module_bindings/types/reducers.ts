@@ -6,7 +6,11 @@
 import { type Infer as __Infer } from "spacetimedb";
 
 // Import all reducer arg schemas
+import RefreshCatalogueReducer from "../refresh_catalogue_reducer";
 import SetNameReducer from "../set_name_reducer";
+import SyncStateReducer from "../sync_state_reducer";
 
+export type RefreshCatalogueParams = __Infer<typeof RefreshCatalogueReducer>;
 export type SetNameParams = __Infer<typeof SetNameReducer>;
+export type SyncStateParams = __Infer<typeof SyncStateReducer>;
 

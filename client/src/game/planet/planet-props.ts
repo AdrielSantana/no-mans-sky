@@ -1,4 +1,8 @@
+import { computeTerrainNormal } from './terrain-geometry'
+import { sampleSurfaceEcology } from './surface-ecology'
 import * as THREE from 'three'
+import { SUN_SHADOW_CASTER_LAYER } from '../render-layers'
+import { isSunShadowCamera } from './sun-shadow'
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js'
 // Geometry-only LOD tiers. Their embedded textures were shrunk to 8x8 because
 // only the geometry is read -- the material always comes from the base model.
@@ -11,11 +15,11 @@ import winterLod1Url from '../../assets/models/trees/winter_tree/lod_1.glb?url'
 import winterLod2Url from '../../assets/models/trees/winter_tree/lod_2.glb?url'
 import winterLod3Url from '../../assets/models/trees/winter_tree/lod_3.glb?url'
 import {
+  samplePlanetHeightDetailed,
   type PlanetTerrainParams,
 } from '../../../../server/spacetimedb/src/shared/planet-terrain'
 import type { QuadtreeNode } from './quadtree'
-import { nodeKey } from './quadtree'
-import type { TerrainChunkSurfaceData } from './terrain-chunk'
+import { nodeKey, cubeToSphere, getNodeBounds } from './quadtree'
 import { computePropSunLight, type PropSunLightInput } from './prop-sun-light'
 import type { PropSunPlacementInput } from './terrain-worker-types'
 import {
@@ -58,6 +62,12 @@ interface PlanetPropModel {
   // height at load, so the instance scale *is* the world height.
   heightRange: readonly [number, number]
   parts: PlanetPropPart[]
+  // Both in model units, so as a fraction of the mesh's own height. baseRadius
+  // is how far the base reaches sideways, and sets how far up the mesh the
+  // shader may bend it onto the ground. width is the largest horizontal extent,
+  // which is what a rock is sized by -- see buildKindPlacements.
+  baseRadius: number
+  width: number
   // Procedural leaves, generated once from the tier-0 mesh. Null for rocks and
   // for any tree whose branches yielded no usable anchors.
   foliage: PlanetPropFoliage | null
@@ -113,18 +123,20 @@ interface PlanetPropLighting {
 
 interface PlanetPropLayerParams {
   node: QuadtreeNode
-  surface: TerrainChunkSurfaceData
   assets: PlanetPropAssets
   settings: PlanetPropSettings
   terrain: PlanetTerrainParams
   seed: number
   seaHeight: number
   planetType: string
+  scatterCache?: PlanetPropScatterCache
+  preparedPlacements?: PlanetPropPlacement[]
 }
 
 interface PlanetPropPlacement {
   model: PlanetPropModel
   matrices: THREE.Matrix4[]
+  scatterUv: Float64Array
   planetDirs: Float32Array
   surfaceRadii: Float32Array
   terrainNormals: Float32Array
@@ -135,6 +147,7 @@ interface PlanetPropPlacement {
 
 interface PlanetPropPlacementBucket {
   matrices: THREE.Matrix4[]
+  scatterUv: number[]
   planetDirs: number[]
   surfaceRadii: number[]
   terrainNormals: number[]
@@ -142,31 +155,61 @@ interface PlanetPropPlacementBucket {
   macroAo: number[]
 }
 
+// CPU placement data only: GPU buffers and mutable light results belong to layers.
+export type PlanetPropScatterCache = Map<string, PlanetPropPlacement[]>
+export const MAX_PROP_SCATTER_CACHE_ENTRIES = 1024
+
 const MAX_TREE_INSTANCES_PER_CHUNK = 34
 const MAX_ROCK_INSTANCES_PER_CHUNK = 48
 const TREE_CELL_DENSITY = 0.035
 const ROCK_CELL_DENSITY = 0.048
 const MIN_TREE_SLOPE_DOT = 0.70
 const MIN_ROCK_SLOPE_DOT = 0.38
-const TREE_PATCH_SCALE_METERS = 190
-const ROCK_PATCH_SCALE_METERS = 110
-const PROP_SHADER_VERSION = 8
+const PROP_SHADER_VERSION = 9
 const PROP_TEXTURE_ANISOTROPY = 16
 
-// Rocks are parked while the tree assets are being reworked. Flip this back to
-// true and the loader picks them up again -- nothing else needs touching.
+// The bottom slice of a prop that counts as its base: deep enough to take in a
+// root flare, shallow enough that a low branch does not widen it.
+const PROP_BASE_BAND = 0.06
+const PROP_BASE_RADIUS_PERCENTILE = 0.9
+
+// Floor for the shader's skirt band. Above it the band follows the model's own
+// baseRadius, which keeps the shear a constant angle instead of a constant
+// distance: a trunk barely reaches sideways (0.10-0.13 of its height) while the
+// flat rock slab reaches 2.9, and spreading the slab's correction over a
+// twelfth of its thickness would tear it.
 //
+// There is deliberately no ceiling. Once the band passes the model's own
+// height the correction stops being a bend at all and becomes a rotation of
+// the whole mesh onto the ground plane -- which is exactly what a flat stone
+// wants, and what only a prop wider at the base than it is tall ever asks for.
+const PROP_SKIRT_MIN_BAND = 0.12
+
+// How far a prop settles into the ground, as a fraction of its own height.
+//
+// A trunk wants a hair -- just enough that the base never lands exactly
+// coplanar with the terrain -- because burying a tree hides the root flare that
+// makes it look planted. A boulder wants the opposite: resting on its lowest
+// vertex reads as dropped there rather than bedded, so rocks take a real embed,
+// jittered per instance so a field of them does not look stamped.
+const PROP_TREE_GROUND_BIAS = 0.006
+const PROP_ROCK_EMBED_MIN = 0.06
+const PROP_ROCK_EMBED_MAX = 0.20
+
 // Safe to toggle at any time: placement RNG is seeded per kind
 // (`${chunkKey}:${kind}`), so trees and rocks draw from independent streams and
 // turning rocks off does not move a single tree. buildKindPlacements already
 // returns early on an empty model list.
-const ROCKS_ENABLED = false
+const ROCKS_ENABLED = true
 
 // World height in metres. Rocks keep their own range in buildKindPlacements and
 // this entry only exists so the signature is uniform.
 const OAK_HEIGHT_RANGE = [6, 13] as const
 const WINTER_TREE_HEIGHT_RANGE = [11, 22] as const
-const ROCK_HEIGHT_RANGE = [0.9, 5.5] as const
+// Rocks are sized by their *largest* dimension rather than their height. The
+// four meshes run from a round boulder to a slab 6.2x wider than it is tall,
+// and sizing that slab to a 5.5 m height would make it 34 m across.
+const ROCK_SIZE_RANGE = [0.9, 5.5] as const
 
 // Leaf colour per species. colorA is the shaded inner canopy, colorB the sunlit
 // outer edge; the shader blends between them by height and adds a per-leaf
@@ -239,19 +282,6 @@ function mulberry32(seed: number): () => number {
     r ^= r + Math.imul(r ^ (r >>> 7), 61 | r)
     return ((r ^ (r >>> 14)) >>> 0) / 4294967296
   }
-}
-
-function valueNoise3(position: THREE.Vector3, seed: number, scale: number): number {
-  const x = Math.floor(position.x / scale)
-  const y = Math.floor(position.y / scale)
-  const z = Math.floor(position.z / scale)
-  let h = seed ^ 0x9e3779b9
-  h = Math.imul(h ^ x, 374761393)
-  h = Math.imul(h ^ y, 668265263)
-  h = Math.imul(h ^ z, 2246822519)
-  h ^= h >>> 13
-  h = Math.imul(h, 1274126177)
-  return ((h ^ (h >>> 16)) >>> 0) / 4294967295
 }
 
 function sourceMaterialColor(material: THREE.Material, fallback: THREE.Color): THREE.Color {
@@ -336,6 +366,7 @@ function createPropShaderMaterial(source: THREE.Material, kind: PlanetPropModel[
       uAlphaTest: { value: alphaTest },
       uTime: { value: 0 },
       uWindStrength: { value: DEFAULT_FOLIAGE_SETTINGS.enabled ? 0.34 : 0 },
+      uSkirtBand: { value: PROP_SKIRT_MIN_BAND },
     },
     vertexShader: /* glsl */ `
       #include <common>
@@ -346,6 +377,12 @@ function createPropShaderMaterial(source: THREE.Material, kind: PlanetPropModel[
 
       uniform vec3 uPlanetCenter;
       uniform vec3 uSunPosition;
+
+      // How far up the mesh the base may bend to meet the ground, as a
+      // fraction of prop height. Set per model from how far its base reaches,
+      // so the shear is a constant angle rather than a constant distance --
+      // see PROP_SKIRT_MIN_BAND.
+      uniform float uSkirtBand;
 
       varying vec2 vUv;
       varying vec3 vLight;
@@ -388,6 +425,33 @@ function createPropShaderMaterial(source: THREE.Material, kind: PlanetPropModel[
           mat3 instanceNormalMatrix = mat3(instanceMatrix);
           instanceLocalOrigin = instanceMatrix * instanceLocalOrigin;
           localPosition = instanceMatrix * localPosition;
+
+          // Ground the base to the slope.
+          //
+          // A tree stands along its own up axis on purpose -- it grows towards
+          // the sky, not out of the hillside -- so on a slope its base disc is
+          // tilted relative to the ground and the downhill roots end up in the
+          // air. On level ground a vertex sits exactly position.y * scaleY
+          // above the surface; the drift from that is the daylight.
+          //
+          // Cancelling the drift for the bottom of the mesh and easing it out
+          // up the trunk makes the root flare splay along the slope. The
+          // alternative -- sinking the whole prop by the gap -- buries more
+          // trunk uphill than it recovers downhill: on a 13 m oak at 20 degrees
+          // that is 1.03 m of burial to close 0.73 m of gap, and the flare you
+          // wanted to see goes under the hill.
+          vec3 skirtUpColumn = instanceMatrix[1].xyz;
+          float skirtScaleY = length(skirtUpColumn);
+          vec3 skirtUp = skirtUpColumn / max(skirtScaleY, 1e-6);
+          vec3 skirtGroundNormal = normalize(instanceTerrainNormal);
+          float skirtDrift =
+            dot(localPosition.xyz - instanceLocalOrigin.xyz, skirtGroundNormal)
+            - position.y * skirtScaleY;
+          // Clamped so a grazing terrain normal cannot blow the correction up.
+          float skirtGrip = max(dot(skirtUp, skirtGroundNormal), 0.35);
+          float skirtFalloff = 1.0 - smoothstep(0.0, uSkirtBand, position.y);
+          localPosition.xyz -= skirtUp * (skirtDrift * skirtFalloff / skirtGrip);
+
           localNormal /= vec3(
             dot(instanceNormalMatrix[0], instanceNormalMatrix[0]),
             dot(instanceNormalMatrix[1], instanceNormalMatrix[1]),
@@ -409,7 +473,7 @@ function createPropShaderMaterial(source: THREE.Material, kind: PlanetPropModel[
 
         vLight = computePropLight(worldNormal, upDir, sunDir, instanceTerrainSunLight);
 
-        gl_Position = projectionMatrix * viewMatrix * worldPos;
+        gl_Position = projectionMatrix * modelViewMatrix * localPosition;
         #include <logdepthbuf_vertex>
       }
     `,
@@ -498,6 +562,19 @@ function createPropMaterial(material: THREE.Material | THREE.Material[], kind: P
   return createPropShaderMaterial(material, kind)
 }
 
+// The band is a property of the mesh, not of the frame, so it is written once
+// at load rather than every update. Every tier gets it: a tier exported on its
+// own carries its own material, and a decimated one shares the base tier's.
+function setPropSkirtBand(material: THREE.Material | THREE.Material[], band: number): void {
+  const apply = (item: THREE.Material) => {
+    if (item instanceof THREE.ShaderMaterial && item.uniforms.uSkirtBand) {
+      item.uniforms.uSkirtBand.value = band
+    }
+  }
+  if (Array.isArray(material)) material.forEach(apply)
+  else apply(material)
+}
+
 function disposeMaterial(material: THREE.Material | THREE.Material[]) {
   if (Array.isArray(material)) {
     for (const item of material) item.dispose()
@@ -516,6 +593,54 @@ function collectMeshParts(scene: THREE.Object3D): { geometry: THREE.BufferGeomet
     out.push({ geometry, source: object.material })
   })
   return out
+}
+
+// The prop's base, measured off the raw mesh in source units before it is
+// normalised. Two numbers come out.
+//
+// The centre is what the model gets pivoted on. Pivoting on the bounding box
+// instead puts an oak's origin 0.05 of its own height away from its trunk,
+// because the box follows the canopy -- and the random spin then throws that
+// offset in a different direction for every tree, so on a slope some oaks stand
+// a quarter-metre proud of the ground and others sink the same amount into it.
+// That was the inconsistency between neighbours.
+//
+// The radius is how far the base reaches from that centre, and it sets the
+// shader's skirt band. It is a high percentile rather than the maximum so one
+// stray root tip does not widen the band for the whole species.
+function measureBaseFootprint(
+  parts: PlanetPropPart[],
+  minY: number,
+  height: number,
+): { x: number; z: number; radius: number } {
+  const bandTop = minY + height * PROP_BASE_BAND
+  const xs: number[] = []
+  const zs: number[] = []
+  for (const part of parts) {
+    const position = part.tiers[0].geometry.getAttribute('position')
+    for (let i = 0; i < position.count; i++) {
+      if (position.getY(i) > bandTop) continue
+      xs.push(position.getX(i))
+      zs.push(position.getZ(i))
+    }
+  }
+  if (xs.length === 0) return { x: 0, z: 0, radius: 0 }
+
+  let minX = Infinity
+  let maxX = -Infinity
+  let minZ = Infinity
+  let maxZ = -Infinity
+  for (let i = 0; i < xs.length; i++) {
+    if (xs[i] < minX) minX = xs[i]
+    if (xs[i] > maxX) maxX = xs[i]
+    if (zs[i] < minZ) minZ = zs[i]
+    if (zs[i] > maxZ) maxZ = zs[i]
+  }
+  const x = (minX + maxX) * 0.5
+  const z = (minZ + maxZ) * 0.5
+  const radii = xs.map((value, i) => Math.hypot(value - x, zs[i] - z)).sort((a, b) => a - b)
+  const index = Math.min(radii.length - 1, Math.floor(radii.length * PROP_BASE_RADIUS_PERCENTILE))
+  return { x, z, radius: radii[index] }
 }
 
 async function loadPropModel(
@@ -547,17 +672,18 @@ async function loadPropModel(
   })
 
   if (rawParts.length === 0 || modelBox.isEmpty()) {
-    return { id, kind, heightRange, parts: [], foliage: null }
+    return { id, kind, heightRange, parts: [], baseRadius: 0, width: 1, foliage: null }
   }
 
   const size = new THREE.Vector3()
-  const center = new THREE.Vector3()
   modelBox.getSize(size)
-  modelBox.getCenter(center)
   const height = Math.max(size.y, 1e-3)
+  const footprint = measureBaseFootprint(rawParts, modelBox.min.y, height)
   const normalize = new THREE.Matrix4()
-    .makeTranslation(-center.x, -modelBox.min.y, -center.z)
+    .makeTranslation(-footprint.x, -modelBox.min.y, -footprint.z)
     .premultiply(new THREE.Matrix4().makeScale(1 / height, 1 / height, 1 / height))
+  const baseRadius = footprint.radius / height
+  const width = Math.max(size.x, size.z) / height
 
   for (const part of rawParts) {
     const base = part.tiers[0].geometry
@@ -597,7 +723,20 @@ async function loadPropModel(
     }
   }
 
-  return { id, kind, heightRange, parts: rawParts, foliage: buildModelFoliage(id, kind, rawParts, palette) }
+  const skirtBand = Math.max(baseRadius, PROP_SKIRT_MIN_BAND)
+  for (const part of rawParts) {
+    for (const tier of part.tiers) setPropSkirtBand(tier.material, skirtBand)
+  }
+
+  return {
+    id,
+    kind,
+    heightRange,
+    parts: rawParts,
+    baseRadius,
+    width,
+    foliage: buildModelFoliage(id, kind, rawParts, palette),
+  }
 }
 
 // Leaves are derived from the tier-0 mesh only.
@@ -681,16 +820,45 @@ export function loadPlanetPropAssets(): Promise<PlanetPropAssets> {
       ],
     ),
   ]
-  // Skipped entirely rather than left at zero density: this way the two rock
-  // GLBs are never fetched, parsed or uploaded.
+  // Each rock ships two independently exported tiers, so the second re-baked
+  // its own atlas and takes ownMaterial. Two rather than the trees' four is
+  // fine: setLodTier clamps per part, so a distant rock simply stays on its
+  // last tier.
+  const loadRock = (
+    id: string,
+    tier0: Promise<{ default: string }>,
+    tier1: Promise<{ default: string }>,
+  ) => Promise.all([tier0, tier1]).then(([lod0, lod1]) => loadPropModel(
+    loader, id, 'rock', lod0.default, ROCK_SIZE_RANGE, null,
+    [{ url: lod1.default, ownMaterial: true }],
+  ))
+
+  // Skipped entirely rather than left at zero density: this way the rock GLBs
+  // are never fetched, parsed or uploaded.
   // Dynamic so the GLBs leave the module graph entirely while the flag is off,
   // rather than being emitted into the build and simply never fetched.
   const rockPromises = ROCKS_ENABLED
     ? [
-        import('../../assets/models/rocks/rock_1.glb?url')
-          .then(module => loadPropModel(loader, 'rock-1', 'rock', module.default, ROCK_HEIGHT_RANGE, null)),
-        import('../../assets/models/rocks/rock_2.glb?url')
-          .then(module => loadPropModel(loader, 'rock-2', 'rock', module.default, ROCK_HEIGHT_RANGE, null)),
+        loadRock(
+          'rock-1',
+          import('../../assets/models/rocks/rock_1/lod_0.glb?url'),
+          import('../../assets/models/rocks/rock_1/lod_1.glb?url'),
+        ),
+        loadRock(
+          'rock-2',
+          import('../../assets/models/rocks/rock_2/lod_0.glb?url'),
+          import('../../assets/models/rocks/rock_2/lod_1.glb?url'),
+        ),
+        loadRock(
+          'rock-3',
+          import('../../assets/models/rocks/rock_3/lod_0.glb?url'),
+          import('../../assets/models/rocks/rock_3/lod_1.glb?url'),
+        ),
+        loadRock(
+          'rock-4',
+          import('../../assets/models/rocks/rock_4/lod_0.glb?url'),
+          import('../../assets/models/rocks/rock_4/lod_1.glb?url'),
+        ),
       ]
     : []
 
@@ -842,6 +1010,24 @@ function disposeInstancedGeometry(geometry: THREE.BufferGeometry, source: THREE.
   geometry.dispose()
 }
 
+// Foliage LOD tier used while drawing into the shadow map, independent of the
+// tier the camera sees.
+//
+// Every caster is inside the 120 m shadow box and therefore inside tier 0's
+// 770 m band, so the depth pass was drawing all ~1500 cards of every tree
+// within range -- measured at 3 ms, for a canopy blob whose outline survives a
+// fraction of that. -1 drops foliage from the map entirely, which leaves a bare
+// trunk shadow.
+let foliageShadowTier = 3
+
+export function setFoliageShadowLodTier(tier: number): void {
+  foliageShadowTier = Math.max(-1, Math.min(3, Math.round(tier)))
+}
+
+export function getFoliageShadowLodTier(): number {
+  return foliageShadowTier
+}
+
 function foliageIndexCount(cardCount: number, tier: number): number {
   const fraction = FOLIAGE_LOD_FRACTIONS[Math.min(tier, FOLIAGE_LOD_FRACTIONS.length - 1)]
   return Math.max(0, Math.round(cardCount * fraction)) * 6
@@ -864,7 +1050,7 @@ export class PlanetPropLayer {
     this.group.userData.chunkKey = nodeKey(params.node.face, params.node.lod, params.node.x, params.node.y)
     this.terrain = params.terrain
 
-    const placements = this.buildPlacements(params)
+    const placements = params.preparedPlacements ?? this.buildPlacements(params)
     this.placements = placements
     let totalInstances = 0
 
@@ -892,6 +1078,11 @@ export class PlanetPropLayer {
         const geometry = buildInstancedGeometry(part.tiers[0].geometry, attributes)
         tierGeometries[0] = geometry
         const mesh = new THREE.InstancedMesh(geometry, part.tiers[0].material, count)
+        // Casters keep their own material in the depth pass, so the trunk's
+        // wind sway and ground skirt land in the shadow map exactly where they
+        // land on screen. A stand-in depth material would have to duplicate
+        // both and would drift the moment either is tuned.
+        mesh.layers.enable(SUN_SHADOW_CASTER_LAYER)
         mesh.name = `planet-prop-${placement.model.id}`
         mesh.userData.planetProp = true
         mesh.userData.planetPropModel = placement.model.id
@@ -919,6 +1110,31 @@ export class PlanetPropLayer {
         ])
         geometry.setDrawRange(0, foliageIndexCount(foliage.cardCount, 0))
         const mesh = new THREE.InstancedMesh(geometry, foliage.material, count)
+        // Same reasoning, and here it also buys the leaf silhouette for free:
+        // the foliage material's alpha-test discard is what makes the shadow
+        // leaf-shaped instead of a rectangle per card.
+        mesh.layers.enable(SUN_SHADOW_CASTER_LAYER)
+        // Swapped per draw rather than per frame: the same mesh is drawn twice,
+        // once for the camera and once for the depth pass, and only the second
+        // one wants the cheap card count. three reads drawRange after
+        // onBeforeRender and before onAfterRender, so this lands on the draw it
+        // is meant for.
+        const cameraRange = () => geometry.drawRange.count
+        let restoreRange = -1
+        mesh.onBeforeRender = (_renderer, _scene, camera) => {
+          if (!isSunShadowCamera(camera)) return
+          restoreRange = cameraRange()
+          const shadowRange = foliageShadowTier < 0
+            ? 0
+            : foliageIndexCount(foliage.cardCount, foliageShadowTier)
+          if (shadowRange < restoreRange) geometry.setDrawRange(0, shadowRange)
+          else restoreRange = -1
+        }
+        mesh.onAfterRender = () => {
+          if (restoreRange < 0) return
+          geometry.setDrawRange(0, restoreRange)
+          restoreRange = -1
+        }
         mesh.name = `planet-foliage-${placement.model.id}`
         mesh.userData.planetProp = true
         mesh.userData.planetPropModel = placement.model.id
@@ -1137,22 +1353,58 @@ export class PlanetPropLayer {
 
 
 
-  private buildPlacements(params: PlanetPropLayerParams): PlanetPropPlacement[] {
-    const treePlacements = this.buildKindPlacements(params, 'tree')
-    const rockPlacements = this.buildKindPlacements(params, 'rock')
-    return [...treePlacements, ...rockPlacements]
+  static *preparePlacements(params: PlanetPropLayerParams): Generator<void, PlanetPropPlacement[]> {
+    const shared = { ...params, scatterCache: params.scatterCache ?? new Map() }
+    const trees = yield* PlanetPropLayer.buildKindPlacementSteps(shared, 'tree')
+    const rocks = yield* PlanetPropLayer.buildKindPlacementSteps(shared, 'rock')
+    return [...trees, ...rocks].map(placement => ({
+      ...placement,
+      sunLight: new Float32Array(placement.matrices.length).fill(1),
+    }))
   }
 
+  private buildPlacements(params: PlanetPropLayerParams): PlanetPropPlacement[] {
+    const shared = { ...params, scatterCache: params.scatterCache ?? new Map() }
+    return [
+      ...this.buildKindPlacements(shared, 'tree'),
+      ...this.buildKindPlacements(shared, 'rock'),
+    ].map(placement => ({ ...placement, sunLight: new Float32Array(placement.matrices.length).fill(1) }))
+  }
+
+  // Synchronous entry point for deterministic regression checks.
   private buildKindPlacements(params: PlanetPropLayerParams, kind: PlanetPropModel['kind']): PlanetPropPlacement[] {
+    const steps = PlanetPropLayer.buildKindPlacementSteps(params, kind)
+    let result = steps.next()
+    while (!result.done) result = steps.next()
+    return result.value
+  }
+
+  private static *buildKindPlacementSteps(params: PlanetPropLayerParams, kind: PlanetPropModel['kind']): Generator<void, PlanetPropPlacement[]> {
+    const cache = params.scatterCache ?? new Map()
+    const key = `${nodeKey(params.node.face, params.node.lod, params.node.x, params.node.y)}:${kind}`
+    const cached = cache.get(key)
+    if (cached) {
+      cache.delete(key)
+      cache.set(key, cached)
+      return cached
+    }
+    const placements = yield* PlanetPropLayer.buildUncachedKindPlacements({ ...params, scatterCache: cache }, kind)
+    cache.set(key, placements)
+    while (cache.size > MAX_PROP_SCATTER_CACHE_ENTRIES) cache.delete(cache.keys().next().value!)
+    return placements
+  }
+
+  private static *buildUncachedKindPlacements(params: PlanetPropLayerParams, kind: PlanetPropModel['kind']): Generator<void, PlanetPropPlacement[]> {
     const models = kind === 'tree' ? params.assets.trees : params.assets.rocks
     const density = kind === 'tree' ? params.settings.treeDensity : params.settings.rockDensity
     if (!params.settings.enabled || params.planetType !== 'rocky' || density <= 0 || models.length === 0) {
       return []
     }
 
-    const { surface, node } = params
-    const gridSize = surface.gridSize
-    const cellCount = (gridSize - 1) * (gridSize - 1)
+    const { node } = params
+    // Scatter density must not change when the terrain mesh resolution changes.
+    const cellCount = 32 * 32
+    const bounds = getNodeBounds(node)
     const maxInstances = kind === 'tree' ? MAX_TREE_INSTANCES_PER_CHUNK : MAX_ROCK_INSTANCES_PER_CHUNK
     const cellDensity = kind === 'tree' ? TREE_CELL_DENSITY : ROCK_CELL_DENSITY
     const targetCount = Math.min(
@@ -1166,6 +1418,7 @@ export class PlanetPropLayer {
     for (const model of models) {
       placementsByModel.set(model, {
         matrices: [],
+        scatterUv: [],
         planetDirs: [],
         surfaceRadii: [],
         terrainNormals: [],
@@ -1183,32 +1436,61 @@ export class PlanetPropLayer {
     const scale = new THREE.Vector3()
     const dummy = new THREE.Object3D()
     const up = new THREE.Vector3(0, 1, 0)
-    const maxAttempts = Math.max(targetCount * (kind === 'tree' ? 18 : 12), 120)
+    // A fixed candidate budget lets sparse habitat stay sparse. Retrying until
+    // a quota was filled erased the very biome masks used for placement.
+    const maxAttempts = targetCount * 5
+    const occupied: THREE.Vector3[] = []
 
     let placed = 0
+    // The hierarchy always starts at the cube face, independently of the
+    // renderer's current minimum/maximum visible LOD.
+    // Children inherit the complete parent population before adding detail.
+    // Ownership uses Float64 UVs, never rounded GPU positions or grid indices.
+    if (node.lod > 0) {
+      const parent = { ...node, lod: node.lod - 1, x: Math.floor(node.x / 2), y: Math.floor(node.y / 2), children: null }
+      parent.key = nodeKey(parent.face, parent.lod, parent.x, parent.y)
+      for (const inherited of yield* PlanetPropLayer.buildKindPlacementSteps({ ...params, node: parent }, kind)) {
+        const bucket = placementsByModel.get(inherited.model)!
+        for (let i = 0; i < inherited.matrices.length; i++) {
+          const u = inherited.scatterUv[i * 2], v = inherited.scatterUv[i * 2 + 1]
+          if (u < bounds.u0 || u >= bounds.u1 || v < bounds.v0 || v >= bounds.v1) continue
+          bucket.matrices.push(inherited.matrices[i])
+          bucket.scatterUv.push(u, v)
+          bucket.planetDirs.push(...inherited.planetDirs.subarray(i * 3, i * 3 + 3))
+          bucket.surfaceRadii.push(inherited.surfaceRadii[i])
+          bucket.terrainNormals.push(...inherited.terrainNormals.subarray(i * 3, i * 3 + 3))
+          bucket.microAo.push(inherited.microAo[i])
+          bucket.macroAo.push(inherited.macroAo[i])
+          occupied.push(new THREE.Vector3().setFromMatrixPosition(inherited.matrices[i]))
+          placed++
+        }
+      }
+    }
     for (let attempt = 0; placed < targetCount && attempt < maxAttempts; attempt++) {
-      const ix = Math.floor(rng() * (gridSize - 1))
-      const iy = Math.floor(rng() * (gridSize - 1))
-      const tx = rng()
-      const ty = rng()
-      this.sampleSurface(surface, ix, iy, tx, ty, position, normal)
-      radial.copy(position).normalize()
-
-      const height = this.sampleScalar(surface.heights, gridSize, ix, iy, tx, ty)
-      const terrainMicroAo = this.sampleScalar(surface.microAo, gridSize, ix, iy, tx, ty)
-      const terrainMacroAo = this.sampleScalar(surface.macroAo, gridSize, ix, iy, tx, ty)
+      yield
+      const u = bounds.u0 + rng() * (bounds.u1 - bounds.u0)
+      const v = bounds.v0 + rng() * (bounds.v1 - bounds.v0)
+      const dir = cubeToSphere(node.face, u, v)
+      radial.set(dir.x, dir.y, dir.z)
+      const height = samplePlanetHeightDetailed(dir, params.terrain)
+      position.copy(radial).multiplyScalar(params.terrain.radius * (1 + height * params.terrain.terrainScale))
+      normal.fromArray(computeTerrainNormal(dir, params.terrain, Math.max(0.0008, 4 / params.terrain.radius), 1))
+      // Stable anchors use the analytic surface, not whichever triangles happen
+      // to be visible. Direct lighting and horizon occlusion are still updated
+      // by the dedicated prop lighting worker.
+      const terrainMicroAo = 1
+      const terrainMacroAo = 1
       const slopeDot = normal.dot(radial)
       const heightNorm = smoothstep(-1, 1, height)
       const latitude = Math.abs(radial.y)
-      const moisture = saturate(height * 0.75 + 0.5)
+      const ecology = sampleSurfaceEcology(position, params.seed, slopeDot)
+      const moisture = ecology.moisture
       const slope = saturate(1 - slopeDot)
       const coast = smoothstep(params.seaHeight - 0.014, params.seaHeight + 0.014, height)
         * (1 - smoothstep(params.seaHeight + 0.026, params.seaHeight + 0.070, height))
       const rockMask = saturate(slope * 0.86 + smoothstep(0.56, 0.76, heightNorm))
       const snowMask = smoothstep(0.72, 0.84, heightNorm + latitude * 0.18) * smoothstep(0.54, 0.78, latitude)
       const aboveSeaMask = smoothstep(params.seaHeight + 0.020, params.seaHeight + 0.085, height)
-      const patchScale = kind === 'tree' ? TREE_PATCH_SCALE_METERS : ROCK_PATCH_SCALE_METERS
-      const patch = valueNoise3(position, params.seed + (kind === 'tree' ? 3001 : 7001), patchScale)
 
       let mask = 0
       if (kind === 'tree') {
@@ -1218,44 +1500,62 @@ export class PlanetPropLayer {
           * (1 - snowMask)
           * (1 - smoothstep(0.58, 0.72, heightNorm))
         const slopeMask = smoothstep(MIN_TREE_SLOPE_DOT, 0.90, slopeDot)
-        const patchMask = smoothstep(0.42, 0.64, patch)
-        mask = aboveSeaMask * biomeMask * slopeMask * patchMask
+        const patchMask = ecology.woodland
+        mask = Math.min(1, aboveSeaMask * biomeMask * slopeMask * patchMask * 2.5)
       } else {
         const biomeMask = Math.max(
           rockMask * smoothstep(0.25, 0.82, heightNorm),
           coast * 0.72,
+          ecology.outcrop,
           smoothstep(0.44, 0.74, slope),
         ) * (1 - snowMask * 0.28)
         const slopeMask = smoothstep(MIN_ROCK_SLOPE_DOT, 0.82, slopeDot)
-        const patchMask = smoothstep(0.34, 0.76, patch)
-        mask = aboveSeaMask * biomeMask * slopeMask * patchMask
+        const patchMask = Math.max(ecology.outcrop, ecology.exposure * 0.65)
+        mask = Math.min(1, aboveSeaMask * biomeMask * slopeMask * patchMask * 3.5)
       }
       if (rng() > mask) continue
 
-      const model = models[Math.floor(rng() * models.length)] ?? models[0]
+      const spacing = kind === 'tree' ? 6 : 2.5
+      if (occupied.some(other => other.distanceToSquared(position) < spacing * spacing)) continue
+      occupied.push(position.clone())
+      // Coherent stands, with occasional mixed specimens at the edges.
+      const species = kind === 'tree' ? ecology.moisture * 0.8 + rng() * 0.2 : rng()
+      const model = models[Math.min(models.length - 1, Math.floor(species * models.length))] ?? models[0]
       const modelPlacement = placementsByModel.get(model)
       if (!modelPlacement) continue
 
+      let embed = PROP_TREE_GROUND_BIAS
       if (kind === 'tree') {
-        // Per model rather than one shared range, so an oak and a pine are not
-        // the same size. Still exactly one rng() draw, so placement and model
-        // choice are untouched.
+        // Species retain their own proportions; stand edges grow smaller.
         const [minHeight, maxHeight] = model.heightRange
-        const treeHeight = minHeight + rng() * (maxHeight - minHeight)
+        const treeHeight = (minHeight + rng() * (maxHeight - minHeight)) * (0.72 + ecology.woodland * 0.38)
         placementUp.copy(radial).lerp(normal, 0.18).normalize()
-        position.addScaledVector(placementUp, 0.08)
         scale.set(treeHeight, treeHeight, treeHeight)
       } else {
-        const rockHeight = 0.9 + rng() * 4.6
-        const squash = 0.62 + rng() * 0.48
+        // Sized by whichever dimension is largest. `model.width` is the widest
+        // horizontal extent over the mesh's own height, so dividing by
+        // max(width, 1) lands the biggest dimension on exactly `rockSize` --
+        // a boulder by its height, the slab by its span.
+        const [minSize, maxSize] = model.heightRange
+        const rockSize = (minSize + Math.pow(rng(), 1.8) * (maxSize - minSize)) * (0.8 + ecology.outcrop * 0.9)
+        const rockScale = rockSize / Math.max(model.width, 1)
+        // What stretch is left only breaks up repetition. The old jitter went
+        // to 2.6x across and 2.2x deep to fake variety out of two meshes; four
+        // meshes carry that now, and the old numbers on the slab gave a 40 m
+        // pancake.
         placementUp.copy(normal).lerp(radial, 0.22).normalize()
-        position.addScaledVector(placementUp, 0.03)
         scale.set(
-          rockHeight * (1.15 + rng() * 1.45),
-          rockHeight * squash,
-          rockHeight * (1.00 + rng() * 1.20),
+          rockScale * (0.88 + rng() * 0.34),
+          rockScale,
+          rockScale * (0.88 + rng() * 0.34),
         )
+        embed = PROP_ROCK_EMBED_MIN + rng() * (PROP_ROCK_EMBED_MAX - PROP_ROCK_EMBED_MIN)
       }
+
+      // The slope is answered in the vertex shader, which splays the base along
+      // the ground rather than pushing the whole prop into it. All that is left
+      // here is how deep the prop is bedded -- see PROP_TREE_GROUND_BIAS.
+      position.addScaledVector(placementUp, -scale.y * embed)
 
       quaternion.setFromUnitVectors(up, placementUp)
       spin.setFromAxisAngle(placementUp, rng() * Math.PI * 2)
@@ -1265,6 +1565,7 @@ export class PlanetPropLayer {
       dummy.scale.copy(scale)
       dummy.updateMatrix()
       modelPlacement.matrices.push(dummy.matrix.clone())
+      modelPlacement.scatterUv.push(u, v)
       modelPlacement.planetDirs.push(radial.x, radial.y, radial.z)
       modelPlacement.surfaceRadii.push(position.length())
       modelPlacement.terrainNormals.push(normal.x, normal.y, normal.z)
@@ -1279,6 +1580,7 @@ export class PlanetPropLayer {
         return {
           model,
           matrices: placement?.matrices ?? [],
+          scatterUv: new Float64Array(placement?.scatterUv ?? []),
           planetDirs: new Float32Array(placement?.planetDirs ?? []),
           surfaceRadii: new Float32Array(placement?.surfaceRadii ?? []),
           terrainNormals: new Float32Array(placement?.terrainNormals ?? []),
@@ -1290,62 +1592,4 @@ export class PlanetPropLayer {
       .filter(placement => placement.matrices.length > 0)
   }
 
-  private sampleSurface(
-    surface: TerrainChunkSurfaceData,
-    ix: number,
-    iy: number,
-    tx: number,
-    ty: number,
-    outPosition: THREE.Vector3,
-    outNormal: THREE.Vector3,
-  ) {
-    const gridSize = surface.gridSize
-    const i00 = iy * gridSize + ix
-    const i10 = i00 + 1
-    const i01 = i00 + gridSize
-    const i11 = i01 + 1
-    this.bilerpVec3(surface.positions, i00, i10, i01, i11, tx, ty, outPosition)
-    this.bilerpVec3(surface.normals, i00, i10, i01, i11, tx, ty, outNormal)
-    outNormal.normalize()
-  }
-
-  private sampleScalar(
-    values: Float32Array<ArrayBufferLike>,
-    gridSize: number,
-    ix: number,
-    iy: number,
-    tx: number,
-    ty: number,
-  ): number {
-    const i00 = iy * gridSize + ix
-    const i10 = i00 + 1
-    const i01 = i00 + gridSize
-    const i11 = i01 + 1
-    const h0 = values[i00] * (1 - tx) + values[i10] * tx
-    const h1 = values[i01] * (1 - tx) + values[i11] * tx
-    return h0 * (1 - ty) + h1 * ty
-  }
-
-  private bilerpVec3(
-    values: Float32Array<ArrayBufferLike>,
-    i00: number,
-    i10: number,
-    i01: number,
-    i11: number,
-    tx: number,
-    ty: number,
-    out: THREE.Vector3,
-  ) {
-    const x0 = values[i00 * 3] * (1 - tx) + values[i10 * 3] * tx
-    const y0 = values[i00 * 3 + 1] * (1 - tx) + values[i10 * 3 + 1] * tx
-    const z0 = values[i00 * 3 + 2] * (1 - tx) + values[i10 * 3 + 2] * tx
-    const x1 = values[i01 * 3] * (1 - tx) + values[i11 * 3] * tx
-    const y1 = values[i01 * 3 + 1] * (1 - tx) + values[i11 * 3 + 1] * tx
-    const z1 = values[i01 * 3 + 2] * (1 - tx) + values[i11 * 3 + 2] * tx
-    out.set(
-      x0 * (1 - ty) + x1 * ty,
-      y0 * (1 - ty) + y1 * ty,
-      z0 * (1 - ty) + z1 * ty,
-    )
-  }
 }

@@ -1,0 +1,187 @@
+{
+  "flight": {
+    "gasMinimumRadius": 41000,
+    "glacierContinuityMeters": 0.005735673053550272,
+    "glacierReliefMeters": [
+      -245.85710063988864,
+      1177.1746205714605
+    ],
+    "maxSpacePositionErrorMeters": 6.184563972055912e-11
+  },
+  "multiplayer": {
+    "clients": 2,
+    "disconnectPresence": true,
+    "f64Precision": true,
+    "invalidFrameRejected": true,
+    "profiles": 6,
+    "senderOwnership": true,
+    "walkingAndShipReplication": true
+  },
+  "transitions": {
+    "cruiseMetersPerSecond": 12000,
+    "hemisphereTransitions": 6
+  },
+  "visual": [
+    {
+      "evidence": [
+        "b",
+        "c",
+        "d"
+      ],
+      "name": "Finish sibling coverage before grandchildren",
+      "passed": true
+    },
+    {
+      "evidence": [
+        "a0",
+        "a1",
+        "a2",
+        "a3"
+      ],
+      "name": "Refine after sibling coverage is complete",
+      "passed": true
+    },
+    {
+      "evidence": {
+        "base": [
+          27,
+          5,
+          15,
+          255
+        ],
+        "composite": [
+          27,
+          5,
+          15,
+          255
+        ]
+      },
+      "name": "Cloud behind opaque terrain is occluded",
+      "passed": true
+    },
+    {
+      "evidence": {
+        "base": [
+          27,
+          5,
+          15,
+          255
+        ],
+        "composite": [
+          98,
+          86,
+          82,
+          255
+        ]
+      },
+      "name": "Cloud in front of terrain stays visible",
+      "passed": true
+    },
+    {
+      "evidence": {
+        "base": [
+          21,
+          4,
+          12,
+          255
+        ],
+        "composite": [
+          21,
+          4,
+          12,
+          255
+        ]
+      },
+      "name": "Cloud behind transparent depth-writing ocean is occluded",
+      "passed": true
+    },
+    {
+      "evidence": null,
+      "name": "Hidden planet does not enable its cloud pass",
+      "passed": true
+    },
+    {
+      "evidence": {
+        "base": [
+          27,
+          5,
+          15,
+          255
+        ],
+        "composite": [
+          27,
+          5,
+          15,
+          255
+        ]
+      },
+      "name": "Orbital shell behind terrain is occluded",
+      "passed": true
+    },
+    {
+      "evidence": {
+        "base": [
+          27,
+          5,
+          15,
+          255
+        ],
+        "composite": [
+          169,
+          158,
+          141,
+          255
+        ]
+      },
+      "name": "Orbital shell in front of terrain stays visible",
+      "passed": true
+    },
+    {
+      "evidence": {
+        "base": [
+          27,
+          5,
+          15,
+          255
+        ],
+        "composite": [
+          27,
+          5,
+          15,
+          255
+        ]
+      },
+      "name": "Cloud ceiling behind a mountain is occluded",
+      "passed": true
+    },
+    {
+      "evidence": {
+        "base": [
+          27,
+          5,
+          15,
+          255
+        ],
+        "composite": [
+          150,
+          142,
+          129,
+          255
+        ]
+      },
+      "name": "Cloud ceiling remains visible from inside the shell",
+      "passed": true
+    }
+  ],
+  "renderSweep": {
+    "blackFrames": 0,
+    "frames": 72,
+    "nonFiniteComponents": 0,
+    "shaderErrors": 0
+  },
+  "gasMotion": {
+    "changedPixels": 14644,
+    "intervalSeconds": 20,
+    "totalPixels": 57600
+  }
+}

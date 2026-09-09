@@ -1,0 +1,352 @@
+{
+  "regressions": {
+    "visual": [
+      {
+        "name": "Finish sibling coverage before grandchildren",
+        "passed": true,
+        "evidence": [
+          "b",
+          "c",
+          "d"
+        ]
+      },
+      {
+        "name": "Refine after sibling coverage is complete",
+        "passed": true,
+        "evidence": [
+          "a0",
+          "a1",
+          "a2",
+          "a3"
+        ]
+      },
+      {
+        "name": "Cloud behind opaque terrain is occluded",
+        "passed": true,
+        "evidence": {
+          "base": [
+            27,
+            5,
+            15,
+            255
+          ],
+          "composite": [
+            27,
+            5,
+            15,
+            255
+          ]
+        }
+      },
+      {
+        "name": "Cloud in front of terrain stays visible",
+        "passed": true,
+        "evidence": {
+          "base": [
+            27,
+            5,
+            15,
+            255
+          ],
+          "composite": [
+            98,
+            86,
+            82,
+            255
+          ]
+        }
+      },
+      {
+        "name": "Cloud behind transparent depth-writing ocean is occluded",
+        "passed": true,
+        "evidence": {
+          "base": [
+            21,
+            4,
+            12,
+            255
+          ],
+          "composite": [
+            21,
+            4,
+            12,
+            255
+          ]
+        }
+      },
+      {
+        "name": "Hidden planet does not enable its cloud pass",
+        "passed": true,
+        "evidence": null
+      },
+      {
+        "name": "Orbital shell behind terrain is occluded",
+        "passed": true,
+        "evidence": {
+          "base": [
+            27,
+            5,
+            15,
+            255
+          ],
+          "composite": [
+            27,
+            5,
+            15,
+            255
+          ]
+        }
+      },
+      {
+        "name": "Orbital shell in front of terrain stays visible",
+        "passed": true,
+        "evidence": {
+          "base": [
+            27,
+            5,
+            15,
+            255
+          ],
+          "composite": [
+            169,
+            158,
+            141,
+            255
+          ]
+        }
+      },
+      {
+        "name": "Cloud ceiling behind a mountain is occluded",
+        "passed": true,
+        "evidence": {
+          "base": [
+            27,
+            5,
+            15,
+            255
+          ],
+          "composite": [
+            27,
+            5,
+            15,
+            255
+          ]
+        }
+      },
+      {
+        "name": "Cloud ceiling remains visible from inside the shell",
+        "passed": true,
+        "evidence": {
+          "base": [
+            27,
+            5,
+            15,
+            255
+          ],
+          "composite": [
+            150,
+            142,
+            129,
+            255
+          ]
+        }
+      }
+    ],
+    "landscape": {
+      "passed": 105,
+      "results": [
+        {
+          "name": "Cube-face boundary positions and normals agree",
+          "passed": true,
+          "evidence": {
+            "seamError": 0,
+            "normalError": 0
+          }
+        },
+        {
+          "name": "Chunk geometry has finite outward unit normals",
+          "passed": true,
+          "evidence": {
+            "twoChunksMs": 34.600000001490116
+          }
+        },
+        {
+          "name": "Woodland contains both stands and clearings",
+          "passed": true,
+          "evidence": {
+            "totalTrees": 792,
+            "emptyPatches": 7,
+            "maxTrees": 34,
+            "totalGrass": 17987
+          }
+        },
+        {
+          "name": "Trees retain six metre spacing within each chunk",
+          "passed": true,
+          "evidence": 5.999534271829258
+        },
+        {
+          "name": "No submerged trees, rocks or grass",
+          "passed": true
+        }
+      ]
+    },
+    "props": {
+      "passed": 862,
+      "ms": 782.7999999970198,
+      "parentProps": 65,
+      "inherited": 65,
+      "added": 172,
+      "summary": [
+        {
+          "name": "Nonempty fixture and incremental work",
+          "passed": true,
+          "evidence": {
+            "count": 65,
+            "yields": 3134
+          }
+        },
+        {
+          "name": "Instance ceilings include inherited props",
+          "passed": true
+        },
+        {
+          "name": "Instance ceilings include inherited props",
+          "passed": true
+        },
+        {
+          "name": "Instance ceilings include inherited props",
+          "passed": true
+        },
+        {
+          "name": "Instance ceilings include inherited props",
+          "passed": true
+        },
+        {
+          "name": "Every parent prop belongs to exactly one child",
+          "passed": true,
+          "evidence": {
+            "inherited": 65,
+            "added": 172
+          }
+        },
+        {
+          "name": "Second refinement preserves all transforms",
+          "passed": true
+        },
+        {
+          "name": "Second refinement preserves all transforms",
+          "passed": true
+        },
+        {
+          "name": "Second refinement preserves all transforms",
+          "passed": true
+        },
+        {
+          "name": "Second refinement preserves all transforms",
+          "passed": true
+        },
+        {
+          "name": "Coarsening restores exact parent",
+          "passed": true
+        },
+        {
+          "name": "Cache eviction does not change the world",
+          "passed": true
+        },
+        {
+          "name": "Geometry resolution does not affect anchors",
+          "passed": true
+        },
+        {
+          "name": "CPU cache remains bounded",
+          "passed": true,
+          "evidence": 1024
+        },
+        {
+          "name": "Lighting buffers belong to each layer",
+          "passed": true
+        },
+        {
+          "name": "Keep parent while child props are preparing",
+          "passed": true
+        },
+        {
+          "name": "Promote all siblings together when ready",
+          "passed": true
+        },
+        {
+          "name": "Coarsening waits for parent props",
+          "passed": true
+        },
+        {
+          "name": "Keep a preparing collapse target while children still cover it",
+          "passed": true
+        },
+        {
+          "name": "Coarsening commits when parent is ready",
+          "passed": true
+        }
+      ]
+    }
+  },
+  "liveFlight": {
+    "positionError": 8.083965584164555e-13,
+    "orientationError": 0,
+    "frame": "space"
+  },
+  "liveReplication": {
+    "remoteActors": 1,
+    "avatarVisible": true,
+    "shipLoaded": true,
+    "poseMatchesDatabase": true,
+    "position": {
+      "frame": "2",
+      "x": 9738.700704566336,
+      "y": 16016.29437304867,
+      "z": -16675.940120013543,
+      "qx": -0.14288074849404467,
+      "qy": 0.5827574511381224,
+      "qz": -0.40049188895534155,
+      "qw": 0.6925208240434093
+    }
+  },
+  "serverRestart": {
+    "reconnected": true,
+    "epochPreserved": true,
+    "identityPreserved": true
+  },
+  "gameplay": {
+    "flight": {
+      "maxSpacePositionErrorMeters": 6.184563972055912e-11,
+      "gasMinimumRadius": 41000,
+      "glacierReliefMeters": [
+        -282.63958428638585,
+        1256.7943144305743
+      ],
+      "glacierContinuityMeters": 0.005853073563457656
+    },
+    "network": {
+      "clients": 2,
+      "profiles": 3,
+      "f64Precision": true,
+      "walkingAndShipReplication": true,
+      "senderOwnership": true,
+      "invalidFrameRejected": true,
+      "disconnectPresence": true
+    }
+  },
+  "flightReload": {
+    "mode": "flying",
+    "frame": "space",
+    "positionErrorMeters": 1.8415603535855505e-09,
+    "identityPreserved": true
+  },
+  "twoRenderedClients": {
+    "walkingDistanceMeters": 7.7494108703542315,
+    "poseMatchesDatabase": true,
+    "avatarAndShipLoaded": true,
+    "flyingModeReplicated": true,
+    "flyingAvatarHidden": true
+  }
+}
