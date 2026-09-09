@@ -61,6 +61,9 @@ export function runVisualChecks() {
   const shell = new THREE.Mesh(new THREE.SphereGeometry(8, 24, 16), planet.cloudMaterial.clone())
   const mask = new THREE.DataTexture(new Uint8Array([255, 255, 255, 255]), 1, 1)
   mask.needsUpdate = true
+  // Ground views switch the live shell to BackSide. The orbital fixture
+  // must set its own side rather than inherit the current player mode.
+  shell.material.side = THREE.FrontSide
   shell.layers.set(1)
   shell.material.uniforms.uCloudMask.value = mask
   shell.material.uniforms.uCloudQuality.value = 0

@@ -1,3 +1,4 @@
+import { sampleSurfaceEcology } from './surface-ecology'
 import * as THREE from 'three'
 import { SUN_SHADOW_CASTER_LAYER } from '../render-layers'
 import { isSunShadowCamera } from './sun-shadow'
@@ -156,8 +157,6 @@ const TREE_CELL_DENSITY = 0.035
 const ROCK_CELL_DENSITY = 0.048
 const MIN_TREE_SLOPE_DOT = 0.70
 const MIN_ROCK_SLOPE_DOT = 0.38
-const TREE_PATCH_SCALE_METERS = 190
-const ROCK_PATCH_SCALE_METERS = 110
 const PROP_SHADER_VERSION = 9
 const PROP_TEXTURE_ANISOTROPY = 16
 
@@ -275,19 +274,6 @@ function mulberry32(seed: number): () => number {
     r ^= r + Math.imul(r ^ (r >>> 7), 61 | r)
     return ((r ^ (r >>> 14)) >>> 0) / 4294967296
   }
-}
-
-function valueNoise3(position: THREE.Vector3, seed: number, scale: number): number {
-  const x = Math.floor(position.x / scale)
-  const y = Math.floor(position.y / scale)
-  const z = Math.floor(position.z / scale)
-  let h = seed ^ 0x9e3779b9
-  h = Math.imul(h ^ x, 374761393)
-  h = Math.imul(h ^ y, 668265263)
-  h = Math.imul(h ^ z, 2246822519)
-  h ^= h >>> 13
-  h = Math.imul(h, 1274126177)
-  return ((h ^ (h >>> 16)) >>> 0) / 4294967295
 }
 
 function sourceMaterialColor(material: THREE.Material, fallback: THREE.Color): THREE.Color {
@@ -1405,7 +1391,10 @@ export class PlanetPropLayer {
     const scale = new THREE.Vector3()
     const dummy = new THREE.Object3D()
     const up = new THREE.Vector3(0, 1, 0)
-    const maxAttempts = Math.max(targetCount * (kind === 'tree' ? 18 : 12), 120)
+    // A fixed candidate budget lets sparse habitat stay sparse. Retrying until
+    // a quota was filled erased the very biome masks used for placement.
+    const maxAttempts = targetCount * 5
+    const occupied: THREE.Vector3[] = []
 
     let placed = 0
     for (let attempt = 0; placed < targetCount && attempt < maxAttempts; attempt++) {
@@ -1422,15 +1411,14 @@ export class PlanetPropLayer {
       const slopeDot = normal.dot(radial)
       const heightNorm = smoothstep(-1, 1, height)
       const latitude = Math.abs(radial.y)
-      const moisture = saturate(height * 0.75 + 0.5)
+      const ecology = sampleSurfaceEcology(position, params.seed, slopeDot)
+      const moisture = ecology.moisture
       const slope = saturate(1 - slopeDot)
       const coast = smoothstep(params.seaHeight - 0.014, params.seaHeight + 0.014, height)
         * (1 - smoothstep(params.seaHeight + 0.026, params.seaHeight + 0.070, height))
       const rockMask = saturate(slope * 0.86 + smoothstep(0.56, 0.76, heightNorm))
       const snowMask = smoothstep(0.72, 0.84, heightNorm + latitude * 0.18) * smoothstep(0.54, 0.78, latitude)
       const aboveSeaMask = smoothstep(params.seaHeight + 0.020, params.seaHeight + 0.085, height)
-      const patchScale = kind === 'tree' ? TREE_PATCH_SCALE_METERS : ROCK_PATCH_SCALE_METERS
-      const patch = valueNoise3(position, params.seed + (kind === 'tree' ? 3001 : 7001), patchScale)
 
       let mask = 0
       if (kind === 'tree') {
@@ -1440,31 +1428,35 @@ export class PlanetPropLayer {
           * (1 - snowMask)
           * (1 - smoothstep(0.58, 0.72, heightNorm))
         const slopeMask = smoothstep(MIN_TREE_SLOPE_DOT, 0.90, slopeDot)
-        const patchMask = smoothstep(0.42, 0.64, patch)
-        mask = aboveSeaMask * biomeMask * slopeMask * patchMask
+        const patchMask = ecology.woodland
+        mask = Math.min(1, aboveSeaMask * biomeMask * slopeMask * patchMask * 2.5)
       } else {
         const biomeMask = Math.max(
           rockMask * smoothstep(0.25, 0.82, heightNorm),
           coast * 0.72,
+          ecology.outcrop,
           smoothstep(0.44, 0.74, slope),
         ) * (1 - snowMask * 0.28)
         const slopeMask = smoothstep(MIN_ROCK_SLOPE_DOT, 0.82, slopeDot)
-        const patchMask = smoothstep(0.34, 0.76, patch)
-        mask = aboveSeaMask * biomeMask * slopeMask * patchMask
+        const patchMask = Math.max(ecology.outcrop, ecology.exposure * 0.65)
+        mask = Math.min(1, aboveSeaMask * biomeMask * slopeMask * patchMask * 3.5)
       }
       if (rng() > mask) continue
 
-      const model = models[Math.floor(rng() * models.length)] ?? models[0]
+      const spacing = kind === 'tree' ? 6 : 2.5
+      if (occupied.some(other => other.distanceToSquared(position) < spacing * spacing)) continue
+      occupied.push(position.clone())
+      // Coherent stands, with occasional mixed specimens at the edges.
+      const species = kind === 'tree' ? ecology.moisture * 0.8 + rng() * 0.2 : rng()
+      const model = models[Math.min(models.length - 1, Math.floor(species * models.length))] ?? models[0]
       const modelPlacement = placementsByModel.get(model)
       if (!modelPlacement) continue
 
       let embed = PROP_TREE_GROUND_BIAS
       if (kind === 'tree') {
-        // Per model rather than one shared range, so an oak and a pine are not
-        // the same size. Still exactly one rng() draw, so placement and model
-        // choice are untouched.
+        // Species retain their own proportions; stand edges grow smaller.
         const [minHeight, maxHeight] = model.heightRange
-        const treeHeight = minHeight + rng() * (maxHeight - minHeight)
+        const treeHeight = (minHeight + rng() * (maxHeight - minHeight)) * (0.72 + ecology.woodland * 0.38)
         placementUp.copy(radial).lerp(normal, 0.18).normalize()
         scale.set(treeHeight, treeHeight, treeHeight)
       } else {
@@ -1473,7 +1465,7 @@ export class PlanetPropLayer {
         // max(width, 1) lands the biggest dimension on exactly `rockSize` --
         // a boulder by its height, the slab by its span.
         const [minSize, maxSize] = model.heightRange
-        const rockSize = minSize + rng() * (maxSize - minSize)
+        const rockSize = (minSize + Math.pow(rng(), 1.8) * (maxSize - minSize)) * (0.8 + ecology.outcrop * 0.9)
         const rockScale = rockSize / Math.max(model.width, 1)
         // What stretch is left only breaks up repetition. The old jitter went
         // to 2.6x across and 2.2x deep to fake variety out of two meshes; four

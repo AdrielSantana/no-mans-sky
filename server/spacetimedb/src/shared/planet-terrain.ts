@@ -1,3 +1,4 @@
+import { valueNoise3 } from './terrain-noise'
 import { clamp, normalize, type Vec3Like } from './vector'
 
 export interface PlanetTerrainParams {
@@ -369,7 +370,15 @@ export function samplePlanetHeight(
       + smoothstep(0.50, 0.95, Math.abs(baseDir.y)) * 0.045
   }
 
+  // Metre-scale geology between continental relief and walking micro-detail.
+  // Sample in unwarped planet space: the continental domain warp otherwise
+  // stretches these escarpments unpredictably, and face-local UVs make seams.
+  const landforms = samplePlanetLandformHeight(baseDir, params)
+    * smoothstep(0.12, 0.55, continentMask)
+    * (0.55 + mountainBeltMask * 0.45)
+
   return continentHeight
+    + landforms
     + lowlandUndulation
     + hills
     + mountains
@@ -377,6 +386,28 @@ export function samplePlanetHeight(
     + sedimentFill
     - thermalTalus
     + detail
+}
+
+/** Signed, continuous local relief, in normalized terrain-height units.
+ * Three value-noise taps, no erosion iterations or per-sample allocations.
+ * Broad plateaus have narrow rounded scarps; a separate drainage field cuts
+ * through them instead of stacking another octave of rounded hills.
+ */
+export function samplePlanetLandformHeight(dir: Vec3Like, params: PlanetTerrainParams): number {
+  if (params.planetType !== 'rocky' || params.terrainScale <= 0) return 0
+  const strength = clamp(params.reliefVariety ?? 0.7, 0, 2)
+  if (strength === 0) return 0
+  const r = params.radius
+  const x = dir.x * r, y = dir.y * r, z = dir.z * r
+  const region = 2 * valueNoise3(x / 2400 + 13.1, y / 2400 - 8.7, z / 2400 + 3.4, params.seed + 613) - 1
+  const strata = 2 * valueNoise3(x / 780 + region * 0.65, y / 780, z / 780, params.seed + 719) - 1
+  const drainage = Math.abs(2 * valueNoise3(x / 1150 - 17.2, y / 1150 + 9.6, z / 1150, params.seed + 827) - 1)
+  const plateau = smoothstep(-0.13, 0.16, strata)
+  const valley = 1 - smoothstep(0.025, 0.20, drainage)
+  const province = smoothstep(-0.42, 0.38, region)
+  const meters = ((plateau - 0.38) * 105 - valley * (22 + plateau * 36)) * province
+  // Small planets keep relief proportional; large planets keep walkable sizes.
+  return meters * Math.min(1, r / 12000) * strength / (params.terrainScale * r)
 }
 
 export function samplePlanetMicroHeight(

@@ -1,3 +1,4 @@
+import { sampleSurfaceEcology } from './surface-ecology'
 import * as THREE from 'three'
 import grassAlphaUrl from '../../assets/terrain/grass_alpha.jpg'
 import { TERRAIN_NOISE } from '../shaders/noise.glsl'
@@ -539,7 +540,7 @@ export class FluffyGrassLayer {
     const scale = new THREE.Vector3()
     const dummy = new THREE.Object3D()
     const up = new THREE.Vector3(0, 1, 0)
-    const maxAttempts = Math.max(targetCount * (far ? 18 : 13), 120)
+    const maxAttempts = targetCount * 4
 
     for (let attempt = 0; matrices.length < targetCount && attempt < maxAttempts; attempt++) {
       const ix = Math.floor(rng() * (gridSize - 1))
@@ -553,11 +554,12 @@ export class FluffyGrassLayer {
       const baseMask = this.evaluateBaseMask(height, normal, radial, params.seaHeight)
       const patchMask = smoothstep(far ? 0.43 : 0.46, far ? 0.57 : 0.60, patchNoise(position, params.seed))
       const patchEdgeJitter = smoothstep(0.12, 0.72, rng() * 0.34 + patchMask * 0.82)
-      const mask = baseMask * patchMask
+      const ecology = sampleSurfaceEcology(position, params.seed, normal.dot(radial))
+      const mask = Math.min(1, baseMask * patchMask * ecology.meadow * 2.2)
       if (rng() > mask * patchEdgeJitter) continue
 
       const width = settings.height * (far ? 2.6 + rng() * 2.2 : 0.52 + rng() * 0.42)
-      const bladeHeight = settings.height * (far ? 0.34 + rng() * 0.24 : 0.56 + rng() * 0.36)
+      const bladeHeight = settings.height * (far ? 0.34 + rng() * 0.24 : 0.56 + rng() * 0.36) * (0.65 + ecology.moisture * 0.55)
       position.addScaledVector(radial, Math.max(0.04, bladeHeight * 0.045))
       quaternion.setFromUnitVectors(up, radial)
       spin.setFromAxisAngle(radial, rng() * Math.PI * 2)
@@ -615,22 +617,10 @@ export class FluffyGrassLayer {
     return aboveSeaMask * grassBiomeMask * slopeMask
   }
 
-  // Cheap upper-bound check before the scatter loop.
-  //
-  // maxAttempts reaches ~25,900 (near) + ~10,600 (far) per chunk, and every
-  // iteration evaluates patchNoise — 3 octaves, 8 hashes each — *before* the
-  // single acceptance test. On an all-ocean, all-snow or steep-rock chunk the
-  // mask is 0 everywhere, so all of them run and produce nothing: ~8.2ms of
-  // main thread inside a 2.5ms integration budget, for a layer that is then
-  // discarded.
-  //
-  // Samples grid vertices *and* cell centres. Vertices alone are not a sound
-  // bound: slopeDot comes from a normalised bilinear blend of the corner
-  // normals, and averaging two oppositely-tilted normals can read flatter than
-  // either corner. Cell centres are where that effect peaks.
-  //
-  // Crucially this never touches the rng, so chunks that do have grass keep a
-  // byte-identical scatter.
+  // Cheap terrain-coverage prepass before evaluating ecological fields.
+  // Test vertices AND cell centres: interpolated normals can be flatter than
+  // either corner, allowing grass inside a cell whose corners all reject it.
+  // This does not touch the RNG or evaluate the additional ecology mask.
   private hasAnyGrassCoverage(surface: TerrainChunkSurfaceData, seaHeight: number): boolean {
     const gridSize = surface.gridSize
     const position = new THREE.Vector3()
