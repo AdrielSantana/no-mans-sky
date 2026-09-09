@@ -420,6 +420,11 @@ export function createOceanMaterial(params: OceanMaterialParams): THREE.ShaderMa
       microSlope = (abs(microA) + abs(microB)) * microWeight * 0.42;
       fragmentIfftSlope += microSlope;
     }
+    // Unresolved wave normals cause orbit-scale glitter and temporal aliasing.
+    // Fade them with the pixel footprint of the simulation, preserving swells nearby.
+    float waveFootprint = max(length(dFdx(vSphereDir)), length(dFdy(vSphereDir))) * uWaveScale;
+    float resolvedWaves = 1.0 - smoothstep(0.025, 0.22, waveFootprint);
+    normal = normalize(mix(radial, normal, resolvedWaves));
     vec3 lightDir = normalize(uSunPosition - vWorldPos);
     vec3 viewDir = normalize(cameraPosition - vWorldPos);
     float sunFacing = dot(radial, lightDir);
@@ -475,7 +480,7 @@ export function createOceanMaterial(params: OceanMaterialParams): THREE.ShaderMa
       float glintField = glintNoise * 0.54 + fragmentIfftSlope * 0.46 + max(vWave, 0.0) * 0.08;
       glitter = smoothstep(0.92, 1.32, glintField) * pow(direct, 3.2);
     }
-    vec3 specular = uSunColor * day * (halfSpec * 0.82 + broadSpec * 0.18 + glitter * 0.055) * uOceanSpecularStrength;
+    vec3 specular = uSunColor * day * (halfSpec * 0.82 + broadSpec * 0.18 + glitter * 0.055 * resolvedWaves) * uOceanSpecularStrength;
     float sunMirror = pow(max(dot(reflect(-viewDir, normal), lightDir), 0.0), 34.0) * day * reflectionLight;
     specular += uSunColor * sunMirror * uOceanReflectionStrength * (0.035 + uOceanClarity * 0.060);
     float cloudShadow = cloudShadowMask(normalize(vSphereDir), normalize(uCloudLocalSunDirection));
@@ -507,7 +512,7 @@ export function createOceanMaterial(params: OceanMaterialParams): THREE.ShaderMa
     crestFoam = max(crestFoam, smoothstep(0.46, 1.10, detailSlopeAmount + detailIfft.foam * 0.42) * detailWeight * uIfftDetailFoamStrength * 0.18);
     crestFoam *= smoothstep(0.045, 0.24, waterDepthRaw) * uIfftFoamStrength * 0.62;
     crestFoam *= mix(0.54, 0.96, clamp(uIfftChoppiness / 2.5, 0.0, 1.0));
-    float foamMask = pow(max(shoreFoam, crestFoam), 1.35) * (0.04 + foamVisibility * 0.96);
+    float foamMask = pow(max(shoreFoam, crestFoam * resolvedWaves), 1.35) * (0.04 + foamVisibility * 0.96);
     vec3 foam = uOceanFoamColor * (0.030 + foamLight * 0.970);
 
     vec3 nightColor = deepColor * vec3(0.035, 0.046, 0.078);

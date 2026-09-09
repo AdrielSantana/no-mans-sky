@@ -52,7 +52,6 @@ class CloudCompositePass extends Pass {
   private scene: THREE.Scene
   private camera: THREE.Camera
   private cloudTarget: THREE.WebGLRenderTarget
-  private cloudDepthTarget: THREE.WebGLRenderTarget
   private material: THREE.ShaderMaterial
   private fsQuad: FullScreenQuad
   private clearColor = new THREE.Color()
@@ -71,24 +70,6 @@ class CloudCompositePass extends Pass {
   // the scene pass, so that matrix is already current for this frame, and
   // because no cloud material asks for scene lights or fog.
   private cloudScene = new THREE.Scene()
-  private depthOnlyMaterial = new THREE.MeshBasicMaterial({
-    colorWrite: false,
-    depthWrite: true,
-    depthTest: true,
-    // DoubleSide, not FrontSide. PlanetRenderer.updateCloudRenderSide flips the
-    // cloud shell to BackSide as soon as the camera is inside it — i.e. any time
-    // you are walking on the surface. With a FrontSide override the shell's
-    // outward-facing polygons are all facing away, so this pre-pass wrote no
-    // depth at all, tCloudDepth stayed at the cleared 1.0, and the composite
-    // then read every pixel with geometry as "cloud is behind the scene" and
-    // multiplied the cloud alpha to zero. The result was a cloud deck that got
-    // cut off with a hard edge along the terrain horizon and only survived
-    // against empty sky.
-    //
-    // DoubleSide is a no-op from outside the shell: a ray from outside hits the
-    // near (front-facing) surface first either way, and the depth test keeps it.
-    side: THREE.DoubleSide,
-  })
 
   constructor(scene: THREE.Scene, camera: THREE.Camera) {
     super()
@@ -96,17 +77,13 @@ class CloudCompositePass extends Pass {
     this.camera = camera
     this.needsSwap = true
     this.cloudTarget = this.createCloudTarget(1, 1)
-    this.cloudDepthTarget = this.createDepthTarget(1, 1, 'cloud-depth')
     this.material = new THREE.ShaderMaterial({
       depthTest: false,
       depthWrite: false,
       uniforms: {
         tDiffuse: { value: null },
         tClouds: { value: this.cloudTarget.texture },
-        tCloudDepth: { value: this.cloudDepthTarget.depthTexture },
-        tSceneDepth: { value: null },
         uCloudEnabled: { value: 1 },
-        uDepthBias: { value: 0.000002 },
       },
       vertexShader: /* glsl */ `
         varying vec2 vUv;
@@ -119,22 +96,17 @@ class CloudCompositePass extends Pass {
       fragmentShader: /* glsl */ `
         uniform sampler2D tDiffuse;
         uniform sampler2D tClouds;
-        uniform sampler2D tCloudDepth;
-        uniform sampler2D tSceneDepth;
         uniform float uCloudEnabled;
-        uniform float uDepthBias;
         varying vec2 vUv;
 
         void main() {
           vec4 base = texture2D(tDiffuse, vUv);
           vec4 clouds = texture2D(tClouds, vUv);
-          float sceneDepth = texture2D(tSceneDepth, vUv).x;
-          float cloudDepth = texture2D(tCloudDepth, vUv).x;
-          float hasSceneDepth = 1.0 - step(0.9999, sceneDepth);
-          float cloudBehindScene = step(sceneDepth - uDepthBias, cloudDepth) * hasSceneDepth;
-          clouds.a *= 1.0 - cloudBehindScene;
-          clouds.a *= uCloudEnabled;
-          gl_FragColor = vec4(mix(base.rgb, clouds.rgb, clouds.a), max(base.a, clouds.a));
+          // Normal blending into a transparent target already premultiplies RGB.
+          // Multiplying it by alpha again produces dark, muddy cloud edges.
+          clouds *= uCloudEnabled;
+          gl_FragColor = vec4(base.rgb * (1.0 - clouds.a) + clouds.rgb,
+            base.a * (1.0 - clouds.a) + clouds.a);
         }
       `,
     })
@@ -146,6 +118,7 @@ class CloudCompositePass extends Pass {
       minFilter: THREE.LinearFilter,
       magFilter: THREE.LinearFilter,
       format: THREE.RGBAFormat,
+      type: THREE.HalfFloatType,
       depthBuffer: true,
       stencilBuffer: false,
     })
@@ -154,24 +127,10 @@ class CloudCompositePass extends Pass {
     return target
   }
 
-  private createDepthTarget(width: number, height: number, name: string): THREE.WebGLRenderTarget {
-    const target = new THREE.WebGLRenderTarget(width, height, {
-      minFilter: THREE.NearestFilter,
-      magFilter: THREE.NearestFilter,
-      format: THREE.RGBAFormat,
-      depthBuffer: true,
-      stencilBuffer: false,
-    })
-    target.texture.name = name
-    target.depthTexture = createDepthTexture(width, height, `${name}-texture`)
-    return target
-  }
-
   setSize(width: number, height: number) {
     const targetWidth = Math.max(1, Math.floor(width * CLOUD_RENDER_SCALE))
     const targetHeight = Math.max(1, Math.floor(height * CLOUD_RENDER_SCALE))
     this.cloudTarget.setSize(targetWidth, targetHeight)
-    this.cloudDepthTarget.setSize(targetWidth, targetHeight)
   }
 
   render(renderer: THREE.WebGLRenderer, writeBuffer: THREE.WebGLRenderTarget, readBuffer: THREE.WebGLRenderTarget) {
@@ -179,12 +138,10 @@ class CloudCompositePass extends Pass {
     this.needsSwap = hasClouds
     if (!hasClouds) return
 
-    this.renderClouds(renderer)
+    this.renderClouds(renderer, readBuffer.depthTexture)
 
     this.material.uniforms.tDiffuse.value = readBuffer.texture
     this.material.uniforms.tClouds.value = this.cloudTarget.texture
-    this.material.uniforms.tCloudDepth.value = this.cloudDepthTarget.depthTexture
-    this.material.uniforms.tSceneDepth.value = readBuffer.depthTexture
     this.material.uniforms.uCloudEnabled.value = hasClouds ? 1 : 0
     renderer.setRenderTarget(this.renderToScreen ? null : writeBuffer)
     this.fsQuad.render(renderer)
@@ -223,7 +180,7 @@ class CloudCompositePass extends Pass {
     return true
   }
 
-  private renderClouds(renderer: THREE.WebGLRenderer) {
+  private renderClouds(renderer: THREE.WebGLRenderer, sceneDepth: THREE.DepthTexture | null) {
     const previousTarget = renderer.getRenderTarget()
     const previousAutoClear = renderer.autoClear
     const previousCameraMask = this.camera.layers.mask
@@ -239,11 +196,20 @@ class CloudCompositePass extends Pass {
       // lost its layer from being drawn into the cloud buffer regardless.
       this.camera.layers.set(CLOUD_RENDER_LAYER)
 
-      this.cloudScene.overrideMaterial = this.depthOnlyMaterial
-      renderer.setRenderTarget(this.cloudDepthTarget)
-      renderer.clear(true, true, true)
-      renderer.render(this.cloudScene, this.camera)
-      this.cloudScene.overrideMaterial = null
+      this.cloudScene.children = this.cloudRenderObjects.filter(object => this.isVisibleInHierarchy(object))
+
+      // Test the actual cloud fragments against opaque terrain AND the ocean.
+      // A separate solid-shell depth pass cannot represent holes in billboards
+      // or several overlapping clouds at different distances.
+      for (const object of this.cloudRenderObjects) {
+        const material = (object as THREE.Mesh).material
+        if (!(material instanceof THREE.ShaderMaterial)) continue
+        const uniforms = material.uniforms
+        if (!uniforms.uCloudSceneDepth) continue
+        uniforms.uCloudSceneDepth.value = sceneDepth
+        uniforms.uCloudDepthEnabled.value = sceneDepth ? 1 : 0
+        uniforms.uCloudViewport.value.set(this.cloudTarget.width, this.cloudTarget.height)
+      }
 
       renderer.autoClear = false
       renderer.setRenderTarget(this.cloudTarget)
@@ -260,9 +226,7 @@ class CloudCompositePass extends Pass {
 
   dispose() {
     this.cloudTarget.dispose()
-    this.cloudDepthTarget.dispose()
     this.material.dispose()
-    this.depthOnlyMaterial.dispose()
     this.fsQuad.dispose()
   }
 }

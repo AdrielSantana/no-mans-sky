@@ -1489,7 +1489,11 @@ export class PlanetRenderer {
         const size = baseSize * (0.62 + r3 * 1.18) * (0.90 + this.cloudVolume * 0.16)
         const aspect = 0.52 + this.random01(cellKey + 83.0) * 0.72
         basisX.copy(right).multiplyScalar(size)
-        basisY.copy(up).multiplyScalar(size * aspect)
+        // A camera-facing card used to be taller than its altitude, cutting
+        // through land and water at the horizon. Bound its radial half-extent.
+        const radialProjection = Math.abs(up.dot(dir))
+        const clearance = Math.max(1, cloudRadius - Math.max(this.planetRadius, this.oceanSeaRadius))
+        basisY.copy(up).multiplyScalar(Math.min(size * aspect, clearance * 1.5 / Math.max(radialProjection, 0.1)))
         basisZ.copy(toCamera)
         matrix.makeBasis(basisX, basisY, basisZ)
         matrix.setPosition(pos)
@@ -2149,15 +2153,17 @@ export class PlanetRenderer {
     }
 
     const childrenCovered = node.children.every(child => child.covered)
-    if (!childrenCovered && !this.chunks.has(node.key)) out.add(node.key)
-
-    for (const child of node.children) {
-      if (!child.covered && !this.chunks.has(child.key)) {
-        out.add(child.key)
-      } else {
-        this.collectLoadKeys(child, out)
+    if (!childrenCovered) {
+      if (!this.chunks.has(node.key)) out.add(node.key)
+      // Finish all four siblings before requesting grandchildren. Otherwise
+      // fine chunks accumulate invisibly behind an incomplete parent patch.
+      for (const child of node.children) {
+        if (!child.covered) out.add(child.key)
       }
+      return
     }
+
+    for (const child of node.children) this.collectLoadKeys(child, out)
   }
 
   private collectRenderKeys(node: QuadtreeNode, out: Set<string>) {
@@ -2242,6 +2248,9 @@ export class PlanetRenderer {
 
   private dispatchPendingChunkBuilds(localCamPos: THREE.Vector3) {
     if (this.pendingKeys.size === 0) return
+    // Applying geometry is frame-budgeted. Do not let workers outrun upload
+    // indefinitely, especially when the browser throttles a background tab.
+    if (this.completedWorkerJobs.length >= terrainWorkerPoolSize() * 2) return
 
     const dispatchStart = performance.now()
     for (;;) {
@@ -2347,6 +2356,9 @@ export class PlanetRenderer {
     const b = this.parseChunkKey(bKey)
     if (!a || !b) return a ? -1 : b ? 1 : aKey.localeCompare(bKey)
 
+    // Complete the planetary safety net before refining local detail.
+    if ((a.lod <= 2) !== (b.lod <= 2)) return a.lod <= 2 ? -1 : 1
+
     const distDelta = this.getChunkBuildPriority(aKey, a, localCamPos) - this.getChunkBuildPriority(bKey, b, localCamPos)
     if (Math.abs(distDelta) > 0.0001) return distDelta
 
@@ -2362,7 +2374,14 @@ export class PlanetRenderer {
     const cached = this.chunkPriorityCache.get(key)
     if (cached !== undefined) return cached
 
-    const priority = this.getLocalChunkDistToCamera(node, localCamPos)
+    // Bounding spheres overlap generously. Distance-to-bound alone is zero
+    // for hundreds of patches, starving the ground under the player while
+    // unrelated coarse patches win the tie. Retain coverage priority, but
+    // distinguish those overlaps by their actual distance to the patch centre.
+    const surfaceRadius = this.getNodeSurfaceRadius(node)
+    const centerDistance = getNodeCenter(node, _nodeDir).multiplyScalar(surfaceRadius).distanceTo(localCamPos)
+    const priority = Math.max(0, centerDistance - this.getNodeBoundingRadius(node, surfaceRadius))
+      + centerDistance * 0.08
     this.chunkPriorityCache.set(key, priority)
     return priority
   }

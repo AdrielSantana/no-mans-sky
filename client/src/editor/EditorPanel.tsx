@@ -1,5 +1,7 @@
+import { useState } from 'react'
 import type { EditorParams } from './editor-defaults'
 import { DEFAULT_PARAMS, RANGES, TYPE_PRESETS } from './editor-defaults'
+import { MINERAL_DAWN, captureVisualLook, type VisualLook } from './visual-presets'
 import './EditorPanel.css'
 
 interface Props {
@@ -8,6 +10,7 @@ interface Props {
 }
 
 export function EditorPanel({ params, onChange }: Props) {
+  const [previousLook, setPreviousLook] = useState<VisualLook | null>(null)
   const set = <K extends keyof EditorParams>(key: K, value: EditorParams[K]) => {
     onChange({ ...params, [key]: value })
   }
@@ -20,6 +23,22 @@ export function EditorPanel({ params, onChange }: Props) {
   return (
     <div className="editor-panel">
       <div className="editor-title">Planet Editor</div>
+
+      <div className="editor-section">
+        <div className="editor-section-title">Art Direction</div>
+        <p className="editor-look-description">Mineral Dawn — sage meadows, copper rock and a pale mineral sky.</p>
+        <div className="editor-btn-row">
+          <button className="editor-btn" disabled={previousLook !== null} onClick={() => {
+            setPreviousLook(captureVisualLook(params))
+            onChange({ ...params, ...MINERAL_DAWN })
+          }}>Apply Mineral Dawn</button>
+          <button className="editor-btn" disabled={previousLook === null} onClick={() => {
+            if (!previousLook) return
+            onChange({ ...params, ...previousLook })
+            setPreviousLook(null)
+          }}>Restore Look</button>
+        </div>
+      </div>
 
       <div className="editor-section">
         <div className="editor-section-title">Planet Type</div>
