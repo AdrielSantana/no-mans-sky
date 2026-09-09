@@ -63,6 +63,7 @@ import {
   updatePlanetPropMaterials,
   type PlanetPropAssets,
   type PlanetPropSettings,
+  type PlanetPropScatterCache,
 } from './planet-props'
 import {
   DEFAULT_FOLIAGE_SETTINGS,
@@ -83,6 +84,7 @@ const DETAILED_MATERIAL_DISTANCE = WORLD_SCALE.localDetailFar
 const LOD_COLLAPSE_HYSTERESIS = 1.35
 const SCATTER_SETTLE_MS = 150
 const PROP_BUILD_DISTANCE_MARGIN = 1.15
+const PROP_SCATTER_BUDGET_MS = 1.5
 const CLOUD_CAP_ANGLE_MARGIN = 1.15
 const CLOUD_CAP_ANGLE_MIN = 0.12
 const CLOUD_CAP_ANGLE_MAX = 0.92
@@ -348,6 +350,10 @@ export class PlanetRenderer {
   private propAssets: PlanetPropAssets | null = getPlanetPropAssets()
   private propAssetLoadRequested = false
   private propLayers = new Map<string, PlanetPropLayer>()
+  private propScatterCache: PlanetPropScatterCache = new Map()
+  private propPrepareJobs = new Map<string, { chunk: TerrainChunk; steps: ReturnType<typeof PlanetPropLayer.preparePlacements> }>()
+  private propCoverage = new Map<string, boolean>()
+  private propPreparationMs = 0
   // Scatter rebuilds are deferred behind a settle timer. Editor sliders fire on
   // pointermove with steps (0.01 / 0.05) well above the rebuild thresholds
   // (0.001), and a rebuild clears and regenerates every grass/prop layer on
@@ -1696,6 +1702,9 @@ export class PlanetRenderer {
       assetsLoaded: this.propAssets !== null,
       assetLoadRequested: this.propAssetLoadRequested,
       layers: this.propLayers.size,
+      preparing: this.propPrepareJobs.size,
+      preparationMs: this.propPreparationMs,
+      scatterCacheEntries: this.propScatterCache.size,
       visibleLayers,
       visibleLayersByLod: Array.from(lodTiers, count => count ?? 0),
       meshes,
@@ -1716,6 +1725,7 @@ export class PlanetRenderer {
   update(camera: THREE.Camera, _dt: number) {
     this.time += _dt
     this.propSunLightSpentMs = 0
+    this.propPreparationMs = 0
     this.consumePendingScatterRebuilds()
     this.generatedChunksLastFrame = 0
     this.chunkGenerationMsLastFrame = 0
@@ -1899,6 +1909,7 @@ export class PlanetRenderer {
     // 2. Queue chunks that are needed for the next stable transition.
     //    updateQuadtree just created children with a default `covered` of
     //    false, so coverage has to be refreshed before collectLoadKeys reads it.
+    this.propCoverage.clear()
     for (const root of this.quadtrees) {
       this.markCovered(root)
     }
@@ -1922,7 +1933,9 @@ export class PlanetRenderer {
       this.processPendingChunksSync(localCamPos)
     }
 
-    // Complete deferred LOD collapses after their parent chunks exist.
+    this.advancePropPreparation()
+
+    // Complete deferred LOD collapses after parent geometry and props exist.
     for (const root of this.quadtrees) {
       this.applyPendingCollapses(root)
     }
@@ -1931,6 +1944,7 @@ export class PlanetRenderer {
     //     A second coverage pass is mandatory here: integrateCompletedChunkBuilds
     //     added chunks and applyPendingCollapses dropped subtrees, so the flags
     //     from the pass above are stale for both reasons.
+    this.propCoverage.clear()
     for (const root of this.quadtrees) {
       this.markCovered(root)
     }
@@ -1995,11 +2009,11 @@ export class PlanetRenderer {
     } else {
       if (node.children) {
         const key = node.key
-        if (this.chunks.has(key)) {
+        if (this.isPropReady(this.chunks.get(key))) {
           this.removeChildrenChunks(node)
           node.children = null
         } else {
-          this.pendingKeys.add(key)
+          if (!this.chunks.has(key)) this.pendingKeys.add(key)
           this.pendingCollapseKeys.add(key)
         }
       }
@@ -2010,7 +2024,7 @@ export class PlanetRenderer {
     if (!node.children) return
 
     const key = node.key
-    if (this.pendingCollapseKeys.has(key) && this.chunks.has(key)) {
+    if (this.pendingCollapseKeys.has(key) && this.isPropReady(this.chunks.get(key))) {
       this.removeChildrenChunks(node)
       node.children = null
       this.pendingCollapseKeys.delete(key)
@@ -2142,6 +2156,8 @@ export class PlanetRenderer {
         if (!this.markCovered(child)) childrenCovered = false
       }
     }
+    const propChildrenCovered = node.children !== null && node.children.every(child => this.propCoverage.get(child.key))
+    this.propCoverage.set(node.key, this.isPropReady(this.chunks.get(node.key)) || propChildrenCovered)
     node.covered = this.chunks.has(node.key) || (node.children !== null && childrenCovered)
     return node.covered
   }
@@ -2172,7 +2188,7 @@ export class PlanetRenderer {
       return
     }
 
-    const childrenCovered = node.children.every(child => child.covered)
+    const childrenCovered = node.children.every(child => child.covered && this.propCoverage.get(child.key))
     if (childrenCovered) {
       for (const child of node.children) this.collectRenderKeys(child, out)
     } else if (this.chunks.has(node.key)) {
@@ -2188,8 +2204,8 @@ export class PlanetRenderer {
       return
     }
 
-    const childrenCovered = node.children.every(child => child.covered)
-    if (!childrenCovered) out.add(node.key)
+    const childrenCovered = node.children.every(child => child.covered && this.propCoverage.get(child.key))
+    if (!childrenCovered || this.pendingCollapseKeys.has(node.key)) out.add(node.key)
     for (const child of node.children) this.collectRetainKeys(child, out)
   }
 
@@ -2489,34 +2505,58 @@ export class PlanetRenderer {
       < this.propSettings.distance * PROP_BUILD_DISTANCE_MARGIN
   }
 
-  private attachPropLayer(chunk: TerrainChunk) {
-    if (!this.shouldHavePropLayer(chunk)) return
-    if (this.propLayers.has(chunk.key)) return
-    const assets = this.propAssets
-    if (!assets) return
-
-    const props = new PlanetPropLayer({
+  private propLayerParams(chunk: TerrainChunk) {
+    return {
       node: chunk.node,
-      surface: chunk.getSurfaceData(),
-      assets,
+      scatterCache: this.propScatterCache,
+      assets: this.propAssets!,
       settings: this.propSettings,
       terrain: this.terrainParams,
       seed: this.noiseProfile.seed,
       seaHeight: this.seaHeight,
       planetType: this.terrainParams.planetType,
-    })
-    if (props.instanceCount <= 0) {
-      props.dispose()
-      return
     }
+  }
 
-    // Approximate lighting only: the horizon raymarch is ~3.4ms per chunk and
-    // this runs inside the 2.5ms chunk integration budget. The layer reports as
-    // stale afterwards, so the budgeted pass in updateChunkPropVisibility does
-    // the real work over the following frames.
-    props.updateSunLight(this.cloudLocalSunDirection, true)
-    chunk.mesh.add(props.group)
-    this.propLayers.set(chunk.key, props)
+  private attachPropLayer(chunk: TerrainChunk) {
+    if (!this.shouldHavePropLayer(chunk) || this.propLayers.has(chunk.key) || this.propPrepareJobs.has(chunk.key)) return
+    this.propPrepareJobs.set(chunk.key, {
+      chunk,
+      steps: PlanetPropLayer.preparePlacements(this.propLayerParams(chunk)),
+    })
+  }
+
+  private advancePropPreparation() {
+    const start = performance.now()
+    // Finish coarse coverage first, then the closest patch. Interrupted jobs
+    // retain their iterator; a frame never restarts an expensive scatter.
+    const jobs = [...this.propPrepareJobs.values()].sort((a, b) =>
+      a.chunk.node.lod - b.chunk.node.lod
+      || this.getLocalChunkDistToCamera(a.chunk.node, this.lastLocalCamPos)
+        - this.getLocalChunkDistToCamera(b.chunk.node, this.lastLocalCamPos))
+    for (const job of jobs) {
+      if (performance.now() - start >= PROP_SCATTER_BUDGET_MS) break
+      if (this.chunks.get(job.chunk.key) !== job.chunk || !this.shouldHavePropLayer(job.chunk)) {
+        this.propPrepareJobs.delete(job.chunk.key)
+        continue
+      }
+      while (performance.now() - start < PROP_SCATTER_BUDGET_MS) {
+        const result = job.steps.next()
+        if (!result.done) continue
+        this.propPrepareJobs.delete(job.chunk.key)
+        const props = new PlanetPropLayer({ ...this.propLayerParams(job.chunk), preparedPlacements: result.value })
+        props.updateSunLight(this.cloudLocalSunDirection, true)
+        job.chunk.mesh.add(props.group)
+        // Empty habitat is ready too; don't resample it every frame.
+        this.propLayers.set(job.chunk.key, props)
+        break
+      }
+    }
+    this.propPreparationMs = performance.now() - start
+  }
+
+  private isPropReady(chunk: TerrainChunk | undefined): boolean {
+    return !!chunk && (!this.shouldHavePropLayer(chunk) || this.propLayers.has(chunk.key))
   }
 
   private rebuildPropLayers() {
@@ -2529,6 +2569,10 @@ export class PlanetRenderer {
   }
 
   private clearPropLayers() {
+    this.propScatterCache.clear()
+    this.propPrepareJobs.clear()
+    this.propSunJobs.clear()
+    this.propSunInFlightChunks.clear()
     for (const [, props] of this.propLayers) {
       props.dispose()
     }
@@ -3260,6 +3304,7 @@ export class PlanetRenderer {
       farGrass.dispose()
       this.farGrassLayers.delete(chunk.key)
     }
+    this.propPrepareJobs.delete(chunk.key)
     const props = this.propLayers.get(chunk.key)
     if (props) {
       props.dispose()
@@ -3425,6 +3470,8 @@ export class PlanetRenderer {
       this.disposeChunk(chunk)
     }
     this.chunks.clear()
+    this.propCoverage.clear()
+    this.propPrepareJobs.clear()
     this.pendingKeys.clear()
     this.pendingWorkerKeys.clear()
     this.completedWorkerJobs.length = 0
@@ -3447,6 +3494,8 @@ export class PlanetRenderer {
   dispose() {
     this.disposed = true
     this.removeAllChunks()
+    this.propScatterCache.clear()
+    this.propPrepareJobs.clear()
     // Not terminate: the pool is shared with every other planet. This only
     // says the results still in the air are no longer wanted.
     releaseTerrainWorkersFor(this)

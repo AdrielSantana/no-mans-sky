@@ -128,7 +128,7 @@ function computeGrassPatchMask(x: number, y: number, z: number, seed: number): n
   return smoothstep(0.44, 0.60, grassPatchNoise(x, y, z, seed))
 }
 
-function computeTerrainNormal(
+export function computeTerrainNormal(
   dir: { x: number; y: number; z: number },
   terrain: PlanetTerrainParams,
   sampleStep: number,

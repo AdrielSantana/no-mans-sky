@@ -1,3 +1,4 @@
+import { computeTerrainNormal } from './terrain-geometry'
 import { sampleSurfaceEcology } from './surface-ecology'
 import * as THREE from 'three'
 import { SUN_SHADOW_CASTER_LAYER } from '../render-layers'
@@ -14,11 +15,11 @@ import winterLod1Url from '../../assets/models/trees/winter_tree/lod_1.glb?url'
 import winterLod2Url from '../../assets/models/trees/winter_tree/lod_2.glb?url'
 import winterLod3Url from '../../assets/models/trees/winter_tree/lod_3.glb?url'
 import {
+  samplePlanetHeightDetailed,
   type PlanetTerrainParams,
 } from '../../../../server/spacetimedb/src/shared/planet-terrain'
 import type { QuadtreeNode } from './quadtree'
-import { nodeKey } from './quadtree'
-import type { TerrainChunkSurfaceData } from './terrain-chunk'
+import { nodeKey, cubeToSphere, getNodeBounds } from './quadtree'
 import { computePropSunLight, type PropSunLightInput } from './prop-sun-light'
 import type { PropSunPlacementInput } from './terrain-worker-types'
 import {
@@ -122,18 +123,20 @@ interface PlanetPropLighting {
 
 interface PlanetPropLayerParams {
   node: QuadtreeNode
-  surface: TerrainChunkSurfaceData
   assets: PlanetPropAssets
   settings: PlanetPropSettings
   terrain: PlanetTerrainParams
   seed: number
   seaHeight: number
   planetType: string
+  scatterCache?: PlanetPropScatterCache
+  preparedPlacements?: PlanetPropPlacement[]
 }
 
 interface PlanetPropPlacement {
   model: PlanetPropModel
   matrices: THREE.Matrix4[]
+  scatterUv: Float64Array
   planetDirs: Float32Array
   surfaceRadii: Float32Array
   terrainNormals: Float32Array
@@ -144,12 +147,17 @@ interface PlanetPropPlacement {
 
 interface PlanetPropPlacementBucket {
   matrices: THREE.Matrix4[]
+  scatterUv: number[]
   planetDirs: number[]
   surfaceRadii: number[]
   terrainNormals: number[]
   microAo: number[]
   macroAo: number[]
 }
+
+// CPU placement data only: GPU buffers and mutable light results belong to layers.
+export type PlanetPropScatterCache = Map<string, PlanetPropPlacement[]>
+export const MAX_PROP_SCATTER_CACHE_ENTRIES = 1024
 
 const MAX_TREE_INSTANCES_PER_CHUNK = 34
 const MAX_ROCK_INSTANCES_PER_CHUNK = 48
@@ -1042,7 +1050,7 @@ export class PlanetPropLayer {
     this.group.userData.chunkKey = nodeKey(params.node.face, params.node.lod, params.node.x, params.node.y)
     this.terrain = params.terrain
 
-    const placements = this.buildPlacements(params)
+    const placements = params.preparedPlacements ?? this.buildPlacements(params)
     this.placements = placements
     let totalInstances = 0
 
@@ -1345,22 +1353,58 @@ export class PlanetPropLayer {
 
 
 
-  private buildPlacements(params: PlanetPropLayerParams): PlanetPropPlacement[] {
-    const treePlacements = this.buildKindPlacements(params, 'tree')
-    const rockPlacements = this.buildKindPlacements(params, 'rock')
-    return [...treePlacements, ...rockPlacements]
+  static *preparePlacements(params: PlanetPropLayerParams): Generator<void, PlanetPropPlacement[]> {
+    const shared = { ...params, scatterCache: params.scatterCache ?? new Map() }
+    const trees = yield* PlanetPropLayer.buildKindPlacementSteps(shared, 'tree')
+    const rocks = yield* PlanetPropLayer.buildKindPlacementSteps(shared, 'rock')
+    return [...trees, ...rocks].map(placement => ({
+      ...placement,
+      sunLight: new Float32Array(placement.matrices.length).fill(1),
+    }))
   }
 
+  private buildPlacements(params: PlanetPropLayerParams): PlanetPropPlacement[] {
+    const shared = { ...params, scatterCache: params.scatterCache ?? new Map() }
+    return [
+      ...this.buildKindPlacements(shared, 'tree'),
+      ...this.buildKindPlacements(shared, 'rock'),
+    ].map(placement => ({ ...placement, sunLight: new Float32Array(placement.matrices.length).fill(1) }))
+  }
+
+  // Synchronous entry point for deterministic regression checks.
   private buildKindPlacements(params: PlanetPropLayerParams, kind: PlanetPropModel['kind']): PlanetPropPlacement[] {
+    const steps = PlanetPropLayer.buildKindPlacementSteps(params, kind)
+    let result = steps.next()
+    while (!result.done) result = steps.next()
+    return result.value
+  }
+
+  private static *buildKindPlacementSteps(params: PlanetPropLayerParams, kind: PlanetPropModel['kind']): Generator<void, PlanetPropPlacement[]> {
+    const cache = params.scatterCache ?? new Map()
+    const key = `${nodeKey(params.node.face, params.node.lod, params.node.x, params.node.y)}:${kind}`
+    const cached = cache.get(key)
+    if (cached) {
+      cache.delete(key)
+      cache.set(key, cached)
+      return cached
+    }
+    const placements = yield* PlanetPropLayer.buildUncachedKindPlacements({ ...params, scatterCache: cache }, kind)
+    cache.set(key, placements)
+    while (cache.size > MAX_PROP_SCATTER_CACHE_ENTRIES) cache.delete(cache.keys().next().value!)
+    return placements
+  }
+
+  private static *buildUncachedKindPlacements(params: PlanetPropLayerParams, kind: PlanetPropModel['kind']): Generator<void, PlanetPropPlacement[]> {
     const models = kind === 'tree' ? params.assets.trees : params.assets.rocks
     const density = kind === 'tree' ? params.settings.treeDensity : params.settings.rockDensity
     if (!params.settings.enabled || params.planetType !== 'rocky' || density <= 0 || models.length === 0) {
       return []
     }
 
-    const { surface, node } = params
-    const gridSize = surface.gridSize
-    const cellCount = (gridSize - 1) * (gridSize - 1)
+    const { node } = params
+    // Scatter density must not change when the terrain mesh resolution changes.
+    const cellCount = 32 * 32
+    const bounds = getNodeBounds(node)
     const maxInstances = kind === 'tree' ? MAX_TREE_INSTANCES_PER_CHUNK : MAX_ROCK_INSTANCES_PER_CHUNK
     const cellDensity = kind === 'tree' ? TREE_CELL_DENSITY : ROCK_CELL_DENSITY
     const targetCount = Math.min(
@@ -1374,6 +1418,7 @@ export class PlanetPropLayer {
     for (const model of models) {
       placementsByModel.set(model, {
         matrices: [],
+        scatterUv: [],
         planetDirs: [],
         surfaceRadii: [],
         terrainNormals: [],
@@ -1397,17 +1442,44 @@ export class PlanetPropLayer {
     const occupied: THREE.Vector3[] = []
 
     let placed = 0
+    // The hierarchy always starts at the cube face, independently of the
+    // renderer's current minimum/maximum visible LOD.
+    // Children inherit the complete parent population before adding detail.
+    // Ownership uses Float64 UVs, never rounded GPU positions or grid indices.
+    if (node.lod > 0) {
+      const parent = { ...node, lod: node.lod - 1, x: Math.floor(node.x / 2), y: Math.floor(node.y / 2), children: null }
+      parent.key = nodeKey(parent.face, parent.lod, parent.x, parent.y)
+      for (const inherited of yield* PlanetPropLayer.buildKindPlacementSteps({ ...params, node: parent }, kind)) {
+        const bucket = placementsByModel.get(inherited.model)!
+        for (let i = 0; i < inherited.matrices.length; i++) {
+          const u = inherited.scatterUv[i * 2], v = inherited.scatterUv[i * 2 + 1]
+          if (u < bounds.u0 || u >= bounds.u1 || v < bounds.v0 || v >= bounds.v1) continue
+          bucket.matrices.push(inherited.matrices[i])
+          bucket.scatterUv.push(u, v)
+          bucket.planetDirs.push(...inherited.planetDirs.subarray(i * 3, i * 3 + 3))
+          bucket.surfaceRadii.push(inherited.surfaceRadii[i])
+          bucket.terrainNormals.push(...inherited.terrainNormals.subarray(i * 3, i * 3 + 3))
+          bucket.microAo.push(inherited.microAo[i])
+          bucket.macroAo.push(inherited.macroAo[i])
+          occupied.push(new THREE.Vector3().setFromMatrixPosition(inherited.matrices[i]))
+          placed++
+        }
+      }
+    }
     for (let attempt = 0; placed < targetCount && attempt < maxAttempts; attempt++) {
-      const ix = Math.floor(rng() * (gridSize - 1))
-      const iy = Math.floor(rng() * (gridSize - 1))
-      const tx = rng()
-      const ty = rng()
-      this.sampleSurface(surface, ix, iy, tx, ty, position, normal)
-      radial.copy(position).normalize()
-
-      const height = this.sampleScalar(surface.heights, gridSize, ix, iy, tx, ty)
-      const terrainMicroAo = this.sampleScalar(surface.microAo, gridSize, ix, iy, tx, ty)
-      const terrainMacroAo = this.sampleScalar(surface.macroAo, gridSize, ix, iy, tx, ty)
+      yield
+      const u = bounds.u0 + rng() * (bounds.u1 - bounds.u0)
+      const v = bounds.v0 + rng() * (bounds.v1 - bounds.v0)
+      const dir = cubeToSphere(node.face, u, v)
+      radial.set(dir.x, dir.y, dir.z)
+      const height = samplePlanetHeightDetailed(dir, params.terrain)
+      position.copy(radial).multiplyScalar(params.terrain.radius * (1 + height * params.terrain.terrainScale))
+      normal.fromArray(computeTerrainNormal(dir, params.terrain, Math.max(0.0008, 4 / params.terrain.radius), 1))
+      // Stable anchors use the analytic surface, not whichever triangles happen
+      // to be visible. Direct lighting and horizon occlusion are still updated
+      // by the dedicated prop lighting worker.
+      const terrainMicroAo = 1
+      const terrainMacroAo = 1
       const slopeDot = normal.dot(radial)
       const heightNorm = smoothstep(-1, 1, height)
       const latitude = Math.abs(radial.y)
@@ -1493,6 +1565,7 @@ export class PlanetPropLayer {
       dummy.scale.copy(scale)
       dummy.updateMatrix()
       modelPlacement.matrices.push(dummy.matrix.clone())
+      modelPlacement.scatterUv.push(u, v)
       modelPlacement.planetDirs.push(radial.x, radial.y, radial.z)
       modelPlacement.surfaceRadii.push(position.length())
       modelPlacement.terrainNormals.push(normal.x, normal.y, normal.z)
@@ -1507,6 +1580,7 @@ export class PlanetPropLayer {
         return {
           model,
           matrices: placement?.matrices ?? [],
+          scatterUv: new Float64Array(placement?.scatterUv ?? []),
           planetDirs: new Float32Array(placement?.planetDirs ?? []),
           surfaceRadii: new Float32Array(placement?.surfaceRadii ?? []),
           terrainNormals: new Float32Array(placement?.terrainNormals ?? []),
@@ -1518,71 +1592,4 @@ export class PlanetPropLayer {
       .filter(placement => placement.matrices.length > 0)
   }
 
-  private sampleSurface(
-    surface: TerrainChunkSurfaceData,
-    ix: number,
-    iy: number,
-    tx: number,
-    ty: number,
-    outPosition: THREE.Vector3,
-    outNormal: THREE.Vector3,
-  ) {
-    const gridSize = surface.gridSize
-    const i00 = iy * gridSize + ix
-    const i10 = i00 + 1
-    const i01 = i00 + gridSize
-    const i11 = i01 + 1
-    // The chunk mesh splits every cell along the i10-i01 diagonal (see
-    // buildTerrainChunkGeometryData). Interpolating all four corners at once
-    // samples the bilinear patch instead, which lifts off those triangles by a
-    // quarter of the cell's twist -- on a coarse chunk that is enough to leave
-    // a prop hanging above the ground it was placed on. Interpolate whichever
-    // triangle the sample actually lands in.
-    if (tx + ty <= 1) {
-      this.baryVec3(surface.positions, i00, i10, i01, tx, ty, outPosition)
-      this.baryVec3(surface.normals, i00, i10, i01, tx, ty, outNormal)
-    } else {
-      this.baryVec3(surface.positions, i11, i01, i10, 1 - tx, 1 - ty, outPosition)
-      this.baryVec3(surface.normals, i11, i01, i10, 1 - tx, 1 - ty, outNormal)
-    }
-    outNormal.normalize()
-  }
-
-  // out = v0 + (v1 - v0) * u + (v2 - v0) * v
-  private baryVec3(
-    values: Float32Array<ArrayBufferLike>,
-    i0: number,
-    i1: number,
-    i2: number,
-    u: number,
-    v: number,
-    out: THREE.Vector3,
-  ) {
-    const w = 1 - u - v
-    const a = i0 * 3
-    const b = i1 * 3
-    const c = i2 * 3
-    out.set(
-      values[a] * w + values[b] * u + values[c] * v,
-      values[a + 1] * w + values[b + 1] * u + values[c + 1] * v,
-      values[a + 2] * w + values[b + 2] * u + values[c + 2] * v,
-    )
-  }
-
-  private sampleScalar(
-    values: Float32Array<ArrayBufferLike>,
-    gridSize: number,
-    ix: number,
-    iy: number,
-    tx: number,
-    ty: number,
-  ): number {
-    const i00 = iy * gridSize + ix
-    const i10 = i00 + 1
-    const i01 = i00 + gridSize
-    const i11 = i01 + 1
-    const h0 = values[i00] * (1 - tx) + values[i10] * tx
-    const h1 = values[i01] * (1 - tx) + values[i11] * tx
-    return h0 * (1 - ty) + h1 * ty
-  }
 }

@@ -39,7 +39,7 @@ await (await import('/scripts/visual-checks.js')).runVisualChecks()
 
 ## Limites conhecidos
 
-Os campos ecológicos são contínuos, mas os candidatos ainda são semeados por chunk. A troca de LOD ainda pode reposicionar props; a separação mínima também não consulta chunks vizinhos. Resolver isso exige migrar as identidades dos candidatos para uma malha global e tratar as transições de densidade.
+Na revisão original, candidatos semeados por chunk ainda mudavam com o LOD. Essa limitação foi corrigida posteriormente com [herança de props e preparação incremental](../prop-lod-review/README.md). A separação mínima entre props novas de chunks vizinhos continua sendo uma limitação.
 
 Não há cavernas, saliências suspensas nem erosão hidráulica simulada. A superfície continua sendo um campo de altura radial. O ruído continental antigo permanece; os testes de continuidade estrita se referem à camada nova.
 

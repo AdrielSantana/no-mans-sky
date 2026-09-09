@@ -34,6 +34,7 @@ export function runLandscapeChecks() {
   const params = { terrain, surface, node: node(4, 510, 610), settings: { enabled: true, treeDensity: 1, rockDensity: 1, density: 1, height: .6 }, assets: { trees: [model], rocks: [{ ...model, kind: 'rock' }] }, seed: 67, seaHeight: -.054, planetType: 'rocky', variant: 'near' }
   let totalTrees = 0, emptyPatches = 0, minDistance = Infinity, maxTrees = 0, totalGrass = 0
   for (let patch = 0; patch < 50; patch++) {
+    params.node = node(4, 420 + patch, 719)
     for (let y = 0; y < 17; y++) for (let x = 0; x < 17; x++) {
       const p = new THREE.Vector3(patch * 140 - 3500 + x * 5, 8000 + y * 5, 23500).normalize()
       p.toArray(surface.normals, (y * 17 + x) * 3)
@@ -55,6 +56,6 @@ export function runLandscapeChecks() {
   check('Woodland contains both stands and clearings', totalTrees > 0 && emptyPatches > 0 && maxTrees <= 34, { totalTrees, emptyPatches, maxTrees, totalGrass })
   check('Trees retain six metre spacing within each chunk', minDistance > 5.9, minDistance)
   surface.heights.fill(-.5)
-  check('No submerged trees, rocks or grass', props.buildKindPlacements(params, 'tree').length === 0 && props.buildKindPlacements(params, 'rock').length === 0 && grass.buildInstances(params).count === 0)
+  check('No submerged trees, rocks or grass', props.buildKindPlacements({ ...params, seaHeight: 5 }, 'tree').length === 0 && props.buildKindPlacements({ ...params, seaHeight: 5 }, 'rock').length === 0 && grass.buildInstances(params).count === 0)
   return { passed: results.length, results: results.filter(r => !r.name.startsWith('Deterministic scatter') && !r.name.startsWith('Grass budget')) }
 }
