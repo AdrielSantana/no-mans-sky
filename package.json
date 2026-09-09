@@ -6,14 +6,21 @@
   "packageManager": "pnpm@10.28.0",
   "scripts": {
     "dev": "pnpm --dir client dev",
+    "dev:cloud": "pnpm --dir client dev:cloud",
     "dev:client": "pnpm --dir client dev",
+    "dev:client:cloud": "pnpm --dir client dev:cloud",
     "dev:server": "pnpm --dir server/spacetimedb dev",
     "build": "pnpm -r build",
     "lint": "pnpm --dir client lint",
     "spacetime:start": "node scripts/spacetime.mjs start --listen-addr 127.0.0.1:3000",
     "spacetime:build": "pnpm --dir server/spacetimedb build",
     "spacetime:generate": "pnpm --dir server/spacetimedb generate",
-    "spacetime:publish:local": "pnpm --dir server/spacetimedb publish:local"
+    "spacetime:publish:local": "pnpm --dir server/spacetimedb publish:local",
+    "spacetime:publish:cloud": "pnpm --dir server/spacetimedb publish:cloud",
+    "spacetime:logs:local": "node scripts/spacetime.mjs logs no-mans-sky --server http://127.0.0.1:3000 --no-config",
+    "spacetime:logs:cloud": "node scripts/spacetime.mjs logs no-mans-sky --server maincloud --no-config",
+    "spacetime:sql:local": "node scripts/spacetime.mjs sql --server http://127.0.0.1:3000 --no-config no-mans-sky",
+    "spacetime:sql:cloud": "node scripts/spacetime.mjs sql --server maincloud --no-config no-mans-sky"
   },
   "devDependencies": {
     "sharp": "^0.35.4"
