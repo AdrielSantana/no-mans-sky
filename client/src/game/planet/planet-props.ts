@@ -473,7 +473,7 @@ function createPropShaderMaterial(source: THREE.Material, kind: PlanetPropModel[
 
         vLight = computePropLight(worldNormal, upDir, sunDir, instanceTerrainSunLight);
 
-        gl_Position = projectionMatrix * viewMatrix * worldPos;
+        gl_Position = projectionMatrix * modelViewMatrix * localPosition;
         #include <logdepthbuf_vertex>
       }
     `,

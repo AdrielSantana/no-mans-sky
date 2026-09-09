@@ -312,7 +312,7 @@ export function createFluffyGrassMaterial(
         vTerrainMicroAo = instanceTerrainMicroAo;
         vTerrainMacroAo = instanceTerrainMacroAo;
         vDistance = distance(cameraPosition, worldPosition.xyz);
-        gl_Position = projectionMatrix * viewMatrix * worldPosition;
+        gl_Position = projectionMatrix * modelViewMatrix * vec4(transformed, 1.0);
         #include <logdepthbuf_vertex>
       }
     `,

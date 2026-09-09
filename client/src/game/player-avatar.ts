@@ -1,13 +1,15 @@
 import * as THREE from "three";
+import { useMeshLocalBoneMatrices, LOCAL_SKINNING_VERTEX, LOCAL_SKIN_NORMAL_VERTEX } from "./local-skinning";
 import { SUN_SHADOW_CASTER_LAYER } from "./render-layers";
+import { planetSunlightFactor } from "./planet-sunlight";
 import { FBXLoader } from "three/examples/jsm/loaders/FBXLoader.js";
 
-import astronautModelUrl from "../assets/models/astronaut/astronaut.fbx?url";
+import astronautModelUrl from "../assets/models/astronaut/explorer.fbx?url";
 // JPEG q92 rather than PNG: the source was a 6.56MB 2048x2048 PNG with
 // colorType 2 (RGB, no alpha), and the shader reads only .rgb and writes
 // alpha 1.0, so there was no packed channel to lose. Same resolution, so
 // VRAM is unchanged -- this is 5.3x off the download.
-import astronautTextureUrl from "../assets/models/astronaut/astronaut.jpg?url";
+import astronautTextureUrl from "../assets/models/astronaut/explorer.webp?url";
 import fallingIdleUrl from "../assets/animations/locomotion_pack/falling_idle.fbx?url";
 import fallingToLandUrl from "../assets/animations/locomotion_pack/falling_to_land.fbx?url";
 import idleUrl from "../assets/animations/locomotion_pack/idle.fbx?url";
@@ -43,6 +45,11 @@ export interface PlayerAvatarPose {
   cloudShadowInfluence: number;
   cloudLocalSurfaceDirection: THREE.Vector3;
   cloudLocalSunDirection: THREE.Vector3;
+  /** Planet radius and the actor's distance from its centre, for the shadow test. */
+  planetRadius: number;
+  actorRadius: number;
+  /** 1 at the ground, 0 outside the atmosphere. Widens the terminator. */
+  atmosphereDepth: number;
   moveX: number;
   moveY: number;
   yawDelta: number;
@@ -54,7 +61,14 @@ export interface PlayerAvatarPose {
 }
 
 const MODEL_HEIGHT_METERS = 1.78;
-const MODEL_FOOT_GROUND_OFFSET = -0.89;
+// Zero because prepareModel already drops the model's lowest point onto the
+// group origin, and the group origin is the ground contact point. This was
+// -0.89 for as long as the hips were pinned to the idle clip's value instead of
+// to the model's bind pose: that pinning lifted the character by roughly half
+// its height, and the offset was cancelling the lift rather than describing the
+// rig. Kept as a named knob because a model whose feet are not its lowest point
+// -- one wearing a long coat, say -- would need it again.
+const MODEL_FOOT_GROUND_OFFSET = 0;
 const CROSS_FADE_SECONDS = 0.32;
 const AIR_TRANSITION_SECONDS = 0.22;
 const LANDING_FADE_SECONDS = 0.16;
@@ -77,6 +91,29 @@ function loadFbx(loader: FBXLoader, url: string): Promise<THREE.Group> {
   return new Promise((resolve, reject) => {
     loader.load(url, resolve, undefined, reject);
   });
+}
+
+/**
+ * Rest position of the hips, read from the model's own bind pose and in the
+ * model's own units.
+ *
+ * The locomotion clips are not allowed to drive the hips -- prepareAnimationClip
+ * flattens that track to a constant -- so something has to supply the constant.
+ * Taking it from the idle clip works only while every asset shares one unit.
+ * The astronaut was authored in centimetres and normalised by a 0.01 scale, so
+ * the clips' hips value of 102 was already in its units. The explorer is
+ * authored in metres and normalised by 0.94, and that same 102 lifted the hips
+ * 95.9 m: the avatar rendered high above the player, out of frame, and the
+ * model looked like it had simply failed to load.
+ */
+function findRootBoneRestPosition(model: THREE.Object3D): THREE.Vector3 | null {
+  const hips: THREE.Bone[] = [];
+  model.traverse((child) => {
+    if (child instanceof THREE.Bone && child.name.endsWith("Hips")) {
+      hips.push(child);
+    }
+  });
+  return hips.length > 0 ? hips[0].position.clone() : null;
 }
 
 function isRootBonePositionTrack(trackName: string): boolean {
@@ -175,6 +212,7 @@ export class PlayerAvatar {
     this.model?.traverse((child) => {
       if (!(child instanceof THREE.Mesh)) return;
       child.geometry.dispose();
+      if (child instanceof THREE.SkinnedMesh) child.skeleton.dispose();
       const materials = Array.isArray(child.material)
         ? child.material
         : [child.material];
@@ -262,11 +300,15 @@ export class PlayerAvatar {
     model.position.y -= scaledBox.min.y;
     model.position.y += MODEL_FOOT_GROUND_OFFSET;
     this.modelBaseY = model.position.y;
+    // Before any clip is prepared, so the clips inherit the model's units
+    // instead of imposing their own.
+    this.rootBoneRestPosition = findRootBoneRestPosition(model);
     this.avatarMaterial = this.createAvatarMaterial(texture);
 
     model.traverse((child) => {
       if (!(child instanceof THREE.Mesh)) return;
       child.frustumCulled = false;
+      if (child instanceof THREE.SkinnedMesh) useMeshLocalBoneMatrices(child);
       // castShadow/receiveShadow are three's own shadow system, which this
       // project does not use -- the sun shadow is a hand-rolled pass keyed on
       // a layer. Left set because they cost nothing and document the intent.
@@ -289,6 +331,7 @@ export class PlayerAvatar {
         uSunColor: { value: new THREE.Color(0xfff2c8) },
         uAtmosphereLightColor: { value: new THREE.Color(0xc4d5df) },
         uAtmosphereInfluence: { value: 1 },
+        uSunlightFactor: { value: 1 },
         uPlanetUp: { value: new THREE.Vector3(0, 1, 0) },
         uCloudMask: { value: DEFAULT_CLOUD_SHADOW_TEXTURE },
         uCloudMaskOffset: { value: 0 },
@@ -307,6 +350,7 @@ export class PlayerAvatar {
         uniform vec3 uSunColor;
         uniform vec3 uAtmosphereLightColor;
         uniform float uAtmosphereInfluence;
+        uniform float uSunlightFactor;
         uniform vec3 uPlanetUp;
 
         varying vec2 vUv;
@@ -316,18 +360,21 @@ export class PlayerAvatar {
           vUv = uv;
           #include <skinbase_vertex>
           #include <beginnormal_vertex>
-          #include <skinnormal_vertex>
+          ${LOCAL_SKIN_NORMAL_VERTEX}
           #include <begin_vertex>
-          #include <skinning_vertex>
+          ${LOCAL_SKINNING_VERTEX}
 
-          vec4 worldPos = modelMatrix * vec4(transformed, 1.0);
           vec3 worldNormal = normalize(mat3(modelMatrix) * objectNormal);
           vec3 upDir = normalize(uPlanetUp);
           vec3 sunDir = normalize(uSunDirection);
 
           float upSun = dot(upDir, sunDir);
           float atmosphereInfluence = clamp(uAtmosphereInfluence, 0.0, 1.0);
-          float day = smoothstep(-0.18, 0.12, upSun);
+          // The planet's own shadow, resolved on the CPU where it can account
+          // for altitude -- see planetSunlightFactor. upSun is still used below
+          // for the atmospheric terms (sunset tint, terminator glow), which are
+          // gated by uAtmosphereInfluence and so vanish on their own in space.
+          float day = uSunlightFactor;
           float direct = max(dot(worldNormal, sunDir), 0.0);
           float wrap = max(dot(worldNormal, sunDir) * 0.5 + 0.5, 0.0);
           float sky = 0.16 + 0.22 * max(dot(worldNormal, upDir) * 0.5 + 0.5, 0.0);
@@ -350,7 +397,8 @@ export class PlayerAvatar {
           vec3 minimumLight = mix(vec3(0.010, 0.014, 0.022), vec3(0.055), day);
           vLight = max(ambient + sunlight + terrain, minimumLight);
 
-          gl_Position = projectionMatrix * viewMatrix * worldPos;
+          // Compose the camera-relative transform on the CPU before float32 skinning.
+          gl_Position = projectionMatrix * modelViewMatrix * vec4(transformed, 1.0);
           #include <logdepthbuf_vertex>
         }
       `,
@@ -495,6 +543,12 @@ export class PlayerAvatar {
       sunDirection.normalize();
     }
     this.avatarMaterial.uniforms.uSunDirection.value.copy(sunDirection);
+    this.avatarMaterial.uniforms.uSunlightFactor.value = planetSunlightFactor(
+      pose.up.dot(sunDirection),
+      pose.planetRadius,
+      pose.actorRadius,
+      pose.atmosphereDepth,
+    );
     this.avatarMaterial.uniforms.uSunColor.value.copy(pose.sunColor);
     this.avatarMaterial.uniforms.uAtmosphereLightColor.value.copy(
       pose.atmosphereLightColor
@@ -564,6 +618,8 @@ export class PlayerAvatar {
       const firstX = values[0] ?? 0;
       const firstY = values[1] ?? 0;
       const firstZ = values[2] ?? 0;
+      // Only reached when the model has no hips bone to read; a rigged model
+      // always sets this in prepareModel.
       if (!this.rootBoneRestPosition && name === "idle") {
         this.rootBoneRestPosition = new THREE.Vector3(firstX, firstY, firstZ);
       }

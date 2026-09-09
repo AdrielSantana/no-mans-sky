@@ -1,5 +1,6 @@
 import * as THREE from 'three'
 import type { GameEngine } from './engine'
+import { encodePose } from './network-pose'
 import { PlayerAvatar } from './player-avatar'
 import {
   createWalkerState,
@@ -10,6 +11,8 @@ import {
 } from '../../../server/spacetimedb/src/shared/player-movement'
 import { normalize, scale, type Vec3Like } from '../../../server/spacetimedb/src/shared/vector'
 import { samplePlanetRadius, type PlanetTerrainParams } from '../../../server/spacetimedb/src/shared/planet-terrain'
+import { clampCameraAbovePlanet } from './planet-camera'
+import { atmosphereDepthAt } from './planet-sunlight'
 
 export interface PlanetWalkerTarget {
   id: string
@@ -25,6 +28,14 @@ export interface PlanetWalkerTarget {
     strength: number
   }
   sampleSurfaceRadius?: (dir: Vec3Like) => number
+  /**
+   * Radius of the ocean surface, or well below the terrain when the planet has
+   * no water. Kept as a radius rather than a flag so "is this spot underwater"
+   * is one comparison against a sampled surface radius, and so a waterless
+   * planet needs no special case: getSeaHeight returns -10 there, which puts
+   * this far under anything the terrain can reach.
+   */
+  seaRadius?: number
 }
 
 const THIRD_PERSON_CAMERA_DISTANCE = 4.8
@@ -78,6 +89,15 @@ export class PlanetWalkerController {
   private avatarCloudLocalSunDirection = new THREE.Vector3(0, 1, 0)
   private inverseTargetQuaternion = new THREE.Quaternion()
   private pendingJumpRequest = false
+  // Last computed eye position, in world space. Cached rather than recomputed
+  // on demand because the only correct value is the one the simulation just
+  // produced -- deriving it again from `state` would silently disagree with
+  // whatever the camera did this frame.
+  private worldEyePosition = new THREE.Vector3()
+  private hasWorldEye = false
+  // While another system owns the player -- boarding a ship, say -- H must not
+  // yank control back mid-transition.
+  private toggleAllowed = true
   private readonly onKeyDown = (event: KeyboardEvent) => this.handleKeyDown(event)
   private readonly onKeyUp = (event: KeyboardEvent) => this.handleKeyUp(event)
   private readonly onMouseMove = (event: MouseEvent) => this.handleMouseMove(event)
@@ -93,7 +113,7 @@ export class PlanetWalkerController {
   }
 
   setTargets(targets: PlanetWalkerTarget[]) {
-    this.targets = targets
+    this.targets = targets.filter(target => target.terrain.planetType !== 'gas')
     if (this.activeTarget) {
       const updatedTarget = targets.find(target => target.id === this.activeTarget?.id)
       if (updatedTarget) {
@@ -172,6 +192,9 @@ export class PlanetWalkerController {
       cloudShadowInfluence,
       cloudLocalSurfaceDirection: this.avatarCloudLocalSurfaceDirection,
       cloudLocalSunDirection: this.avatarCloudLocalSunDirection,
+      planetRadius: this.activeTarget.terrain.radius,
+      actorRadius: localRadius,
+      atmosphereDepth: this.computeAtmosphereDepth(result.up, localRadius),
       moveX: input.moveX,
       moveY: input.moveY,
       yawDelta: input.yawDelta,
@@ -181,7 +204,80 @@ export class PlanetWalkerController {
       speed: tangentVelocity.length(),
       verticalSpeed,
     })
+    this.worldEyePosition.copy(worldEye)
+    this.hasWorldEye = true
     this.applyThirdPersonCamera(worldEye, worldForward, worldRight, worldUp, result.state.pitch, dt)
+  }
+
+  isEnabled(): boolean {
+    return this.enabled
+  }
+
+  getActiveTarget(): PlanetWalkerTarget | null {
+    return this.activeTarget
+  }
+
+  /** World-space eye position from the last simulated step. False before the first. */
+  getEyeWorldPosition(out: THREE.Vector3): boolean {
+    if (!this.hasWorldEye) return false
+    out.copy(this.worldEyePosition)
+    return true
+  }
+
+  /** Planet-local direction of the player, i.e. the "up" under their feet. */
+  getLocalDirection(out: THREE.Vector3): boolean {
+    if (!this.state) return false
+    out.set(this.state.localPosition.x, this.state.localPosition.y, this.state.localPosition.z)
+    if (out.lengthSq() < 1e-8) return false
+    out.normalize()
+    return true
+  }
+
+  getNetworkPose() {
+    if (!this.enabled || !this.activeTarget || !this.state) return null
+    return { pose: encodePose(this.avatar.group, this.activeTarget),
+      speed: Math.hypot(this.state.velocity.x, this.state.velocity.y, this.state.velocity.z),
+      grounded: this.state.grounded }
+  }
+
+  getYaw(): number {
+    return this.state?.yaw ?? 0
+  }
+
+  /** Stops H from toggling walk mode. Used while another system owns the player. */
+  setToggleAllowed(allowed: boolean) {
+    this.toggleAllowed = allowed
+  }
+
+  /** Hands the player to another system without bouncing the camera through OrbitControls. */
+  releaseWithoutRestoringCamera() {
+    if (this.enabled) this.disable(false)
+  }
+
+  /**
+   * Puts the player back on the surface at a chosen spot, which is what
+   * stepping out of a ship is: the walker's own entry point picks a direction
+   * from wherever the camera happens to be, and after a flight that is the
+   * cockpit, not the ground.
+   */
+  enableAt(target: PlanetWalkerTarget, localDirection: THREE.Vector3, yaw: number) {
+    if (target.terrain.planetType === 'gas') return
+    const dir = normalize(toVec3Like(localDirection))
+    const params = defaultWalkerParams(target.terrain)
+    const radius = (target.sampleSurfaceRadius?.(dir) ?? samplePlanetRadius(dir, target.terrain)) + params.eyeHeight
+    this.activeTarget = target
+    this.state = createWalkerState(scale(dir, radius), yaw)
+    const up = toThree(dir).applyQuaternion(target.worldQuaternion).normalize()
+    const forward = new THREE.Vector3(0, 0, 1).applyQuaternion(target.worldQuaternion).projectOnPlane(up)
+    if (forward.lengthSq() < 1e-6) forward.set(1, 0, 0).projectOnPlane(up)
+    this.avatarForward.copy(forward.normalize())
+    this.avatarRight.crossVectors(up, this.avatarForward).normalize()
+    this.enabled = true
+    this.hasWorldEye = false
+    this.avatar.setVisible(true)
+    this.engine.setOrbitControlsEnabled(false)
+    this.engine.setPixelRatioLimit(1)
+    void this.engine.getDomElement().requestPointerLock()
   }
 
   dispose() {
@@ -194,7 +290,7 @@ export class PlanetWalkerController {
   }
 
   private handleKeyDown(event: KeyboardEvent) {
-    if (event.code === 'KeyH' && !event.repeat) {
+    if (event.code === 'KeyH' && !event.repeat && this.toggleAllowed) {
       if (this.enabled) {
         this.disable()
       } else {
@@ -280,17 +376,27 @@ export class PlanetWalkerController {
     return Math.atan2(cameraForward.dot(east), cameraForward.dot(north))
   }
 
-  private disable() {
+  /**
+   * `restoreCamera` is false when another system is taking the player over
+   * rather than the player stepping back out to the orbit view: handing the
+   * camera to OrbitControls mid-handoff snaps it to the orbit target and
+   * undoes the pixel-ratio drop for the two frames before the new owner takes
+   * hold, which reads as a flash.
+   */
+  private disable(restoreCamera = true) {
     this.enabled = false
     this.activeTarget = null
     this.state = null
+    this.hasWorldEye = false
     this.avatar.setVisible(false)
     this.keys.clear()
     this.pendingYaw = 0
     this.pendingPitch = 0
     this.pendingJumpRequest = false
-    this.engine.setOrbitControlsEnabled(true)
-    this.engine.setPixelRatioLimit(2)
+    if (restoreCamera) {
+      this.engine.setOrbitControlsEnabled(true)
+      this.engine.setPixelRatioLimit(2)
+    }
     if (document.pointerLockElement === this.engine.getDomElement()) {
       document.exitPointerLock()
     }
@@ -374,6 +480,21 @@ export class PlanetWalkerController {
     this.avatarForward.crossVectors(this.avatarRight, worldUp).normalize()
   }
 
+  /**
+   * How deep inside the atmosphere shell the actor is: 1 at the ground, 0 above
+   * it. Deliberately *not* scaled by atmosphereDensity, unlike the influence
+   * below. Density belongs in "how much does the air tint the light"; using it
+   * here would also sharpen the terminator on thin-atmosphere planets, which is
+   * arguably right physics but would change ground lighting that is already
+   * tuned. That is a look decision, not a correctness one.
+   */
+  private computeAtmosphereDepth(localUp: Vec3Like, localRadius: number): number {
+    if (!this.activeTarget) return 0
+    const surfaceRadius = this.activeTarget.sampleSurfaceRadius?.(localUp)
+      ?? samplePlanetRadius(localUp, this.activeTarget.terrain)
+    return atmosphereDepthAt(surfaceRadius, this.activeTarget.terrain.radius, localRadius, ATMOSPHERE_RADIUS_SCALE)
+  }
+
   private computeAtmosphereInfluence(localUp: Vec3Like, localRadius: number): number {
     if (!this.activeTarget || this.activeTarget.atmosphereDensity <= 0.001) return 0
 
@@ -405,24 +526,14 @@ export class PlanetWalkerController {
   }
 
   private resolveCameraCollision(_lookTarget: THREE.Vector3, desiredCameraPosition: THREE.Vector3): THREE.Vector3 {
-    if (!this.activeTarget) return desiredCameraPosition
-
-    const inverseTargetRotation = this.activeTarget.worldQuaternion.clone().invert()
-    const localCamera = desiredCameraPosition
-      .clone()
-      .sub(this.activeTarget.worldPosition)
-      .applyQuaternion(inverseTargetRotation)
-    if (localCamera.lengthSq() <= 1e-8) return desiredCameraPosition
-
-    const localDir = localCamera.clone().normalize()
-    const surfaceRadius = this.activeTarget.sampleSurfaceRadius?.(toVec3Like(localDir))
-      ?? samplePlanetRadius(toVec3Like(localDir), this.activeTarget.terrain)
-    const minCameraRadius = surfaceRadius + CAMERA_COLLISION_RADIUS + CAMERA_SURFACE_CLEARANCE
-    if (localCamera.length() >= minCameraRadius) return desiredCameraPosition
-
-    const correctedLocalCamera = localDir.multiplyScalar(minCameraRadius)
-    return correctedLocalCamera
-      .applyQuaternion(this.activeTarget.worldQuaternion)
-      .add(this.activeTarget.worldPosition)
+    const target = this.activeTarget
+    if (!target) return desiredCameraPosition
+    return clampCameraAbovePlanet(
+      desiredCameraPosition,
+      target.worldPosition,
+      target.worldQuaternion,
+      dir => target.sampleSurfaceRadius?.(dir) ?? samplePlanetRadius(dir, target.terrain),
+      CAMERA_COLLISION_RADIUS + CAMERA_SURFACE_CLEARANCE,
+    )
   }
 }

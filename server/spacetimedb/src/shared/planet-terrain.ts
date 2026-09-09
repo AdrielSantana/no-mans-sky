@@ -216,6 +216,8 @@ export function samplePlanetHeight(
   // detailed sample, duplicated.
   warpedDir?: Vec3Like,
 ): number {
+  // Gas is a weather shell, not a displaced solid terrain.
+  if (params.planetType === 'gas') return 0
   const lacunarity = params.lacunarity ?? 2
   const gain = params.gain ?? 0.5
   const baseDir = normalize(dir)
@@ -355,19 +357,24 @@ export function samplePlanetHeight(
     detail = (fineNoise * 0.026 + badlands * 0.032) * detailStrength * (1 - thermalStrength * 0.35) * detailRegion
   }
 
-  if (params.planetType === 'gas') {
-    return terrainFbm({ x: baseDir.x * frequency, y: baseDir.y * frequency, z: baseDir.z * frequency }, params.seed, Math.min(octaves, 4), lacunarity, gain) * 0.05
-  }
-
   if (params.planetType === 'ice') {
-    return continentHeight * 0.72
-      + lowlandUndulation * 0.55
-      + hills * 0.42
-      + mountains * 0.58
-      - hydraulicCut * 0.38
-      - thermalTalus * 0.45
-      + detail * 0.42
-      + smoothstep(0.50, 0.95, Math.abs(baseDir.y)) * 0.045
+    // Glacial troughs and fractured shelves, in spherical metre coordinates.
+    // Continuous across cube faces and independent of terrain mesh resolution.
+    const x = baseDir.x * params.radius, y = baseDir.y * params.radius, z = baseDir.z * params.radius
+    // Simplex gradients and a vector warp avoid the axis-aligned shelves of
+    // thresholded Cartesian value noise. Broad valleys survive orbital LOD.
+    const seed = params.seed + 832
+    const wx = snoise4(x / 2600, y / 2600, z / 2600, seed) * 650
+    const wy = snoise4(x / 2600, y / 2600, z / 2600, seed + 17) * 650
+    const wz = snoise4(x / 2600, y / 2600, z / 2600, seed + 31) * 650
+    const shelf = snoise4((x + wx) / 1900, (y + wy) / 1900, (z + wz) / 1900, seed + 7)
+    const flow = snoise4((x + wx) / 1100, (y + wy) / 1100, (z + wz) / 1100, seed + 21)
+    const trough = 1 - smoothstep(0.04, 0.42, Math.abs(flow))
+    const glacialMeters = shelf * 42 - trough * 48
+    return continentHeight * 0.48 + lowlandUndulation * 0.35
+      + hills * 0.28 + mountains * 1.12 - hydraulicCut * 0.32
+      - thermalTalus * 0.32 + detail * 0.2
+      + glacialMeters * Math.min(1, params.radius / 12000) / Math.max(params.terrainScale * params.radius, 1)
   }
 
   // Metre-scale geology between continental relief and walking micro-detail.
@@ -487,6 +494,7 @@ export function samplePlanetHeightDetailed(
   params: PlanetTerrainParams,
   microAmount = 1,
 ): number {
+  if (params.planetType === 'gas') return 0
   // Derive the warp once and hand it to both samplers.
   const lacunarity = params.lacunarity ?? 2
   const gain = params.gain ?? 0.5

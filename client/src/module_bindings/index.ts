@@ -34,14 +34,19 @@ import {
 } from "spacetimedb";
 
 // Import all reducer arg schemas
+import RefreshCatalogueReducer from "./refresh_catalogue_reducer";
 import SetNameReducer from "./set_name_reducer";
+import SyncStateReducer from "./sync_state_reducer";
 
 // Import all procedure arg schemas
 
 // Import all table schema definitions
 import CelestialBodyRow from "./celestial_body_table";
+import ExplorerStateRow from "./explorer_state_table";
+import PlanetAppearanceRow from "./planet_appearance_table";
 import PlanetParamsRow from "./planet_params_table";
 import PlayerRow from "./player_table";
+import WorldClockRow from "./world_clock_table";
 
 /** Type-only namespace exports for generated type groups. */
 
@@ -58,6 +63,28 @@ const tablesSchema = __schema({
       { name: 'celestial_body_id_key', constraint: 'unique', columns: ['id'] },
     ],
   }, CelestialBodyRow),
+  explorerState: __table({
+    name: 'explorer_state',
+    indexes: [
+      { accessor: 'identity', name: 'explorer_state_identity_idx_btree', algorithm: 'btree', columns: [
+        'identity',
+      ] },
+    ],
+    constraints: [
+      { name: 'explorer_state_identity_key', constraint: 'unique', columns: ['identity'] },
+    ],
+  }, ExplorerStateRow),
+  planetAppearance: __table({
+    name: 'planet_appearance',
+    indexes: [
+      { accessor: 'bodyId', name: 'planet_appearance_body_id_idx_btree', algorithm: 'btree', columns: [
+        'bodyId',
+      ] },
+    ],
+    constraints: [
+      { name: 'planet_appearance_body_id_key', constraint: 'unique', columns: ['bodyId'] },
+    ],
+  }, PlanetAppearanceRow),
   planetParams: __table({
     name: 'planet_params',
     indexes: [
@@ -84,11 +111,24 @@ const tablesSchema = __schema({
       { name: 'player_identity_key', constraint: 'unique', columns: ['identity'] },
     ],
   }, PlayerRow),
+  worldClock: __table({
+    name: 'world_clock',
+    indexes: [
+      { accessor: 'id', name: 'world_clock_id_idx_btree', algorithm: 'btree', columns: [
+        'id',
+      ] },
+    ],
+    constraints: [
+      { name: 'world_clock_id_key', constraint: 'unique', columns: ['id'] },
+    ],
+  }, WorldClockRow),
 });
 
 /** The schema information for all reducers in this module. This is defined the same way as the reducers would have been defined in the server, except the body of the reducer is omitted in code generation. */
 const reducersSchema = __reducers(
+  __reducerSchema("refresh_catalogue", RefreshCatalogueReducer),
   __reducerSchema("set_name", SetNameReducer),
+  __reducerSchema("sync_state", SyncStateReducer),
 );
 
 /** The schema information for all procedures in this module. This is defined the same way as the procedures would have been defined in the server. */

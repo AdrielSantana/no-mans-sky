@@ -29,11 +29,27 @@ export const CelestialBody = __t.object("CelestialBody", {
 });
 export type CelestialBody = __Infer<typeof CelestialBody>;
 
-export const OrbitTick = __t.object("OrbitTick", {
-  scheduledId: __t.u64(),
-  scheduledAt: __t.scheduleAt(),
+export const ExplorerState = __t.object("ExplorerState", {
+  identity: __t.identity(),
+  mode: __t.string(),
+  get playerPose() {
+    return Pose;
+  },
+  get shipPose() {
+    return Pose;
+  },
+  speed: __t.f32(),
+  grounded: __t.bool(),
+  updatedAt: __t.timestamp(),
 });
-export type OrbitTick = __Infer<typeof OrbitTick>;
+export type ExplorerState = __Infer<typeof ExplorerState>;
+
+export const PlanetAppearance = __t.object("PlanetAppearance", {
+  bodyId: __t.u64(),
+  revision: __t.u32(),
+  settingsJson: __t.string(),
+});
+export type PlanetAppearance = __Infer<typeof PlanetAppearance>;
 
 export const PlanetParams = __t.object("PlanetParams", {
   id: __t.u64(),
@@ -57,3 +73,22 @@ export const Player = __t.object("Player", {
   lastSeen: __t.timestamp(),
 });
 export type Player = __Infer<typeof Player>;
+
+export const Pose = __t.object("Pose", {
+  frame: __t.string(),
+  x: __t.f64(),
+  y: __t.f64(),
+  z: __t.f64(),
+  qx: __t.f64(),
+  qy: __t.f64(),
+  qz: __t.f64(),
+  qw: __t.f64(),
+});
+export type Pose = __Infer<typeof Pose>;
+
+export const WorldClock = __t.object("WorldClock", {
+  id: __t.u32(),
+  epoch: __t.timestamp(),
+});
+export type WorldClock = __Infer<typeof WorldClock>;
+

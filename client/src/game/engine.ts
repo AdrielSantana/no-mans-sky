@@ -788,7 +788,7 @@ export class GameEngine {
       this.elapsedTime += dt
       this.renderer.info.reset()
       this.gpuProfiler.beginFrame()
-      this.controls.update()
+      if (this.controls.enabled) this.controls.update()
       onFrame?.(dt)
       this.underwaterPass?.setTime(this.elapsedTime)
       // Before the composer, and centred on the camera rather than on any one

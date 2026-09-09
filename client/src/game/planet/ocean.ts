@@ -245,7 +245,7 @@ export function createOceanMaterial(params: OceanMaterialParams): THREE.ShaderMa
     vWorldPos = worldPos.xyz;
     vRadialNormal = normalize((modelMatrix * vec4(sphereDir, 0.0)).xyz);
 
-    gl_Position = projectionMatrix * viewMatrix * worldPos;
+    gl_Position = projectionMatrix * modelViewMatrix * vec4(displaced, 1.0);
     #include <logdepthbuf_vertex>
   }
   `
@@ -431,7 +431,7 @@ export function createOceanMaterial(params: OceanMaterialParams): THREE.ShaderMa
     float day = smoothstep(-0.28, 0.52, sunFacing);
     float reflectionLight = smoothstep(-0.10, 0.58, sunFacing);
     float direct = max(dot(normal, lightDir), 0.0);
-    float viewFacing = max(dot(normal, viewDir), 0.0);
+    float viewFacing = clamp(dot(normal, viewDir), 0.0, 1.0);
     float fresnel = pow(1.0 - viewFacing, 4.6);
     float litFresnel = fresnel * (0.035 + reflectionLight * 0.965);
 
@@ -460,7 +460,7 @@ export function createOceanMaterial(params: OceanMaterialParams): THREE.ShaderMa
     waterColor = mix(waterColor, suspendedColor, turbidity * (1.0 - abyss * 0.76) * (0.10 + shoal * 0.18));
     waterColor = oceanDesaturate(waterColor, shoal * 0.16 + turbidity * 0.10);
 
-    float horizonReflection = pow(1.0 - abs(dot(viewDir, radial)), 2.2);
+    float horizonReflection = pow(clamp(1.0 - abs(dot(viewDir, radial)), 0.0, 1.0), 2.2);
     float reflectionAmount = litFresnel * (0.30 + day * 0.18 + horizonReflection * 0.42) * uOceanReflectionStrength;
     vec3 skyReflection = mix(
       uAtmosphereColor * 0.30 + deepColor * 0.38,

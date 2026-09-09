@@ -3,10 +3,10 @@
   "version": "1.0.0",
   "description": "",
   "scripts": {
-    "build": "spacetime build",
-    "dev": "spacetime dev no-mans-sky --project-path .. --module-bindings-path ../client/src/module_bindings --client-lang typescript --server local --server-only --yes",
-    "generate": "spacetime generate no-mans-sky --lang typescript --out-dir ../../client/src/module_bindings --yes",
-    "publish:local": "spacetime publish no-mans-sky --server local --clear-database --yes"
+    "build": "node ../../scripts/spacetime.mjs build",
+    "dev": "cd .. && node ../scripts/spacetime.mjs dev no-mans-sky --server http://127.0.0.1:3000 --server-only --delete-data=never --yes",
+    "generate": "node ../../scripts/spacetime.mjs generate --module-path . --lang typescript --out-dir ../../client/src/module_bindings --no-config --yes",
+    "publish:local": "node ../../scripts/spacetime.mjs publish no-mans-sky --module-path . --server http://127.0.0.1:3000 --delete-data=never --no-config --yes && node ../../scripts/spacetime.mjs call no-mans-sky refresh_catalogue --server http://127.0.0.1:3000 --no-config --yes"
   },
   "keywords": [],
   "author": "",

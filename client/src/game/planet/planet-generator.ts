@@ -1,3 +1,4 @@
+import { PLANET_TYPE_BIOMES_GLSL } from './planet-type-shaders'
 import * as THREE from 'three'
 import { SUN_SHADOW_PARS_GLSL, getSunShadowUniforms } from './sun-shadow'
 import grassTextureUrl from '../../assets/terrain/grass_soil_tile.webp'
@@ -362,7 +363,7 @@ float realisticTerrainHeight(vec3 sphereDir) {
 
   float thermalTalus = max(0.0, mountains - 0.10) * uThermalStrength * 0.23;
   float fineNoise = terrainFbm(warped * uFrequency * 10.5 + vec3(41.0, -11.0, 29.0), uSeed + 251.7, min(octaveCount, 5), 2.28, 0.42);
-  float badlands = pow(1.0 - abs(fineNoise), 4.2)
+  float badlands = pow(1.0 - clamp(abs(fineNoise), 0.0, 1.0), 4.2)
     * smoothstep(0.22, 0.76, continentMask)
     * (1.0 - smoothstep(0.05, 0.22, mountains));
   float detail = (fineNoise * 0.026 + badlands * 0.032) * uDetailStrength * (1.0 - uThermalStrength * 0.35);
@@ -441,7 +442,7 @@ vec3 applyPlanetLighting(vec3 albedo, vec3 normal, vec3 radialNormal, vec3 world
   softDirect *= mix(0.82, 1.0, reliefOcclusion);
   softDirect *= castShadow;
   float ambient = mix(0.055, 0.22, day) * reliefOcclusion;
-  float rim = pow(1.0 - max(dot(n, viewDir), 0.0), 2.3) * smoothstep(-0.05, 0.50, nDotL);
+  float rim = pow(1.0 - clamp(dot(n, viewDir), 0.0, 1.0), 2.3) * smoothstep(-0.05, 0.50, nDotL);
   float highland = smoothstep(0.60, 0.90, heightNorm) * 0.055;
   float cavity = 1.0 - slope * mix(0.12, 0.05, day);
   const float atmosphereLightInfluence = 0.85;
@@ -786,6 +787,7 @@ export function createPlanetMaterial(params: {
   varying vec3 vNormal;
   varying vec3 vRadialNormal;
   varying vec3 vWorldPos;
+  varying vec3 vViewPosition;
   varying float vHeight;
   varying vec3 vSphereDir;
   varying float vDetail;
@@ -827,7 +829,9 @@ export function createPlanetMaterial(params: {
     if (dot(vNormal, vRadialNormal) < 0.0) vNormal = -vNormal;
 
     vWorldPos = worldPos.xyz;
-    gl_Position = projectionMatrix * viewMatrix * worldPos;
+    vec4 viewPosition = modelViewMatrix * vec4(position, 1.0);
+    vViewPosition = viewPosition.xyz;
+    gl_Position = projectionMatrix * viewPosition;
     #include <logdepthbuf_vertex>
   }
   `
@@ -857,6 +861,7 @@ export function createPlanetMaterial(params: {
   varying vec3 vNormal;
   varying vec3 vRadialNormal;
   varying vec3 vWorldPos;
+  varying vec3 vViewPosition;
   varying float vHeight;
   varying vec3 vSphereDir;
   varying float vDetail;
@@ -892,22 +897,7 @@ export function createPlanetMaterial(params: {
     return color;
   }
 
-  vec3 iceBiome(float heightNorm, float latitude, float moisture, float slope) {
-    vec3 blueIce = vec3(0.46, 0.68, 0.80);
-    vec3 snow = vec3(0.86, 0.91, 0.95);
-    vec3 rock = vec3(0.32, 0.36, 0.38);
-    vec3 color = mix(blueIce, snow, smoothstep(0.28, 0.8, heightNorm + latitude * 0.25 + moisture * 0.1));
-    return mix(color, rock, smoothstep(0.45, 0.95, slope));
-  }
-
-  vec3 gasBands(float latitude, float bands, float turbulence) {
-    vec3 bandA = mix(uColorA, vec3(0.95, 0.74, 0.48), 0.35);
-    vec3 bandB = mix(uColorB, vec3(0.60, 0.34, 0.18), 0.35);
-    vec3 storms = vec3(1.0, 0.88, 0.62);
-    vec3 color = mix(bandA, bandB, bands);
-    color = mix(color, storms, smoothstep(0.62, 0.95, turbulence) * (1.0 - latitude * 0.45));
-    return color;
-  }
+  ${PLANET_TYPE_BIOMES_GLSL}
 
   vec3 materialAlbedoDetail(vec3 color, float heightNorm, float latitude, float moisture, float slope, float coast) {
     if (uPlanetKind > 0.5 && uPlanetKind < 1.5) return color;
@@ -961,7 +951,11 @@ export function createPlanetMaterial(params: {
     vec2 gradientRipple = vec2(dFdx(ripple), dFdy(ripple)) * coast * 0.009 * fineFade * rippleFade;
     vec2 heightGradient = gradientFine + gradientStone + gradientRipple;
     float dhdx = heightGradient.x, dhdy = heightGradient.y;
-    vec3 dpdx = dFdx(vWorldPos), dpdy = dFdy(vWorldPos);
+    // Differentiate small camera-relative coordinates, then rotate the vectors
+    // back to world space. Derivatives of orbital positions quantize centimetres
+    // and make otherwise stationary grain change its lighting every frame.
+    vec3 dpdx = (vec4(dFdx(vViewPosition), 0.0) * viewMatrix).xyz;
+    vec3 dpdy = (vec4(dFdy(vViewPosition), 0.0) * viewMatrix).xyz;
     vec3 r1 = cross(dpdy, baseNormal), r2 = cross(baseNormal, dpdx);
     float determinant = dot(dpdx, r1);
     vec3 gradient = sign(determinant) * (dhdx * r1 + dhdy * r2);
@@ -1181,7 +1175,7 @@ export function createPlanetFarMaterial(params: {
     vRadialNormal = normalize((modelMatrix * vec4(sphereDir, 0.0)).xyz);
     vNormal = normalize((modelMatrix * vec4(normal, 0.0)).xyz);
     if (dot(vNormal, vRadialNormal) < 0.0) vNormal = -vNormal;
-    gl_Position = projectionMatrix * viewMatrix * worldPos;
+    gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
     #include <logdepthbuf_vertex>
   }
   `
@@ -1240,22 +1234,7 @@ export function createPlanetFarMaterial(params: {
     return color;
   }
 
-  vec3 iceBiome(float heightNorm, float latitude, float moisture, float slope) {
-    vec3 blueIce = vec3(0.46, 0.68, 0.80);
-    vec3 snow = vec3(0.86, 0.91, 0.95);
-    vec3 rock = vec3(0.32, 0.36, 0.38);
-    vec3 color = mix(blueIce, snow, smoothstep(0.28, 0.8, heightNorm + latitude * 0.25 + moisture * 0.1));
-    return mix(color, rock, smoothstep(0.45, 0.95, slope));
-  }
-
-  vec3 gasBands(float latitude, float bands, float turbulence) {
-    vec3 bandA = mix(uColorA, vec3(0.95, 0.74, 0.48), 0.35);
-    vec3 bandB = mix(uColorB, vec3(0.60, 0.34, 0.18), 0.35);
-    vec3 storms = vec3(1.0, 0.88, 0.62);
-    vec3 color = mix(bandA, bandB, bands);
-    color = mix(color, storms, smoothstep(0.62, 0.95, turbulence) * (1.0 - latitude * 0.45));
-    return color;
-  }
+  ${PLANET_TYPE_BIOMES_GLSL}
 
   vec3 applyOceanFloor(vec3 color, float height, float slope) {
     if (uPlanetKind > 0.5 && uPlanetKind < 1.5 || uSeaHeight < -1.0) return color;
@@ -1453,7 +1432,7 @@ export function createPlanetFallbackMaterial(params: {
     if (dot(vNormal, vRadialNormal) < 0.0) vNormal = -vNormal;
     vec4 worldPos = modelMatrix * vec4(position, 1.0);
     vWorldPos = worldPos.xyz;
-    gl_Position = projectionMatrix * viewMatrix * worldPos;
+    gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
     #include <logdepthbuf_vertex>
   }
   `
@@ -1510,22 +1489,7 @@ export function createPlanetFallbackMaterial(params: {
     return color;
   }
 
-  vec3 iceBiome(float heightNorm, float latitude, float moisture, float slope) {
-    vec3 blueIce = vec3(0.46, 0.68, 0.80);
-    vec3 snow = vec3(0.86, 0.91, 0.95);
-    vec3 rock = vec3(0.32, 0.36, 0.38);
-    vec3 color = mix(blueIce, snow, smoothstep(0.28, 0.8, heightNorm + latitude * 0.25 + moisture * 0.1));
-    return mix(color, rock, smoothstep(0.45, 0.95, slope));
-  }
-
-  vec3 gasBands(float latitude, float bands, float turbulence) {
-    vec3 bandA = mix(uColorA, vec3(0.95, 0.74, 0.48), 0.35);
-    vec3 bandB = mix(uColorB, vec3(0.60, 0.34, 0.18), 0.35);
-    vec3 storms = vec3(1.0, 0.88, 0.62);
-    vec3 color = mix(bandA, bandB, bands);
-    color = mix(color, storms, smoothstep(0.62, 0.95, turbulence) * (1.0 - latitude * 0.45));
-    return color;
-  }
+  ${PLANET_TYPE_BIOMES_GLSL}
 
   vec3 applyOceanFloor(vec3 color, float height, float slope) {
     if (uPlanetKind > 0.5 && uPlanetKind < 1.5 || uSeaHeight < -1.0) return color;
@@ -1670,7 +1634,7 @@ export function createAtmosphereMaterial(params: {
     vNormal = normalize((modelMatrix * vec4(normal, 0.0)).xyz);
     vec4 worldPos = modelMatrix * vec4(position, 1.0);
     vWorldPos = worldPos.xyz;
-    gl_Position = projectionMatrix * viewMatrix * worldPos;
+    gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
     #include <logdepthbuf_vertex>
   }
   `
@@ -1708,7 +1672,7 @@ export function createAtmosphereMaterial(params: {
     float inside = 1.0 - smoothstep(uAtmosphereRadius * 0.995, uAtmosphereRadius * 1.01, cameraRadius);
 
     vec3 toCamera = normalize(cameraPosition - vWorldPos);
-    float nDotV = max(dot(toCamera, shellNormal), 0.0);
+    float nDotV = clamp(dot(toCamera, shellNormal), 0.0, 1.0);
     float rim = pow(1.0 - nDotV, 2.55);
     float outerFade = smoothstep(0.03, 0.78, rim) * (1.0 - smoothstep(0.90, 1.0, rim) * 0.22);
     float shellThicknessRatio = clamp((uAtmosphereRadius - uPlanetRadius) / max(uAtmosphereRadius, 0.001), 0.001, 0.25);
@@ -1863,7 +1827,7 @@ export function createCloudMaterial(params: {
     vNormal = normalize((modelMatrix * vec4(normal, 0.0)).xyz);
     vec4 worldPos = modelMatrix * vec4(position, 1.0);
     vWorldPos = worldPos.xyz;
-    gl_Position = projectionMatrix * viewMatrix * worldPos;
+    gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
     #include <logdepthbuf_vertex>
   }
   `
@@ -1899,7 +1863,7 @@ export function createCloudMaterial(params: {
     float nDotL = dot(dir, localSunDir);
     float day = smoothstep(-0.18, 0.60, nDotL);
     float direct = clamp(nDotL, 0.0, 1.0);
-    float rim = pow(1.0 - max(dot(toCamera, shellNormal), 0.0), 2.1);
+    float rim = pow(1.0 - clamp(dot(toCamera, shellNormal), 0.0, 1.0), 2.1);
 
     float opacity = clamp(uOpacity, 0.0, 1.0);
     float macroMask = sharedCloudMask(dir);
@@ -1926,7 +1890,7 @@ export function createCloudMaterial(params: {
     float terminator = smoothstep(-0.34, 0.16, nDotL) * (1.0 - smoothstep(0.08, 0.56, nDotL));
     float lowSun = pow(1.0 - clamp(nDotL * 0.90 + 0.10, 0.0, 1.0), 2.0) * smoothstep(-0.26, 0.46, nDotL);
     float forwardGlow = pow(max(dot(toCamera, sunDir), 0.0), 7.5);
-    float rimLight = pow(1.0 - max(dot(toCamera, shellNormal), 0.0), 3.0);
+    float rimLight = pow(1.0 - clamp(dot(toCamera, shellNormal), 0.0, 1.0), 3.0);
 
     vec3 coolWhite = mix(uCloudColor, uAtmosphereColor, 0.10) * 0.92;
     vec3 sunWhite = mix(vec3(0.82), uSunColor, 0.24);
@@ -2035,9 +1999,10 @@ export function createCloudBillboardMaterial(params: {
     vAlpha = instanceAlpha;
     vSeed = instanceSeed;
 
-    vec4 worldPos = modelMatrix * instanceMatrix * vec4(position, 1.0);
+    vec4 localPos = instanceMatrix * vec4(position, 1.0);
+    vec4 worldPos = modelMatrix * localPos;
     vWorldPos = worldPos.xyz;
-    gl_Position = projectionMatrix * viewMatrix * worldPos;
+    gl_Position = projectionMatrix * modelViewMatrix * localPos;
     #include <logdepthbuf_vertex>
   }
   `

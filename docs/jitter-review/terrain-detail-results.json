@@ -1,0 +1,46 @@
+{
+  "before": {
+    "changedPixels": 685,
+    "meanChannelError": 0.16022237141927084
+  },
+  "after": {
+    "changedPixels": 0,
+    "meanChannelError": 0.0004119873046875
+  },
+  "orbits": {
+    "planets": [
+      {
+        "name": "Mineral Dawn",
+        "x": 259996,
+        "z": 1460
+      },
+      {
+        "name": "Véu de Gelo",
+        "x": 177896,
+        "z": 312833
+      },
+      {
+        "name": "Íris",
+        "x": -269126,
+        "z": 409395
+      },
+      {
+        "name": "Âmbar",
+        "x": 92973,
+        "z": -142295
+      },
+      {
+        "name": "Cinza Serena",
+        "x": -45108,
+        "z": -89177
+      },
+      {
+        "name": "Aurora",
+        "x": -639483,
+        "z": 25693
+      }
+    ],
+    "shaderErrors": 0,
+    "connected": true
+  }
+}

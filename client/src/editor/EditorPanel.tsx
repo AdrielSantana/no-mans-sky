@@ -1,7 +1,8 @@
 import { useState } from 'react'
 import type { EditorParams } from './editor-defaults'
-import { DEFAULT_PARAMS, RANGES, TYPE_PRESETS } from './editor-defaults'
+import { DEFAULT_PARAMS, RANGES } from './editor-defaults'
 import { MINERAL_DAWN, captureVisualLook, type VisualLook } from './visual-presets'
+import { MINERAL_WORLD, ICE_WORLD, GAS_WORLD } from '../../../server/spacetimedb/src/shared/world-catalog'
 import './EditorPanel.css'
 
 interface Props {
@@ -16,8 +17,8 @@ export function EditorPanel({ params, onChange }: Props) {
   }
 
   const setPlanetType = (planetType: string) => {
-    const preset = TYPE_PRESETS[planetType]
-    onChange({ ...params, planetType, ...preset })
+    const preset = planetType === 'ice' ? ICE_WORLD : planetType === 'gas' ? GAS_WORLD : MINERAL_WORLD
+    onChange({ ...params, ...preset, seed: params.seed, planetRadius: params.planetRadius, planetRotationSpeed: params.planetRotationSpeed })
   }
 
   return (

@@ -766,7 +766,7 @@ export function createFoliageMaterial(
         vec3 albedo = mix(uLeafColorA, uLeafColorB, clamp(canopyT * 0.62 + drift + 0.26, 0.0, 1.0));
         vAlbedo = albedo;
 
-        gl_Position = projectionMatrix * viewMatrix * worldPos;
+        gl_Position = projectionMatrix * modelViewMatrix * localPosition;
         #include <logdepthbuf_vertex>
       }
     `,

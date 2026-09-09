@@ -1871,10 +1871,10 @@ export class PlanetRenderer {
       this.group.getWorldPosition(this.atmosphereMaterial.uniforms.uPlanetCenter.value)
     }
     // Decide: show fallback sphere or quadtree terrain
-    const useTerrain = surfaceDist < this.lodDistances[1]
+    const useTerrain = this.terrainParams.planetType !== 'gas' && surfaceDist < Math.min(this.lodDistances[1], this.planetRadius * 1.5)
 
     if (!useTerrain) {
-      this.updateOceanRenderState(false)
+      this.updateOceanRenderState()
       this.fallbackSphere.visible = true
       this.fallbackSphere.material = this.debugSimpleTerrain || !this.debugFallbackTerrainShader
         ? this.simpleTerrainMaterial
@@ -1955,7 +1955,7 @@ export class PlanetRenderer {
       this.collectRetainKeys(root, retainKeys)
     }
     const terrainReady = this.hasQuadtreeTerrainCoverage()
-    this.updateOceanRenderState(terrainReady)
+    this.updateOceanRenderState()
     this.fallbackSphere.visible = !terrainReady
 
     // 5. Remove chunks no longer needed. Chunks can be retained while hidden so
@@ -2734,6 +2734,9 @@ export class PlanetRenderer {
       directions[i * 3 + 2] = z / length
     }
 
+    positions.needsUpdate = true
+    geometry.computeVertexNormals()
+    geometry.computeBoundingSphere()
     geometry.setAttribute('terrainHeight', new THREE.BufferAttribute(heights, 1))
     return directions
   }
@@ -2933,14 +2936,15 @@ export class PlanetRenderer {
     return maxInset
   }
 
-  private updateOceanRenderState(useTerrain: boolean) {
+  private updateOceanRenderState() {
     if (!this.oceanMesh || !this.oceanMaterial) return
 
     // Stays hidden until the worker returns the per-vertex terrain heights and
     // the shore mask; without them the mesh would render as a smooth sphere
     // with no coastline.
     this.oceanMesh.visible = this.seaHeight >= -1 && this.oceanDataReady
-    this.oceanMaterial.depthTest = useTerrain
+    // Orbital oceans must respect ships and every other celestial body too.
+    this.oceanMaterial.depthTest = true
     this.setFloatUniform(this.oceanMaterial, 'uOceanQuality', 2)
     this.setFloatUniform(this.oceanMaterial, 'uOceanAlpha', 1)
   }
@@ -3392,7 +3396,7 @@ export class PlanetRenderer {
   }
 
   private createFallbackGeometry(planetRadius: number): THREE.SphereGeometry {
-    const geometry = new THREE.SphereGeometry(planetRadius, 32, 32)
+    const geometry = new THREE.SphereGeometry(planetRadius, 64, 48)
     this.addTerrainHeightAttribute(geometry)
     return geometry
   }
@@ -3406,9 +3410,16 @@ export class PlanetRenderer {
     for (let i = 0; i < positions.count; i++) {
       dir.fromBufferAttribute(positions, i).normalize()
       heights[i] = samplePlanetHeight(dir, this.terrainParams)
+      // The orbital mesh needs real seabed depth. A flat sphere at the base
+      // radius intersects the lower ocean sphere in a regular pattern of facets.
+      const radius = this.terrainParams.radius * (1 + heights[i] * this.terrainParams.terrainScale)
+      positions.setXYZ(i, dir.x * radius, dir.y * radius, dir.z * radius)
       macroAo[i] = this.sampleFallbackMacroAo(dir, heights[i])
     }
 
+    positions.needsUpdate = true
+    geometry.computeVertexNormals()
+    geometry.computeBoundingSphere()
     geometry.setAttribute('terrainHeight', new THREE.BufferAttribute(heights, 1))
     geometry.setAttribute('terrainMacroAo', new THREE.BufferAttribute(macroAo, 1))
   }
