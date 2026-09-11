@@ -6,7 +6,8 @@
     "build": "node ../../scripts/spacetime.mjs build",
     "dev": "cd .. && node ../scripts/spacetime.mjs dev no-mans-sky --server http://127.0.0.1:3000 --server-only --delete-data=never --yes",
     "generate": "node ../../scripts/spacetime.mjs generate --module-path . --lang typescript --out-dir ../../client/src/module_bindings --no-config --yes",
-    "publish:local": "node ../../scripts/spacetime.mjs publish no-mans-sky --module-path . --server http://127.0.0.1:3000 --delete-data=never --no-config --yes && node ../../scripts/spacetime.mjs call no-mans-sky refresh_catalogue --server http://127.0.0.1:3000 --no-config --yes"
+    "publish:local": "node ../../scripts/spacetime.mjs publish no-mans-sky --module-path . --server http://127.0.0.1:3000 --delete-data=never --no-config --yes && node ../../scripts/spacetime.mjs call no-mans-sky refresh_catalogue --server http://127.0.0.1:3000 --no-config --yes",
+    "publish:cloud": "node ../../scripts/spacetime.mjs publish no-mans-sky --module-path . --server maincloud --delete-data=never --no-config --yes && node ../../scripts/spacetime.mjs call no-mans-sky refresh_catalogue --server maincloud --no-config --yes"
   },
   "keywords": [],
   "author": "",

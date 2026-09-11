@@ -5,7 +5,9 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
+    "dev:cloud": "vite --mode cloud",
     "build": "tsc -b && vite build",
+    "build:pages": "tsc -b && vite build --base=/no-mans-sky/",
     "lint": "eslint .",
     "preview": "vite preview"
   },
