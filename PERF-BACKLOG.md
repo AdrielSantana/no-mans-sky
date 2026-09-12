@@ -8,9 +8,169 @@ construída sobre um profile que já não existe — a amostragem de terreno fic
 22,5% mais rápida, o build de chunk 21%, e três blocos grandes de main thread e
 GPU sumiram. O HUD (`?perf`) agora reporta `draw`/`tri` de verdade.
 
+E o custo mudou de lugar de novo em setembro: **comece pela 0f**, não pela 0.
+
+---
+
+## 0f. Setembro: o custo mudou de lugar — 2026-09-11
+
+Leia isto antes da seção 0. A lista de alvos dela continua correta **como
+medição de agosto** e errada **como prioridade**: o que ela manda atacar
+primeiro hoje custa quase nada, e o que custa não aparece lá.
+
+O que mudou não foi o código da vegetação, foi a densidade. O corte descrito na
+0e (`treeDensity 0,2 → 0,08`) levou a vegetação de **13,24 ms de 29,89** para
+**~1 ms de ~34,5**. Ela saiu do topo da lista por remoção de trabalho, não por
+otimização. Quem seguir a ordem da seção 0 vai passar uma tarde em folhagem
+para ganhar ruído — foi exatamente o que eu fiz na primeira metade deste dia.
+
+### Quem ficou com o custo: o fragment shader do terreno far
+
+A medição que separa: stub das funções do fragment shader far, cena assentada,
+mesma câmera nos dois lados.
+
+| configuração | frame | fps | draws | triângulos |
+|---|---|---|---|---|
+| baseline | 33,7 ms | 30 | 496 | 1.371.238 |
+| fragmento far stubado | 17,25 ms | 57 | 496 | 1.371.238 |
+| **diferença** | **16,45 ms** | | idêntico | idêntico |
+
+**Draws e triângulos idênticos dos dois lados** — é isso que torna o número
+utilizável. Nada de geometria, de contagem de chamada ou de CPU mudou; só o
+trabalho por fragmento.
+
+Ressalva: o absoluto está inflado. Esta máquina roda o Orca e uma VM em
+paralelo, e o baseline de agosto (17,5 ms) foi tirado com ela ociosa. O que
+sobrevive à carga é o **pareamento dentro da mesma rodada** mais os controles de
+draws e triângulos; os 16,45 ms podem estar inflados na mesma proporção que o
+baseline. A conclusão estrutural — a maior parte do frame é fragmento de
+terreno — é sólida; o milissegundo exato não é.
+
+O shader far tem 869 linhas de fragmento contra 856 do near e inclui os
+**mesmos oito blocos GLSL** (`planet-generator.ts:1184-1237`): `TERRAIN_NOISE`,
+`TERRAIN_HEIGHT_GLSL`, `TERRAIN_TEXTURE_GLSL`, `CLOUD_PATTERN_GLSL`,
+`PLANET_LIGHTING_GLSL`, `TERRAIN_GRASS_AO_GLSL`, `TERRAIN_CLOUD_SHADOW_GLSL`,
+`PLANET_TYPE_BIOMES_GLSL`. Um chunk a 20 km da câmera paga amostragem de
+detalhe e AO de grama que ninguém tem como ver.
+
+### A varredura de resolução concorda
+
+| | fill (por unidade de pixel) | fixo |
+|---|---|---|
+| 2026-08-31 | 5,9 ms | 13,9 ms |
+| 2026-09-11 | 22,51 ms | 14,2 ms |
+
+O termo fixo praticamente não se mexeu; o frame cresceu inteiro do lado do
+fragmento. Isso **corrige a 0d**, que conclui "o fill é real mas é menos de um
+terço" — hoje é a maioria do frame.
+
+### O que isso responde da 0e
+
+A pergunta 1 ("draw calls nunca foram isolados") deixa de ser a maior pergunta
+aberta. O teste de shader segurou 496 draws e 1,37 M triângulos fixos e ainda
+assim moveu 16 ms: o termo dominante é fragmento, e o overhead de chamada, seja
+qual for, cabe dentro dos ~14 ms de termo fixo. Isolá-lo continua não feito, mas
+o teto do ganho agora é conhecido e é pequeno.
+
+### Pendente: qual dos oito blocos custa o quê
+
+`createFarLodMaterial` (`planet-renderer.ts:828`) já recebe a banda de LOD e
+`FAR_TEXTURE_LOD_BANDS` (`planet-renderer.ts:168`) já tem cinco níveis. O
+caminho é `#define` por banda: compilar as bandas distantes sem a amostragem de
+detalhe de `TERRAIN_TEXTURE_GLSL`, sem `TERRAIN_NOISE` e sem
+`TERRAIN_GRASS_AO_GLSL`, preservando bioma, iluminação e sombra de nuvem.
+
+Quanto cada bloco vale isoladamente **não foi medido**. Duas tentativas
+falharam, e as duas falharam de um jeito que passa por resultado:
+
+- o stub reescreveu também as definições das funções, o shader parou de
+  compilar, e as cinco ablações deram o mesmo "ganho" de 10 ms;
+- na segunda, o piso de ruído da máquina (11,3 ms) engoliu a diferença.
+
+`runFarShaderAblation` (`client/scripts/shader-ablation.js`) já tem a guarda de
+programas quebrados. Falta uma janela de máquina quieta.
+
+**Onde cortar é decisão de arte, não de performance.** O teto é ~16 ms; até onde
+ir antes de o relevo distante achatar é do Adriel.
+
+### Carregamento de chunk: o que mudou e o que foi refutado
+
+Promoção incremental por quadrante entrou em `6496c55`. O portão de irmãos em
+`collectLoadKeys` custava ~110 frames por nível (a frio, lod 10 só aparecia no
+frame 1374), mas **é estrutural**: trocá-lo por travessia em profundidade
+derruba o chão de lod 9 para lod 2. A saída foi desenhar o pai mascarado junto
+com os filhos prontos, em vez de esperar os quatro.
+
+Refutado, com medição, para não ser refeito:
+
+| tentativa | resultado |
+|---|---|
+| podar a fila de carregamento ao se afastar | zero no frame (é CPU num frame de GPU) |
+| memoizar `parseChunkKey` | zero no frame |
+| orçamentos de CPU como campo de instância | zero no frame |
+| cota de despacho para pais em colapso | pior: +11% colapsos, +7% chunks |
+| `collectLoadKeys` em profundidade | chão cai para lod 2 |
+| props como portão de promoção | não é o gargalo |
+
+E a varredura de orçamento, que eu esperava que ajudasse e que piorou
+monotonicamente (`client/scripts/budget-sweep.js`, walker ativo, 464 draws nas
+quatro linhas):
+
+| multiplicador | lod 8 | lod 9 | lod 10 | assentar | frame | fps |
+|---|---|---|---|---|---|---|
+| 1x (atual) | 7,8 s | 8,5 s | 9,3 s | 67,5 s | 21,2 ms | 47,2 |
+| 2x | 16,1 | 18,3 | 21,1 | 224,7 | 35,1 ms | 28,5 |
+| 4x | 44,3 | 50,1 | 54,1 | 276,9 | 31,3 ms | 31,9 |
+| 8x | 43,0 | 48,3 | 51,4 | 261,6 | 31,8 ms | 31,4 |
+
+Mais orçamento deixou a descida de LOD **mais lenta** e o fps **pior**, nas duas
+pontas. O mecanismo não foi isolado; o resultado basta para não repetir. Os
+defaults ficaram onde estavam.
+
+**Sem número:** o A/B de frame time da promoção incremental. O Adriel viu a
+melhora de carregamento na tela e a correção está provada por construção
+(`runMaskIndexChecks`), mas `runPromotionAB` nunca rodou até o fim — uma
+chamada estourou o timeout do driver e a máquina estava carregada na outra. É
+uma rodada de máquina quieta, não uma investigação.
+
+### Armadilhas de medição descobertas neste dia
+
+Somam-se às da 0d.
+
+1. **Meça na velocidade real do jogo.** `ship-flight.ts:30-31`: 55 m/s perto do
+   chão, 380 em céu aberto, e os 12000 só acima de 0,12 raio
+   (`ship-flight.ts:191`). Rodei um sobrevoo a 1400 m/s — 25× o limite real
+   perto do chão — e invalidei um lote inteiro de conclusões sobre ordem de
+   carregamento.
+2. **O HMR do Vite ejeta o walker.** Qualquer edição de arquivo reconstrói o
+   planeta, `setTargets` (`planet-walker-controller.ts:115`) desliga o walker, e
+   a medição vira silenciosamente uma leitura de órbita (42 draws em vez de
+   ~460). Custou três rodadas. Guarde em `draws > 300` e **não edite arquivo
+   entre assentar e medir**.
+3. **Assentar exige platô de frame time, não só de geometria.** Com a checagem
+   só de geometria, os baselines derivaram de 42,1 para 28,8 ms dentro da mesma
+   rodada.
+4. **Meça o piso de ruído na mesma rodada e imprima junto.** Com o Orca e a VM
+   ligados ele chegou a 18,5 ms; numa tabela de ablação daquele dia só a
+   primeira linha significava alguma coisa. Marque as outras como ruído em vez
+   de as interpretar.
+5. **Stub de shader que reescreve a definição da função quebra a compilação** —
+   e aí todas as ablações "ganham" exatamente o mesmo tanto. Pule as ocorrências
+   precedidas de tipo de retorno e valide a contagem de programas.
+6. **`probeSurfaceGaps` não enxerga fenda de T-junction.** Ele pergunta "existe
+   chunk visível aqui", e numa fenda existe. Reportou 0 buracos no mesmo dia em
+   que o Adriel viu buracos na tela. Para rachadura de borda o teste é
+   `runStitchMaskChecks`, que compara o que o vizinho é informado, não o que a
+   patch desenha.
+
 ---
 
 ## 0. Baseline medido na superfície — 2026-08-31
+
+> **Superado como prioridade — ver 0f.** Tudo abaixo foi medido com
+> `treeDensity 0,2`. Depois do corte para 0,08 a vegetação passou a valer ~1 ms,
+> não 13,24, e a ordem de alvos no fim da seção deixou de apontar para o custo
+> real. A tabela continua válida como registro do que foi medido naquele dia.
 
 Primeira medição real deste branch. Chrome 152, Apple M5 (ANGLE Metal), modo
 walk em terra firme, DPR 1 (o walker já derruba de 2 para 1 em
@@ -119,6 +279,11 @@ ms**. O fill é real mas é menos de um terço. Os outros 13,9 ms não responder
 a triângulo nem a CPU — o suspeito que sobra é contagem de draw call e troca de
 estado (692 draws), e isso ainda não foi testado isoladamente.
 
+**Corrigido em 0f:** remedido em 2026-09-11, o ajuste deu fragmento ≈ 22,5 ms e
+fixo ≈ 14,2 ms. O termo fixo mal se mexeu em onze dias; o fill virou a maioria
+do frame. O suspeito que sobrava não era draw call, era o fragment shader do
+terreno far.
+
 ### Como medir sem se enganar de novo
 
 A cena faz streaming por 2 a 4 minutos depois de pousar. Medir antes disso
@@ -192,6 +357,9 @@ e por isso o ganho é pequeno num frame limitado por fill.
    no céu e derrubou fill junto, além de ter rodado em DPR 2 por engano. Um
    teste válido precisa mudar a contagem de chamadas sem mudar pixels nem
    triângulos. É a maior pergunta aberta.
+   **Rebaixada em 0f:** segurando 496 draws e 1,37 M triângulos fixos, só o
+   shader far moveu 16 ms. O overhead de chamada cabe dentro dos ~14 ms de termo
+   fixo. Continua sem ser isolado, mas o teto do ganho é pequeno.
 2. **O shadow map ainda percorre a cena inteira** para achar 124 casters, pelo
    mesmo motivo que a passada de nuvem percorria (ver 0d). A mesma correção
    serve, mas a lista de casters muda a cada chunk que entra, então precisa de
@@ -1007,6 +1175,27 @@ qualquer mudança em terreno, AO ou geometria:
   comparando os 8 buffers.
 - Índice de stitching: 72 configurações, comparando o índice efetivamente
   desenhado (respeitando `drawRange`).
+
+### Os scripts que existem hoje — `client/scripts/`
+
+Rodam no console do editor, sem build: `await (await
+import('/scripts/<arquivo>')).<função>()`. Todos leem `window.__nmsEditorDebug`.
+
+| script | função | o que responde |
+|---|---|---|
+| `mask-index-checks.js` | `runMaskIndexChecks` | 23 asserções de álgebra de índice: mascarar um quadrante remove exatamente aquele quadrante, e as quatro máscaras particionam a patch. Sem timing — responde em máquina carregada. |
+| `mask-index-checks.js` | `runStitchMaskChecks` | 5 asserções sobre o que o vizinho é **informado**. É o único teste que pega fenda de T-junction; foi provado que discrimina a regressão que ele existe para pegar. |
+| `shader-ablation.js` | `runFarShaderAblation` | custo do fragment shader far, com draws e triângulos controlados e guarda de programa quebrado. |
+| `shader-probe.js` | `probeTerrainShaders` | contagem de operações por shader — para escolher o que ablacionar antes de gastar uma rodada. |
+| `surface-perf-checks.js` | `runSurfacePerf`, `runSurfaceAblation2` | ablação por grupo na superfície, com piso de ruído medido e assentamento por platô de frame time. |
+| `flyover-checks.js` | `runFlyoverBenchmark`, `runPriorityAudit`, `probeLadderDescent`, `probeLodReachability`, `probeSurfaceGaps`, `probeVegetationCoverage` | ordem e latência de carregamento de chunk. Rode nas velocidades de `ship-flight.ts`, não em velocidade arbitrária. |
+| `promotion-checks.js` | `runPromotionAB` | A/B da promoção incremental contra a atômica antiga. **Ainda não rodou até o fim.** |
+| `budget-sweep.js` | `runBudgetSweep` | varredura dos orçamentos de CPU por frame. Já rodada: ver a tabela na 0f. |
+
+Um teste que não consegue ver a classe de bug que você está caçando é pior que
+nenhum, porque devolve um número verde. `probeSurfaceGaps` reportou 0 buracos no
+dia em que havia buracos na tela (0f, armadilha 6); foi preciso escrever
+`runStitchMaskChecks` para ter uma resposta.
 
 **`planet-terrain.ts` é compartilhado com o servidor SpacetimeDB.** Qualquer
 mudança ali tem de ser bit-idêntica, ou cliente e servidor discordam sobre a
