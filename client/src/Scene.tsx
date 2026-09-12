@@ -1,6 +1,8 @@
-import { useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
+import { ChatOverlay } from './ChatOverlay'
 import { GameEngine } from './game/engine'
 import { CelestialSystem } from './game/celestial-system'
+import type { ChatStore } from './game/chat'
 import { WorldConnection } from './game/world-connection'
 
 declare global {
@@ -14,11 +16,16 @@ export default function Scene() {
   const [status, setStatus] = useState('Conectando ao universo…')
   const [place, setPlace] = useState('Mineral Dawn')
   const [perf, setPerf] = useState('')
+  const [chat, setChat] = useState<ChatStore | null>(null)
+  const engineRef = useRef<GameEngine | null>(null)
+  const chatCanvas = useCallback(() => engineRef.current?.getDomElement() ?? null, [])
   useEffect(() => {
     if (!containerRef.current) return
     const engine = new GameEngine(containerRef.current)
     const system = new CelestialSystem(engine)
     const network = new WorldConnection(system, setStatus)
+    engineRef.current = engine
+    setChat(network.chat)
     if (import.meta.env.DEV) window.__nmsDebug = { engine, system, network }
     engine.start(dt => { system.update(dt); network.remotes.update(dt) })
     const timer = setInterval(() => {
@@ -31,6 +38,8 @@ export default function Scene() {
     }, 500)
     return () => {
       clearInterval(timer)
+      setChat(null)
+      engineRef.current = null
       network.dispose()
       system.dispose()
       engine.dispose()
@@ -45,5 +54,6 @@ export default function Scene() {
       <div style={{ opacity: 0.75 }}>WASD — explorar · Espaço — pular · C — chamar nave · E — embarcar / pousar</div>
       {perf && <pre>{perf}</pre>}
     </div>
+    {chat && <ChatOverlay store={chat} canvas={chatCanvas} />}
   </>
 }

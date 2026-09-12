@@ -41,6 +41,18 @@ export class TerrainChunk {
   readonly node: QuadtreeNode
   skirtFlags: SkirtFlags
   stitchSteps: StitchSteps = { ...NO_STITCH_STEPS }
+  // Bitmask of the four child quadrants this patch must NOT draw, because a
+  // finer chunk is already drawing them. Bit i matches createChildren' order:
+  // i & 1 selects the u half, i >> 1 the v half.
+  //
+  // This is what makes refinement incremental. Without it a quad promotes
+  // all-or-nothing -- collectRenderKeys either drew this patch or all four
+  // children -- so a single missing child held three finished ones off the
+  // screen, and collectLoadKeys had to fill the whole planet breadth-first to
+  // avoid that. Measured cost of the old behaviour: ~110 frames per LOD level,
+  // 1374 frames before the first lod-10 chunk appeared under a stationary
+  // camera.
+  coveredQuadrants = 0
   private geometry: THREE.BufferGeometry
   private fullIndices: Uint32Array = new Uint32Array(0)
   // A single index attribute reused for every stitching configuration. Calling
@@ -77,15 +89,16 @@ export class TerrainChunk {
     this.mesh.frustumCulled = true
   }
 
-  needsStitchUpdate(steps: StitchSteps): boolean {
+  needsStitchUpdate(steps: StitchSteps, coveredQuadrants = 0): boolean {
     return this.stitchSteps.bottom !== steps.bottom
       || this.stitchSteps.top !== steps.top
       || this.stitchSteps.left !== steps.left
       || this.stitchSteps.right !== steps.right
+      || this.coveredQuadrants !== coveredQuadrants
   }
 
-  setStitchSteps(steps: StitchSteps) {
-    if (!this.needsStitchUpdate(steps)) return
+  setStitchSteps(steps: StitchSteps, coveredQuadrants = 0) {
+    if (!this.needsStitchUpdate(steps, coveredQuadrants)) return
 
     // Copy the fields rather than storing the reference: the caller passes a
     // shared per-frame scratch, so keeping it would alias every chunk's
@@ -94,9 +107,10 @@ export class TerrainChunk {
     this.stitchSteps.top = steps.top
     this.stitchSteps.left = steps.left
     this.stitchSteps.right = steps.right
-    // No computeBoundingSphere here: stitching changes topology only, and the
-    // sphere is derived from positions, which do not move.
-    this.applyIndex(this.buildIndexForStitching(this.stitchSteps))
+    this.coveredQuadrants = coveredQuadrants
+    // No computeBoundingSphere here: stitching and masking change topology
+    // only, and the sphere is derived from positions, which do not move.
+    this.applyIndex(this.buildIndexForStitching(this.stitchSteps, coveredQuadrants))
   }
 
   private applyIndex(indices: Uint32Array) {
@@ -149,23 +163,40 @@ export class TerrainChunk {
     }
   }
 
-  private buildIndexForStitching(steps: StitchSteps): Uint32Array {
+  private buildIndexForStitching(steps: StitchSteps, coveredQuadrants = 0): Uint32Array {
     const activeEdges = (steps.bottom > 1 ? 1 : 0)
       + (steps.top > 1 ? 1 : 0)
       + (steps.left > 1 ? 1 : 0)
       + (steps.right > 1 ? 1 : 0)
-    if (activeEdges === 0) return this.fullIndices
+    if (activeEdges === 0 && coveredQuadrants === 0) return this.fullIndices
 
     const gs = this.gridSize
     const seg = gs - 1
+    const half = seg >> 1
     const indices: number[] = []
     const v = (x: number, y: number) => y * gs + x
     const pushTri = (a: number, b: number, c: number) => {
       indices.push(a, b, c)
     }
+    // Grid x runs with u and y with v (see sampleVisualRadius), so the cell's
+    // quadrant bit is the same arithmetic createChildren uses.
+    const quadrantCovered = (x: number, y: number) =>
+      (coveredQuadrants & (1 << (((y < half ? 0 : 1) << 1) | (x < half ? 0 : 1)))) !== 0
+
+    // Fan spans are clamped to the quadrant halves when masking is on, so a
+    // span never straddles a boundary one side of which is being skipped.
+    const spans = (step: number): Array<[number, number]> => {
+      const out: Array<[number, number]> = []
+      const bounds = coveredQuadrants === 0 ? [[0, seg]] : [[0, half], [half, seg]]
+      for (const [lo, hi] of bounds) {
+        for (let i = lo; i < hi; i += step) out.push([i, Math.min(i + step, hi)])
+      }
+      return out
+    }
 
     for (let y = 0; y < seg; y++) {
       for (let x = 0; x < seg; x++) {
+        if (quadrantCovered(x, y)) continue
         if ((steps.bottom > 1 && y === 0)
           || (steps.top > 1 && y === seg - 1)
           || (steps.left > 1 && x === 0)
@@ -186,8 +217,8 @@ export class TerrainChunk {
 
     if (steps.bottom > 1) {
       const step = clampStep(steps.bottom)
-      for (let x = 0; x < seg; x += step) {
-        const end = Math.min(x + step, seg)
+      for (const [x, end] of spans(step)) {
+        if (quadrantCovered(x, 0)) continue
         const b0 = v(x, 0)
         const b1 = v(end, 0)
         for (let ix = x; ix < end - 1; ix++) {
@@ -200,8 +231,8 @@ export class TerrainChunk {
 
     if (steps.top > 1) {
       const step = clampStep(steps.top)
-      for (let x = 0; x < seg; x += step) {
-        const end = Math.min(x + step, seg)
+      for (const [x, end] of spans(step)) {
+        if (quadrantCovered(x, seg - 1)) continue
         const b0 = v(x, seg)
         const b1 = v(end, seg)
         pushTri(b0, v(end - 1, seg - 1), b1)
@@ -214,8 +245,8 @@ export class TerrainChunk {
 
     if (steps.left > 1) {
       const step = clampStep(steps.left)
-      for (let y = 0; y < seg; y += step) {
-        const end = Math.min(y + step, seg)
+      for (const [y, end] of spans(step)) {
+        if (quadrantCovered(0, y)) continue
         const b0 = v(0, y)
         const b1 = v(0, end)
         pushTri(b0, v(1, end - 1), b1)
@@ -228,8 +259,8 @@ export class TerrainChunk {
 
     if (steps.right > 1) {
       const step = clampStep(steps.right)
-      for (let y = 0; y < seg; y += step) {
-        const end = Math.min(y + step, seg)
+      for (const [y, end] of spans(step)) {
+        if (quadrantCovered(seg - 1, y)) continue
         const b0 = v(seg, y)
         const b1 = v(seg, end)
         for (let iy = y; iy < end - 1; iy++) {
