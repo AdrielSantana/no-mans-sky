@@ -76,6 +76,11 @@ import { OceanIfftSpectrum } from './ocean-ifft'
 import { CloudMaskTexture } from './cloud-mask'
 import { CLOUD_OCCLUDER_RENDER_LAYER, CLOUD_RENDER_LAYER } from '../render-layers'
 
+// Per-frame ceilings on streaming work. Defaults unchanged; they live on the
+// instance because they are sized for a 16 ms frame and this frame is not one
+// -- measured at ~33 ms and GPU bound, which leaves CPU idle that a fixed
+// millisecond ceiling refuses to spend. Making them settable is what lets that
+// be measured, and is also what a frame-time-proportional budget would need.
 const SYNC_CHUNK_BUILD_BUDGET_MS = 4
 const WORKER_DISPATCH_BUDGET_MS = 0.8
 const CHUNK_INTEGRATION_BUDGET_MS = 2.5
@@ -427,7 +432,21 @@ export class PlanetRenderer {
   // Occupancy of the visible chunk set, bucketed by face * (maxLod + 1) + lod.
   // Rebuilt once per frame by rebuildStitchSets.
   private stitchSets: Set<number>[] = []
+  // Quadrant masks of the chunks in stitchSets, same bucketing, cell -> mask.
+  // Only masked chunks appear. Without this the stitch probe treats a masked
+  // patch as covering its whole area, so a child whose neighbour is really a
+  // promoted sibling at the same LOD is told to coarsen its edge against it --
+  // and coarsening one side of a matched pair is what opens a crack.
+  private stitchMasks: Map<number, number>[] = []
   private chunkPriorityCache = new Map<string, number>()
+  private chunkNodeCache = new Map<string, QuadtreeNode | null>()
+  // Rebuilt each frame by collectRenderKeys: key -> bitmask of child quadrants a
+  // partially refined patch must leave to its children.
+  private renderQuadrantMasks = new Map<string, number>()
+  private syncChunkBuildBudgetMs = SYNC_CHUNK_BUILD_BUDGET_MS
+  private workerDispatchBudgetMs = WORKER_DISPATCH_BUDGET_MS
+  private chunkIntegrationBudgetMs = CHUNK_INTEGRATION_BUDGET_MS
+  private propScatterBudgetMs = PROP_SCATTER_BUDGET_MS
   private time = 0
   private renderer: THREE.WebGLRenderer | null = null
 
@@ -1811,6 +1830,7 @@ export class PlanetRenderer {
       setPlanetPropFoliagePalettes(this.propAssets, this.foliagePalettes)
     }
     this.chunkPriorityCache.clear()
+    this.chunkNodeCache.clear()
 
     // Update sun position uniform
     this.material.uniforms.uSunPosition.value.copy(this.sunPosition)
@@ -1918,7 +1938,9 @@ export class PlanetRenderer {
       this.collectLoadKeys(root, loadKeys)
     }
 
-    // 3. Queue missing chunks for generation.
+    // 3. Retire queued chunks the camera has already left, then queue what is
+    //    missing.
+    this.retireStalePendingKeys(loadKeys)
     for (const key of loadKeys) {
       if (!this.chunks.has(key) && !this.isChunkBuildPending(key)) {
         this.pendingKeys.add(key)
@@ -1950,8 +1972,9 @@ export class PlanetRenderer {
     }
     const renderKeys = new Set<string>()
     const retainKeys = new Set<string>()
+    this.renderQuadrantMasks.clear()
     for (const root of this.quadtrees) {
-      this.collectRenderKeys(root, renderKeys)
+      this.collectRenderKeys(root, renderKeys, this.renderQuadrantMasks)
       this.collectRetainKeys(root, retainKeys)
     }
     const terrainReady = this.hasQuadtreeTerrainCoverage()
@@ -2173,6 +2196,14 @@ export class PlanetRenderer {
       if (!this.chunks.has(node.key)) out.add(node.key)
       // Finish all four siblings before requesting grandchildren. Otherwise
       // fine chunks accumulate invisibly behind an incomplete parent patch.
+      //
+      // Measured 2026-09-11: this gate costs ~110 frames per LOD level with a
+      // stationary camera (1374 frames to the first lod-10 chunk). Descending
+      // regardless of sibling coverage removes that entirely -- and drops the
+      // ground under a 55 m/s pass from lod 9 to lod 2, because promotion in
+      // collectRenderKeys needs a *contiguous* covered quad, which is exactly
+      // what breadth-first ordering produces and depth-first does not. The
+      // serialisation is the price of promotion, not an oversight.
       for (const child of node.children) {
         if (!child.covered) out.add(child.key)
       }
@@ -2182,20 +2213,52 @@ export class PlanetRenderer {
     for (const child of node.children) this.collectLoadKeys(child, out)
   }
 
-  private collectRenderKeys(node: QuadtreeNode, out: Set<string>) {
+  // Builds the visible set, and with it the quadrant mask each partially
+  // refined patch must draw around.
+  //
+  // Promotion used to be all-or-nothing: either this patch drew, or all four
+  // children did. One child short and three finished ones stayed off screen,
+  // which is why collectLoadKeys had to complete every level planet-wide
+  // before requesting the next -- at ~110 frames per level. Masking the parent
+  // per quadrant lets each child appear the moment it is built, using the index
+  // rewrite TerrainChunk already performs for stitching: no extra draw call and
+  // no fragment cost, which matters because this frame is fragment bound.
+  //
+  // `masks` is optional so the existing prop-lod checks can still call this
+  // with two arguments.
+  private collectRenderKeys(node: QuadtreeNode, out: Set<string>, masks?: Map<string, number>) {
     if (!node.children) {
       if (this.chunks.has(node.key)) out.add(node.key)
       return
     }
 
-    const childrenCovered = node.children.every(child => child.covered && this.propCoverage.get(child.key))
-    if (childrenCovered) {
-      for (const child of node.children) this.collectRenderKeys(child, out)
-    } else if (this.chunks.has(node.key)) {
-      out.add(node.key)
-    } else {
-      for (const child of node.children) this.collectRenderKeys(child, out)
+    let readyMask = 0
+    let allReady = true
+    for (let i = 0; i < node.children.length; i++) {
+      const child = node.children[i]
+      if (child.covered && this.propCoverage.get(child.key)) readyMask |= 1 << i
+      else allReady = false
     }
+
+    if (allReady) {
+      for (const child of node.children) this.collectRenderKeys(child, out, masks)
+      return
+    }
+
+    if (this.chunks.has(node.key)) {
+      out.add(node.key)
+      if (readyMask !== 0) {
+        masks?.set(node.key, readyMask)
+        for (let i = 0; i < node.children.length; i++) {
+          if (readyMask & (1 << i)) this.collectRenderKeys(node.children[i], out, masks)
+        }
+      }
+      return
+    }
+
+    // No chunk here to mask, so there is nothing to draw the gaps: fall back to
+    // whatever the children can cover, as before.
+    for (const child of node.children) this.collectRenderKeys(child, out, masks)
   }
 
   private collectRetainKeys(node: QuadtreeNode, out: Set<string>) {
@@ -2213,11 +2276,52 @@ export class PlanetRenderer {
     return this.quadtrees.every(root => root.covered)
   }
 
+  // Drops queued chunks that are no longer part of the load set.
+  //
+  // Nothing used to leave pendingKeys without being built: the only removal
+  // was removeChildrenChunks, which runs on collapse. Flying low and fast
+  // retires load keys far quicker than the worker pool drains them, so the
+  // queue accumulated every patch the flight path ever grazed. A stale key is
+  // not harmless -- it reaches the front as soon as the near work runs dry,
+  // and then costs a worker slot, a geometry build, a prop scatter job and a
+  // dispose in the same frame it lands, all for ground already behind the
+  // camera.
+  //
+  // Self-healing: a key that still matters is re-added by the caller on the
+  // very next frame. Deferred collapse parents are the one thing kept
+  // explicitly -- collectLoadKeys stops descending once children are covered,
+  // so it never names them, and dropping them would strand the collapse
+  // permanently.
+  private retireStalePendingKeys(loadKeys: Set<string>) {
+    for (const key of this.pendingKeys) {
+      if (!loadKeys.has(key) && !this.pendingCollapseKeys.has(key)) {
+        this.pendingKeys.delete(key)
+      }
+    }
+  }
+
   private isChunkBuildPending(key: string): boolean {
     return this.pendingKeys.has(key) || this.pendingWorkerKeys.has(key)
   }
 
+  // Memoised for the frame. compareChunkBuildPriority parses both of its
+  // operands, findBestPendingChunkKey compares every pending key against the
+  // running best, and the dispatch loop calls that once per chunk it sends --
+  // so an uncached parse ran O(pending x dispatched x 2) times per frame, each
+  // one a split into four strings plus a fresh node object. At the queue sizes
+  // a flyover produces that scan alone could exhaust WORKER_DISPATCH_BUDGET_MS,
+  // throttling streaming exactly when the backlog was longest. Cleared with
+  // chunkPriorityCache so the map stays bounded by one frame's key set.
   private parseChunkKey(key: string): QuadtreeNode | null {
+    const memo = this.chunkNodeCache.get(key)
+    if (memo !== undefined) return memo
+
+    const node = this.buildChunkKeyNode(key)
+    this.chunkNodeCache.set(key, node)
+    return node
+  }
+
+  private buildChunkKeyNode(key: string): QuadtreeNode | null {
     const parts = key.split('_')
     if (parts.length !== 4) return null
 
@@ -2243,7 +2347,7 @@ export class PlanetRenderer {
     }
 
     while (this.completedWorkerJobs.length > 0) {
-      if (this.generatedChunksLastFrame > 0 && performance.now() - integrationStart >= CHUNK_INTEGRATION_BUDGET_MS) break
+      if (this.generatedChunksLastFrame > 0 && performance.now() - integrationStart >= this.chunkIntegrationBudgetMs) break
 
       const result = this.completedWorkerJobs.shift()
       if (!result) break
@@ -2270,7 +2374,7 @@ export class PlanetRenderer {
 
     const dispatchStart = performance.now()
     for (;;) {
-      if (performance.now() - dispatchStart >= WORKER_DISPATCH_BUDGET_MS) break
+      if (performance.now() - dispatchStart >= this.workerDispatchBudgetMs) break
 
       const key = this.findBestPendingChunkKey(localCamPos)
       if (!key) break
@@ -2338,7 +2442,7 @@ export class PlanetRenderer {
     const buildStart = performance.now()
 
     while (this.pendingKeys.size > 0) {
-      if (this.generatedChunksLastFrame > 0 && performance.now() - buildStart >= SYNC_CHUNK_BUILD_BUDGET_MS) break
+      if (this.generatedChunksLastFrame > 0 && performance.now() - buildStart >= this.syncChunkBuildBudgetMs) break
 
       const key = this.findBestPendingChunkKey(localCamPos)
       if (!key) break
@@ -2535,12 +2639,12 @@ export class PlanetRenderer {
       || this.getLocalChunkDistToCamera(a.chunk.node, this.lastLocalCamPos)
         - this.getLocalChunkDistToCamera(b.chunk.node, this.lastLocalCamPos))
     for (const job of jobs) {
-      if (performance.now() - start >= PROP_SCATTER_BUDGET_MS) break
+      if (performance.now() - start >= this.propScatterBudgetMs) break
       if (this.chunks.get(job.chunk.key) !== job.chunk || !this.shouldHavePropLayer(job.chunk)) {
         this.propPrepareJobs.delete(job.chunk.key)
         continue
       }
-      while (performance.now() - start < PROP_SCATTER_BUDGET_MS) {
+      while (performance.now() - start < this.propScatterBudgetMs) {
         const result = job.steps.next()
         if (!result.done) continue
         this.propPrepareJobs.delete(job.chunk.key)
@@ -3332,15 +3436,21 @@ export class PlanetRenderer {
     const buckets = NUM_FACES * (this.maxLod + 1)
     if (this.stitchSets.length !== buckets) {
       this.stitchSets = Array.from({ length: buckets }, () => new Set<number>())
+      this.stitchMasks = Array.from({ length: buckets }, () => new Map<number, number>())
     } else {
       for (const set of this.stitchSets) set.clear()
+      for (const map of this.stitchMasks) map.clear()
     }
 
     for (const key of renderKeys) {
       const chunk = this.chunks.get(key)
       if (!chunk) continue
       const node = chunk.node
-      this.stitchSets[node.face * (this.maxLod + 1) + node.lod].add(node.y * (1 << node.lod) + node.x)
+      const bucket = node.face * (this.maxLod + 1) + node.lod
+      const cell = node.y * (1 << node.lod) + node.x
+      this.stitchSets[bucket].add(cell)
+      const mask = this.renderQuadrantMasks.get(key)
+      if (mask) this.stitchMasks[bucket].set(cell, mask)
     }
   }
 
@@ -3349,7 +3459,7 @@ export class PlanetRenderer {
     for (const key of renderKeys) {
       const chunk = this.chunks.get(key)
       if (!chunk) continue
-      chunk.setStitchSteps(this.computeVisibleStitchSteps(chunk.node))
+      chunk.setStitchSteps(this.computeVisibleStitchSteps(chunk.node), this.renderQuadrantMasks.get(key) ?? 0)
     }
   }
 
@@ -3386,10 +3496,20 @@ export class PlanetRenderer {
     const stride = this.maxLod + 1
     for (let lod = node.lod - 1; lod >= 0; lod--) {
       const shift = node.lod - lod
+      const bucket = node.face * stride + lod
       // x and y are non-negative past the bounds check, so >> matches Math.floor.
-      if (this.stitchSets[node.face * stride + lod].has((y >> shift) * (1 << lod) + (x >> shift))) {
-        return 1 << shift
+      const cell = (y >> shift) * (1 << lod) + (x >> shift)
+      if (!this.stitchSets[bucket].has(cell)) continue
+
+      // A masked patch does not draw every quadrant. Find which of its four the
+      // neighbour falls in -- the ancestor one level finer picks it out -- and
+      // keep looking coarser when that quadrant is somebody else's to draw.
+      const mask = this.stitchMasks[bucket].get(cell)
+      if (mask) {
+        const quadrant = ((((y >> (shift - 1)) & 1) << 1) | ((x >> (shift - 1)) & 1))
+        if (mask & (1 << quadrant)) continue
       }
+      return 1 << shift
     }
 
     return 0
