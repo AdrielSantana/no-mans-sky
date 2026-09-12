@@ -5,7 +5,7 @@ import './ChatOverlay.css'
 
 const CHANNEL_LABEL: Record<ChatChannel, string> = {
   global: 'Global',
-  body: 'Corpo celeste',
+  body: 'Celestial body',
   local: 'Local',
 }
 const MESSAGE_LIMIT = 240
@@ -125,13 +125,17 @@ export function ChatOverlay({ store, canvas }: { store: ChatStore; canvas: () =>
   if (!snapshot.open) {
     return <div className="chat chat--closed">
       {recent.map(entry => <Message key={entry.id} entry={entry} />)}
-      <div className="chat__hint">Enter — conversar</div>
+      <div className="chat__hint">Enter — chat</div>
     </div>
   }
 
   // The body channel with no world in range stays typable on purpose: a disabled
   // box takes no focus, and with no focus there is no Escape to close the chat.
   const placeless = snapshot.channel === 'body' && !snapshot.bodyName
+  // A world's name is a name, so it keeps its case; the two fixed channels read
+  // as part of the sentence and do not.
+  const channelName = label(snapshot, snapshot.channel)
+  const speakingIn = snapshot.channel === 'body' ? channelName : channelName.toLowerCase()
   return <div
     className="chat chat--open"
     // Clicking anywhere in the panel but the box itself keeps the caret where it
@@ -161,7 +165,7 @@ export function ChatOverlay({ store, canvas }: { store: ChatStore; canvas: () =>
       className="chat__input"
       value={snapshot.draft}
       maxLength={MESSAGE_LIMIT}
-      placeholder={placeless ? 'Nenhum corpo celeste ao alcance' : `Falar em ${label(snapshot, snapshot.channel).toLowerCase()}…`}
+      placeholder={placeless ? 'No celestial body in range' : `Speak in ${speakingIn}…`}
       onChange={event => store.setDraft(event.target.value)}
       onKeyDown={onInputKeyDown}
       onBlur={closeChat}
@@ -169,7 +173,7 @@ export function ChatOverlay({ store, canvas }: { store: ChatStore; canvas: () =>
     <div className="chat__hint">
       {snapshot.notice
         ? <span className="chat__notice">{snapshot.notice}</span>
-        : <>Enter — enviar · Esc — fechar · Tab — trocar de canal{snapshot.draft.length > MESSAGE_LIMIT - 40 && <span> · {MESSAGE_LIMIT - snapshot.draft.length}</span>}</>}
+        : <>Enter — send · Esc — close · Tab — switch channel{snapshot.draft.length > MESSAGE_LIMIT - 40 && <span> · {MESSAGE_LIMIT - snapshot.draft.length}</span>}</>}
     </div>
   </div>
 }
@@ -188,9 +192,9 @@ function label(snapshot: { bodyName: string | null }, channel: ChatChannel) {
 }
 
 function describeEmpty(channel: ChatChannel, bodyName: string | null) {
-  if (channel === 'global') return 'Nada dito no sistema ainda.'
-  if (channel === 'local') return 'Ninguém falou por aqui.'
-  return bodyName ? `Nada dito em ${bodyName} ainda.` : 'Aproxime-se de um corpo celeste para falar com quem está nele.'
+  if (channel === 'global') return 'Nothing said in the system yet.'
+  if (channel === 'local') return 'Nobody has spoken around here.'
+  return bodyName ? `Nothing said on ${bodyName} yet.` : 'Get closer to a celestial body to talk with whoever is there.'
 }
 
 function formatTime(milliseconds: number) {

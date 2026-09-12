@@ -99,6 +99,11 @@ export class PlanetWalkerController {
   // While another system owns the player -- boarding a ship, say -- H must not
   // yank control back mid-transition.
   private toggleAllowed = true
+  // Whether H toggles walk mode at all. The editor needs it to drop in and out
+  // of the free camera while dialling a planet in; the live world does not, and
+  // there leaving the avatar behind is a free-flying camera no explorer should
+  // have -- so the key is off there rather than merely discouraged.
+  private readonly toggleKeyEnabled: boolean
   private readonly onKeyDown = (event: KeyboardEvent) => this.handleKeyDown(event)
   private readonly onKeyUp = (event: KeyboardEvent) => this.handleKeyUp(event)
   private readonly onMouseMove = (event: MouseEvent) => this.handleMouseMove(event)
@@ -106,8 +111,9 @@ export class PlanetWalkerController {
 
   private stopTextEntry: () => void
 
-  constructor(engine: GameEngine) {
+  constructor(engine: GameEngine, options: { toggleKeyEnabled?: boolean } = {}) {
     this.engine = engine
+    this.toggleKeyEnabled = options.toggleKeyEnabled ?? true
     this.avatar = new PlayerAvatar(engine.scene)
     window.addEventListener('keydown', this.onKeyDown)
     window.addEventListener('keyup', this.onKeyUp)
@@ -303,7 +309,7 @@ export class PlanetWalkerController {
 
   private handleKeyDown(event: KeyboardEvent) {
     if (textEntry.active) return
-    if (event.code === 'KeyH' && !event.repeat && this.toggleAllowed) {
+    if (event.code === 'KeyH' && !event.repeat && this.toggleKeyEnabled && this.toggleAllowed) {
       if (this.enabled) {
         this.disable()
       } else {

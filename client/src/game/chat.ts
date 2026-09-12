@@ -147,10 +147,10 @@ export class ChatStore {
     const text = this.draft.trim()
     const connection = this.connection
     if (!text) return false
-    if (!connection?.isActive) { this.notify('Sem conexão — a mensagem não foi enviada'); return false }
+    if (!connection?.isActive) { this.notify('No connection — the message was not sent'); return false }
     const placed = this.channel !== 'global'
     const body = placed ? this.resolveBody() : null
-    if (this.channel === 'body' && !body) { this.notify('Nenhum corpo celeste ao alcance'); return false }
+    if (this.channel === 'body' && !body) { this.notify('No celestial body in range'); return false }
     // The origin travels in the frame of its sender, the same convention the
     // poses use: written in the planet's frame it stays on the ground as the
     // world turns, which is what a conversation at a landing site expects.
@@ -165,7 +165,7 @@ export class ChatStore {
     this.refresh()
     void connection.reducers.sendChat({
       channel: this.channel, scope, body: text, x: origin.x, y: origin.y, z: origin.z,
-    }).catch(error => this.notify(`Envio: ${String(error)}`))
+    }).catch(error => this.notify(`Send: ${String(error)}`))
     return true
   }
 

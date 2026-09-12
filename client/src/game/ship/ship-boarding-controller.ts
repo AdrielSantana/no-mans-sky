@@ -418,7 +418,7 @@ export class ShipBoardingController {
       freeboardMeters: 2,
     })
     if (!site) {
-      this.flashPrompt('Terreno irregular demais para pousar aqui')
+      this.flashPrompt('Ground too rough to land here')
       return false
     }
 
@@ -435,7 +435,7 @@ export class ShipBoardingController {
     // Face the player once parked.
     this.arrivalHeading = this.headingToward(site.direction, this.localDirection)
     this.arrivalRemaining = ARRIVAL_SECONDS
-    this.flashPrompt('Nave a caminho', ARRIVAL_SECONDS)
+    this.flashPrompt('Ship on its way', ARRIVAL_SECONDS)
     return true
   }
 
@@ -486,7 +486,7 @@ export class ShipBoardingController {
 
   private beginDisembark() {
     if (!this.resolveExitSpot()) {
-      this.flashPrompt('Sem chão firme para desembarcar aqui')
+      this.flashPrompt('No solid ground to step out onto here')
       return
     }
     this.from.copy(this.engine.camera.position)
@@ -828,28 +828,28 @@ export class ShipBoardingController {
     const target = this.target
     if (!target?.sampleSurfaceRadius) return
     if (target.terrain.planetType === 'gas') {
-      this.flashPrompt('Atmosfera profunda — este gigante não tem solo para pousar')
+      this.flashPrompt('Deep atmosphere — this giant has no ground to land on')
       return
     }
     const readout = this.flight.getReadout()
     if (readout.clearance > LANDING_MAX_CLEARANCE_METERS) {
-      this.flashPrompt('Alto demais para pousar — desça mais')
+      this.flashPrompt('Too high to land — descend further')
       return
     }
     if (readout.speed > LANDING_MAX_SPEED) {
-      this.flashPrompt('Rápido demais para pousar — reduza com S')
+      this.flashPrompt('Too fast to land — slow down with S')
       return
     }
     const direction = this.landingDirection.copy(this.flight.getLocalPosition()).normalize()
     if (target.sampleSurfaceRadius(direction) < (target.seaRadius ?? 0)) {
-      this.flashPrompt('Oceano abaixo — procure terra firme para pousar')
+      this.flashPrompt('Ocean below — find solid ground to land on')
       return
     }
     const slope = surfaceSlopeDegrees(
       target.sampleSurfaceRadius, direction, Math.max(this.ship.size.z, 1),
     )
     if (slope > LANDING_MAX_SLOPE_DEGREES) {
-      this.flashPrompt(`Terreno inclinado demais (${slope.toFixed(0)}°)`)
+      this.flashPrompt(`Slope too steep (${slope.toFixed(0)}°)`)
       return
     }
     this.beginLanding(direction, target.sampleSurfaceRadius(direction))
@@ -996,25 +996,25 @@ export class ShipBoardingController {
       return
     }
     let text = ''
-    if (this.mode === 'walking' && this.isWithinBoardingRange()) text = 'E — Entrar na nave'
+    if (this.mode === 'walking' && this.isWithinBoardingRange()) text = 'E — Board ship'
     else if (this.mode === 'piloting') {
       // The charge is shown as it fills, so holding W reads as spinning the
       // engines up rather than as a key that took a while to register.
       text = this.takeoffCharge > 0.05
-        ? `Propulsores ${Math.round(Math.min(1, this.takeoffCharge / TAKEOFF_HOLD_SECONDS) * 100)}%`
-        : 'E — Sair da nave     W (segurar) — Decolar'
-    } else if (this.mode === 'takingOff') text = 'Decolando'
-    else if (this.mode === 'landing') text = 'Pousando'
+        ? `Thrusters ${Math.round(Math.min(1, this.takeoffCharge / TAKEOFF_HOLD_SECONDS) * 100)}%`
+        : 'E — Leave ship     W (hold) — Take off'
+    } else if (this.mode === 'takingOff') text = 'Taking off'
+    else if (this.mode === 'landing') text = 'Landing'
     else if (this.mode === 'flying' && !this.pointerLocked) {
-      text = 'Clique para retomar o controle'
+      text = 'Click to take back control'
     } else if (this.mode === 'flying' && this.isFreeLooking()) {
-      text = 'Olhando ao redor — solte Alt para voltar ao manche'
+      text = 'Looking around — release Alt to return to the stick'
     } else if (this.mode === 'flying') {
       const readout = this.flight.getReadout()
       const canLand = this.target?.terrain.planetType !== 'gas' && readout.clearance <= LANDING_MAX_CLEARANCE_METERS
         && readout.speed <= LANDING_MAX_SPEED
       text = canLand
-        ? `E — Pousar     ${readout.speed.toFixed(0)} m/s`
+        ? `E — Land     ${readout.speed.toFixed(0)} m/s`
         : `${readout.speed.toFixed(0)} m/s     ${readout.clearance.toFixed(0)} m`
     }
     if (text === this.promptText) return

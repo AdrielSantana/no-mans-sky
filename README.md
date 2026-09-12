@@ -46,7 +46,7 @@ Os caminhos de geração estão em `server/spacetime.json`, conforme a [configur
 - C: chamar a nave; E: embarcar ou sair quando pousada.
 - Na nave: segurar W para decolar; W/S controlam potência; mouse dirige; A/D rolam; Alt permite olhar ao redor.
 - E durante voo: pousar, se estiver baixo e devagar, sobre terra firme com inclinação aceitável.
-- H: alternar caminhada/câmera livre; V: wireframe de desenvolvimento.
+- H: alternar caminhada/câmera livre, só no editor (`?editor`); no mundo multiplayer a tecla não faz nada. V: wireframe de desenvolvimento.
 - Enter: abrir o chat; Enter envia, Esc fecha, Tab troca de canal. Enquanto o chat está aberto o jogo não recebe teclas e devolve o mouse; ao fechar, retoma os dois.
 
 ## Chat
