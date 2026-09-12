@@ -13,6 +13,7 @@ import { MINERAL_WORLD } from '../../../server/spacetimedb/src/shared/world-cata
 import type { PlanetSettings } from '../../../server/spacetimedb/src/shared/world-settings'
 import { samplePlanetRadius } from '../../../server/spacetimedb/src/shared/planet-terrain'
 import { planetSunlightFactor, atmosphereDepthAt } from './planet-sunlight'
+import { textEntry } from './text-entry'
 
 export class CelestialSystem {
   readonly walkerController: PlanetWalkerController
@@ -36,7 +37,7 @@ export class CelestialSystem {
   private joiningPeer = false
   private wireframe = false
   private onKeyDown = (event: KeyboardEvent) => {
-    if (event.code !== 'KeyV' || event.repeat) return
+    if (textEntry.active || event.code !== 'KeyV' || event.repeat) return
     this.wireframe = !this.wireframe
     for (const renderer of this.planetRenderers.values()) renderer.setDebugWireframe(this.wireframe)
   }

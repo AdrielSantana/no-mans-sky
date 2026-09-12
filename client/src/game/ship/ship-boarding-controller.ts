@@ -7,6 +7,7 @@ import { findLandingSite, surfaceSlopeDegrees } from './ship-landing-site'
 import { FlightFrame } from './flight-frame'
 import { ShipFlight } from './ship-flight'
 import { clampCameraAbovePlanet } from '../planet-camera'
+import { textEntry } from '../text-entry'
 import { samplePlanetRadius } from '../../../../server/spacetimedb/src/shared/planet-terrain'
 
 /**
@@ -205,6 +206,7 @@ export class ShipBoardingController {
     this.refreshFreeLook()
   }
   private readonly onMouseMove = (event: MouseEvent) => this.handleMouseMove(event)
+  private stopTextEntry: () => void
 
   constructor(
     engine: GameEngine,
@@ -226,6 +228,14 @@ export class ShipBoardingController {
     // stick went dead with no way to revive it.
     this.engine.getDomElement().addEventListener('click', this.onCanvasClick)
     document.addEventListener('pointerlockchange', this.onPointerLockChange)
+    // A throttle left open while the player types would keep accelerating with
+    // nothing on screen explaining why, so the stick and the keys both let go.
+    this.stopTextEntry = textEntry.subscribe(active => {
+      if (!active) return
+      this.held.clear()
+      this.reticle.set(0, 0)
+      this.refreshFreeLook()
+    })
     this.pointerLocked = document.pointerLockElement === this.engine.getDomElement()
     this.prompt = this.createPrompt()
     this.reticleElement = this.createReticle()
@@ -288,6 +298,7 @@ export class ShipBoardingController {
   }
 
   dispose() {
+    this.stopTextEntry()
     window.removeEventListener('keydown', this.onKeyDown)
     window.removeEventListener('keyup', this.onKeyUp)
     window.removeEventListener('mousemove', this.onMouseMove)
@@ -301,6 +312,7 @@ export class ShipBoardingController {
   }
 
   private handleKeyDown(event: KeyboardEvent) {
+    if (textEntry.active) return
     this.held.add(event.code)
     this.refreshFreeLook()
     if (event.repeat) return

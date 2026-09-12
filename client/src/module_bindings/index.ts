@@ -35,6 +35,7 @@ import {
 
 // Import all reducer arg schemas
 import RefreshCatalogueReducer from "./refresh_catalogue_reducer";
+import SendChatReducer from "./send_chat_reducer";
 import SetNameReducer from "./set_name_reducer";
 import SyncStateReducer from "./sync_state_reducer";
 
@@ -42,6 +43,7 @@ import SyncStateReducer from "./sync_state_reducer";
 
 // Import all table schema definitions
 import CelestialBodyRow from "./celestial_body_table";
+import ChatMessageRow from "./chat_message_table";
 import ExplorerStateRow from "./explorer_state_table";
 import PlanetAppearanceRow from "./planet_appearance_table";
 import PlanetParamsRow from "./planet_params_table";
@@ -63,6 +65,20 @@ const tablesSchema = __schema({
       { name: 'celestial_body_id_key', constraint: 'unique', columns: ['id'] },
     ],
   }, CelestialBodyRow),
+  chatMessage: __table({
+    name: 'chat_message',
+    indexes: [
+      { accessor: 'chat_message_channel', name: 'chat_message_channel_idx_btree', algorithm: 'btree', columns: [
+        'channel',
+      ] },
+      { accessor: 'id', name: 'chat_message_id_idx_btree', algorithm: 'btree', columns: [
+        'id',
+      ] },
+    ],
+    constraints: [
+      { name: 'chat_message_id_key', constraint: 'unique', columns: ['id'] },
+    ],
+  }, ChatMessageRow),
   explorerState: __table({
     name: 'explorer_state',
     indexes: [
@@ -127,6 +143,7 @@ const tablesSchema = __schema({
 /** The schema information for all reducers in this module. This is defined the same way as the reducers would have been defined in the server, except the body of the reducer is omitted in code generation. */
 const reducersSchema = __reducers(
   __reducerSchema("refresh_catalogue", RefreshCatalogueReducer),
+  __reducerSchema("send_chat", SendChatReducer),
   __reducerSchema("set_name", SetNameReducer),
   __reducerSchema("sync_state", SyncStateReducer),
 );

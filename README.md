@@ -47,6 +47,15 @@ Os caminhos de geração estão em `server/spacetime.json`, conforme a [configur
 - Na nave: segurar W para decolar; W/S controlam potência; mouse dirige; A/D rolam; Alt permite olhar ao redor.
 - E durante voo: pousar, se estiver baixo e devagar, sobre terra firme com inclinação aceitável.
 - H: alternar caminhada/câmera livre; V: wireframe de desenvolvimento.
+- Enter: abrir o chat; Enter envia, Esc fecha, Tab troca de canal. Enquanto o chat está aberto o jogo não recebe teclas e devolve o mouse; ao fechar, retoma os dois.
+
+## Chat
+
+Três canais, um por alcance. **Global** vale para o sistema inteiro. **Corpo celeste** alcança quem está no mesmo mundo — a partir de um raio acima da superfície, e as órbitas do catálogo são distantes o bastante para que as faixas não se sobreponham. **Local** alcança 1,2 km em volta de quem falou.
+
+`chat_message` guarda a origem de cada mensagem no referencial de quem a enviou, a mesma convenção das poses: escrita no referencial do planeta, a conversa fica no chão enquanto o mundo gira. A distância do canal local é resolvida em cada cliente, e é isso que faz dois exploradores lado a lado se ouvirem quando um está a pé no referencial do planeta e o outro sentado na nave no referencial do mundo.
+
+O servidor valida canal, lugar e tamanho (240 caracteres), e assina remetente e horário. O histórico é cortado em 80 mensagens por canal e lugar: é esse limite que torna barato assinar a tabela inteira. Sem tela de nomes, todos são `Explorer`; o cliente mostra o fim da identidade ao lado do nome para distinguir quem fala.
 
 Mineral Dawn conserva as escarpas, microrelevo, vegetação por habitat e props estáveis entre LODs. Véu de Gelo tem vales glaciais, plataformas fraturadas, neve e gelo azul, sem vegetação terrestre. Íris é um gigante gasoso com faixas e vórtice em movimento, sem solo pousável; a assistência de voo limita o mergulho nas camadas profundas.
 

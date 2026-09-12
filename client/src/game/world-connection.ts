@@ -1,10 +1,12 @@
 import { DbConnection } from '../module_bindings'
 import type { CelestialSystem } from './celestial-system'
+import { ChatStore } from './chat'
 import { RemoteExplorers } from './remote-explorers'
 
 export class WorldConnection {
   connection: DbConnection | null = null
   readonly remotes: RemoteExplorers
+  readonly chat: ChatStore
   private stopped = false
   private ready = false
   private retry: ReturnType<typeof setTimeout> | undefined
@@ -27,6 +29,7 @@ export class WorldConnection {
     const slot = new URLSearchParams(location.search).get('explorer') ?? 'default'
     this.tokenKey = `nms:${this.uri}:${this.database}:${slot}`
     this.remotes = new RemoteExplorers(system)
+    this.chat = new ChatStore(system)
     this.connect()
     this.interval = setInterval(() => this.tick(), 100)
   }
@@ -85,6 +88,9 @@ export class WorldConnection {
     if (signature !== this.signature) { this.system.sync(bodies, appearances, clocks); this.signature = signature }
     const players = [...connection.db.player.iter()]
     this.remotes.sync([...connection.db.explorerState.iter()], players, connection.identity?.toHexString() ?? '')
+    // Also on the tick, not only on row changes: the local channel's earshot and
+    // the body channel's world both move with the player.
+    this.chat.sync(connection)
     const count = players.filter(p => p.connected).length
     const status = `${count} ${count === 1 ? 'explorador online' : 'exploradores online'}`
     if (this.status !== status) this.report(status)

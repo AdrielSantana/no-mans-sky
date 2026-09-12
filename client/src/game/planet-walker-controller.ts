@@ -13,6 +13,7 @@ import { normalize, scale, type Vec3Like } from '../../../server/spacetimedb/src
 import { samplePlanetRadius, type PlanetTerrainParams } from '../../../server/spacetimedb/src/shared/planet-terrain'
 import { clampCameraAbovePlanet } from './planet-camera'
 import { atmosphereDepthAt } from './planet-sunlight'
+import { textEntry } from './text-entry'
 
 export interface PlanetWalkerTarget {
   id: string
@@ -103,6 +104,8 @@ export class PlanetWalkerController {
   private readonly onMouseMove = (event: MouseEvent) => this.handleMouseMove(event)
   private readonly onClick = () => this.handleClick()
 
+  private stopTextEntry: () => void
+
   constructor(engine: GameEngine) {
     this.engine = engine
     this.avatar = new PlayerAvatar(engine.scene)
@@ -110,6 +113,14 @@ export class PlanetWalkerController {
     window.addEventListener('keyup', this.onKeyUp)
     window.addEventListener('mousemove', this.onMouseMove)
     this.engine.getDomElement().addEventListener('click', this.onClick)
+    // Whatever was held when the player started typing is released here: the
+    // keyup lands on the chat input, and a walk that never ends is worse than a
+    // step lost.
+    this.stopTextEntry = textEntry.subscribe(active => {
+      if (!active) return
+      this.keys.clear()
+      this.pendingJumpRequest = false
+    })
   }
 
   setTargets(targets: PlanetWalkerTarget[]) {
@@ -283,6 +294,7 @@ export class PlanetWalkerController {
   dispose() {
     this.disable()
     this.avatar.dispose()
+    this.stopTextEntry()
     window.removeEventListener('keydown', this.onKeyDown)
     window.removeEventListener('keyup', this.onKeyUp)
     window.removeEventListener('mousemove', this.onMouseMove)
@@ -290,6 +302,7 @@ export class PlanetWalkerController {
   }
 
   private handleKeyDown(event: KeyboardEvent) {
+    if (textEntry.active) return
     if (event.code === 'KeyH' && !event.repeat && this.toggleAllowed) {
       if (this.enabled) {
         this.disable()

@@ -29,6 +29,20 @@ export const CelestialBody = __t.object("CelestialBody", {
 });
 export type CelestialBody = __Infer<typeof CelestialBody>;
 
+export const ChatMessage = __t.object("ChatMessage", {
+  id: __t.u64(),
+  channel: __t.string(),
+  scope: __t.string(),
+  senderIdentity: __t.identity(),
+  senderName: __t.string(),
+  body: __t.string(),
+  x: __t.f64(),
+  y: __t.f64(),
+  z: __t.f64(),
+  sentAt: __t.timestamp(),
+});
+export type ChatMessage = __Infer<typeof ChatMessage>;
+
 export const ExplorerState = __t.object("ExplorerState", {
   identity: __t.identity(),
   mode: __t.string(),

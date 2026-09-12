@@ -65,5 +65,35 @@ export const explorerState = table({ name: 'explorer_state', public: true }, {
   identity: t.identity().primaryKey(), mode: t.string(), playerPose: pose,
   shipPose: pose, speed: t.f32(), grounded: t.bool(), updatedAt: t.timestamp(),
 });
-const spacetimedb = schema({ player, celestialBody, planetParams, planetAppearance, worldClock, explorerState });
+/**
+ * One row per message, in three channels: `global` (the whole system), `body`
+ * (everyone at one celestial body) and `local` (everyone within earshot).
+ *
+ * `scope` is the reference frame the origin is written in, exactly as in Pose:
+ * a celestial body id, or `space`. `global` has no place and leaves it empty.
+ * The origin only matters to `local`, and it stays a per-client question: two
+ * explorers standing together can be in different frames -- one on foot in the
+ * planet's frame, one sitting in a ship in the world's -- so the distance is
+ * resolved where both poses are already known, at render time.
+ */
+export const chatMessage = table(
+  {
+    name: 'chat_message',
+    public: true,
+    // Single column on purpose: multi-column index filters are broken in 2.1.0.
+    indexes: [{ accessor: 'chat_message_channel', algorithm: 'btree', columns: ['channel'] }],
+  },
+  {
+    id: t.u64().primaryKey().autoInc(),
+    channel: t.string(),
+    scope: t.string(),
+    senderIdentity: t.identity(),
+    senderName: t.string(),
+    body: t.string(),
+    x: t.f64(), y: t.f64(), z: t.f64(),
+    sentAt: t.timestamp(),
+  }
+);
+
+const spacetimedb = schema({ player, celestialBody, planetParams, planetAppearance, worldClock, explorerState, chatMessage });
 export default spacetimedb;
