@@ -252,6 +252,151 @@ diferença média, *maior* que o "novo vs antigo". A sombra de nuvem varre área
 grandes do terreno entre uma foto e outra. Um teste cujo piso é maior que o
 efeito não diz que o efeito é pequeno, diz que o teste está cego.
 
+### Etapa 5: reprodução independente e dependência da pose — 2026-09-12
+
+**O passo 0 reproduziu o ganho dentro do ruído: 6,87 ms contra 7,18 ms.**
+Mesmo commit `b548dbc`, Chrome separado com perfil temporário e as quatro
+flags anti-throttling, Apple M5/ANGLE Metal, canvas 1470×737, DPR 1, planeta
+rochoso seed 67. `prepare({ plateauMs: 10000, timeoutMs: 600000 })` escolheu a
+pose padrão e assentou em 132,6 s, com 468 draws e filas vazias.
+
+Primeiro rodou só o controle: **0,03 ms**, dispersão 1,10 ms, ordens
++0,10/−0,03. Depois `priceVariants({ keys: ['control', 'revertBoth'],
+repeats: 6, frames: 180, recompileMs: 2200 })`, com uma única linha de
+instrumentação depois de `diffs.push`: guardar os valores locais `base` e
+`cut`. Amostragem, warmup, ordem e estatística do harness original intactos.
+
+| passo 0 | ganho assinado do harness | dispersão | variante 1º / baseline 1º |
+|---|---|---|---|
+| controle da rodada | +0,12 ms | 1,00 ms | +0,03 / +0,20 |
+| `revertBoth` | **−6,87 ms** | 2,40 ms | −7,40 / −6,33 |
+
+As seis diferenças da reversão foram −7,40, −7,30, −7,90, −5,50, −6,90 e
+−6,20 ms. Os 468 draws se mantiveram; nenhum programa quebrado, troca de
+planeta, queda do walker ou mudança de DPR. O piso desta rodada é 1,00 ms;
+a distância para o resultado anterior é 0,31 ms. Médias das medianas dos seis
+pares: **32,58 → 25,72 ms**. Isso reproduz o efeito, sem exigir igualdade de
+frames absolutos entre sessões.
+
+#### Método das poses
+
+`client/scripts/far-pose-study.js` mantém as mesmas variantes far e seis pares
+contrabalanceados, registra **os dois lados de cada par**, draws por frame,
+triângulos, câmera e filas. Interrompe antes de `revertBoth` se o módulo da
+média do controle passar de 0,50 ms. Dispersão continua sendo máximo menos
+mínimo das diferenças pareadas; piso é o maior entre dispersão e módulo da
+média do controle. Um efeito que não supera esse piso não é um ganho medido.
+
+Cada pose nova passa por pelo menos 200 s de assentamento, filas vazias e
+janela recente de pelo menos 10 s com draws estáveis e oscilação de frame
+limitada a `max(1 ms, 6%)`. A janela é móvel: o mínimo global do `prepare`
+antigo pode ter vindo do início do carregamento, quando faltava geometria, e
+não garante sozinho um platô posterior.
+
+Na reprodução, a guarda de 300 draws funciona. No vale olhando para baixo,
+uma cena válida tem 256 draws; em órbita, o walker deve estar desligado. Para
+essas poses, a guarda é explícita: mesmo planeta e controlador, modo da câmera
+esperado, DPR/resolução constantes e estabilidade de draws dentro da pose.
+Não se usa uma queda legítima de draws para fingir que a cena ainda é a padrão.
+
+Cobertura é **estimativa geométrica**, rasterizada em 368×185 com as malhas e
+vertex shaders visíveis do terreno, teste de profundidade e faixas de distância
+à câmera. O denominador é o canvas inteiro. Não desconta oclusão por props,
+avatar, oceano, nuvens, atmosfera ou painel do editor; não conta overdraw nem
+pretende medir invocações do fragment shader. Informa separadamente material
+far, >600 m e >1.200 m. A pose padrão deu 4,74% do canvas além de 600 m e
+0% além de 1.200 m, com 9,86% coberto por materiais far.
+
+**Correção da hipótese:** a mudança não começa inteira em 600 m. A rampa
+atua de 600 a 1.200 m, mas a amostra única também reduz o conjunto far usado
+no crossfade de 180–600 m. Além disso, `revertBoth` só altera
+`farLodMaterials`; não reverte os materiais near e fallback, embora o commit
+tenha mudado o GLSL compartilhado dos três. As quatro primeiras poses abaixo
+medem o mesmo recorte da Etapa 4; órbita exige a comparação adicional descrita
+depois da tabela.
+
+#### Resultados por pose
+
+Todos os tempos em ms. **Atual** é o código de `b548dbc`; **revertido** é o
+mesmo frame com as duas peças revertidas no material testado. As colunas de
+frame são médias das medianas dos seis pares, não uma amostra tirada depois.
+Ganho é o sinal invertido de `revertBoth`; não foi corrigido subtraindo controle.
+
+| pose | atual | revertido | ganho | dispersão | piso da rodada | terreno >600 m, estimado |
+|---|---|---|---|---|---|---|
+| vale, olhando para baixo | 16,63 | 16,65 | 0,02 — desprezível | 0,20 | 0,20 | 0,00% |
+| superfície plana | 21,95 | 25,93 | **3,98** | 0,70 | 0,20 | 0,00% |
+| crista, olhando o horizonte | 17,78 | 21,48 | **3,70** | 0,80 | 0,70 | 3,30% |
+| sobrevoo a 55 m/s, altura 80 m | 17,73 | 21,52 | **3,78**, com streaming | 0,80 | 0,50 | 7,87% início / 16,30% fim |
+| órbita, material fallback | 16,65 | 16,68 | 0,03 — desprezível | 0,10 | 0,10 | 27,61% |
+
+| pose | controle assinado | ganho assinado: variante 1º / baseline 1º | draws | assentamento |
+|---|---|---|---|---|
+| vale | +0,02 | 0,00 / −0,03 | 256 | 200,3 s |
+| plana | −0,02 | −4,00 / −3,97 | 360 | 201,8 s |
+| crista | +0,10 | −3,80 / −3,60 | 330 | 220,3 s |
+| sobrevoo | +0,05 | −3,60 / −3,97 | 215–434 na reversão | 227,3 s no início |
+| órbita, fallback | −0,07 | −0,03 / −0,03 | 43 | 200,8 s |
+
+As poses de terra foram escolhidas por amostragem numa região de ±6 km da
+pose padrão. Comparando com oito pontos num anel de 500 m: o vale está 72,65 m
+abaixo da média e a crista 125,14 m acima; na plana, a variação entre os oito
+pontos é 17,72 m. Direções, yaw, pitch e câmeras de cada par estão no arquivo
+de resultados. O vale tem uma árvore no primeiro plano, confirmada na captura;
+não é uma vista limpa para avaliar qualidade visual.
+
+**O voo é uma leitura com streaming, não uma ablação de geometria constante.**
+É um trajeto de câmera em círculo máximo, velocidade tangencial nominal de
+55 m/s, 80 m acima do terreno amostrado, seis segundos por metade do par
+(~330 m). Reinicia a mesma rota depois do warmup, em vez de medir 180 frames
+e deixar o lado mais lento viajar mais longe. O assentamento é no ponto de
+partida; durante o trajeto, voltam a existir filas e a geometria muda. O
+controle e as ordens fecham, mas não isolam quanto dos 3,78 ms veio do shader
+e quanto da interação com o streaming. A cobertura é dos dois extremos, não
+uma média temporal. Na conferência de resolução, >600 m deu 7,866% em
+368×185 e 7,889% em 736×369; isso valida a discretização, não as oclusões
+omitidas pelo estimador.
+
+**A primeira leitura de órbita não testava o material visível.** A 37,5 km
+de altitude, há só uma malha de terreno visível: a esfera de fallback.
+Reverter só `farLodMaterials` deu 0,00 ms, dispersão 0,20, mas esses materiais
+não cobriam pixel nenhum. Esse resultado foi guardado, sem ser usado como
+medição do corte em órbita. Na comparação adicional, a mesma `priceVariants`
+original recebeu `[planet.fallbackMaterial]`, a guarda passou a exigir
+walker desligado e 43 draws, e o recorder guardou `base`/`cut` depois de cada
+par. Controle e `revertBoth`, seis repetições, mesma amostragem e ordem. Deu
+os 0,03 ms da tabela, com 43 draws, 55.100 triângulos e nenhum programa
+quebrado. O harness novo seleciona fallback automaticamente em órbita e
+também aceita `pricePose({ materialScope: 'fallback' })` explicitamente, para
+repetir essa comparação sem remendar a lista de materiais.
+
+#### O que a hipótese acertou, e o que ficou sem medir
+
+O ganho depende da pose, mas **a fração visível além de 600 m não o explica
+sozinha**. A plana economizou 3,98 ms com 0% de material far na imagem do
+estimador; a crista tem terreno distante visível e economizou 3,70 ms. A
+maior economia observada continua sendo a pose padrão, 6,87 ms. Não apareceu
+o ranking presumido de que o horizonte necessariamente ganharia mais.
+
+O custo de fragmentos que acabam ocultos é um próximo candidato a isolar:
+contar só os pixels que sobrevivem ao teste de profundidade não conta todo
+o trabalho rasterizado. O terreno é `DoubleSide` e usa profundidade
+logarítmica, mas esta rodada **não isolou overdraw nem rejeição antecipada de
+fragmentos**; isso é hipótese de investigação, não diagnóstico fechado.
+
+Também ficaram sem medir o material near do commit completo, o custo de GPU
+abaixo do limite de apresentação de ~60 Hz no vale/órbita, o impacto visual
+nas poses novas e o termo fixo de ~14 ms. Nenhum corte adicional de qualidade
+foi aplicado com base nestas leituras.
+
+Dados dos pares e trajetórias:
+[`client/scripts/results/far-pose-study-2026-09-12.json`](client/scripts/results/far-pose-study-2026-09-12.json).
+Validação: controles nas próprias rodadas, seis pares por alvo, conferência
+das médias/dispersões a partir dos pares, verificação de sintaxe do harness e
+comparação da cobertura em duas resoluções.
+
+**O ganho de frame é desprezível no vale olhando para baixo e nesta órbita.**
+
 ### Carregamento de chunk: o que mudou e o que foi refutado
 
 Promoção incremental por quadrante entrou em `6496c55`. O portão de irmãos em
@@ -1359,7 +1504,8 @@ import('/scripts/<arquivo>')).<função>()`. Todos leem `window.__nmsEditorDebug
 | `glsl-survey.mjs` | `node client/scripts/glsl-survey.mjs` | levantamento estático: grafo de chamadas a partir do `main()` do fragmento far, com desvios respeitados. Roda no fonte, imune a carga de máquina, e é o único que enxerga bloco incluído mas nunca alcançado. |
 | `far-block-costs.js` | `prepare`, `runFarBlockCosts` | custo por bloco GLSL, pareado e intercalado, com controle que recompila sem mudar trabalho. `prepare` é separado porque assentar leva minutos e o eval do CDP tem timeout. |
 | `far-cut-pricing.js` | `priceCuts` | preço de cada corte concreto, não do bloco inteiro. Aborta se o trecho a reescrever não existe mais -- um `replace` que não casa devolve a fonte intacta e reporta o ruído como ganho. |
-| `far-band-variants.js` | `priceVariants`, `applyVariant`, `restoreVariant` | variantes da faixa far com **ordem de par contrabalanceada** e `porOrdem` no resultado; é o único harness aqui cujo controle fecha em zero. Tem também as variantes inversas, para medir uma mudança já commitada revertendo-a. `applyVariant` existe para segurar uma variante parada e fotografar. |
+| `far-band-variants.js` | `priceVariants`, `applyVariant`, `restoreVariant` | variantes da faixa far com **ordem de par contrabalanceada**, `porOrdem` no resultado e controle na própria rodada. Tem também as variantes inversas, para medir uma mudança já commitada revertendo-a. `applyVariant` existe para segurar uma variante parada e fotografar. |
+| `far-pose-study.js` | `findPoses`, `setPose`, `settle`, `pricePose`, `coverage`, `restoreStudy` | comparação por pose com seis pares, guarda de cena, controle que interrompe a rodada, rota a 55 m/s e cobertura geométrica por distância. Seleciona material fallback em órbita. Dados e limitações na Etapa 5 da 0f. |
 | `pngdiff.mjs` (scratchpad) | `node pngdiff.mjs a.png b.png` | diff de pixel sem biblioteca de imagem -- decodifica PNG de 8 bits com o `zlib` do Node. Esta máquina não tem PIL, numpy nem ImageMagick. Congele `planet.cloudSpeed` antes de usar. |
 | `shader-ablation.js` | `runFarShaderAblation` | custo do fragment shader far, com draws e triângulos controlados e guarda de programa quebrado. |
 | `shader-probe.js` | `probeTerrainShaders` | contagem de operações por shader — para escolher o que ablacionar antes de gastar uma rodada. |
