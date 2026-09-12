@@ -183,6 +183,75 @@ se comporta de outro jeito, e a reescala subestimou por 2×. A amplificação
 continua útil para **ordenar** alvos; o valor absoluto tem de sair do DPR em que
 se quer a resposta.
 
+### Etapa 4: o corte que entrou — 2026-09-12
+
+Duas mudanças em `TERRAIN_TEXTURE_GLSL`, as duas dentro do material de terreno
+e nenhuma nova uniform:
+
+1. **`farAmount` sai por rampa.** Era `uTextureBlend * 0.42` fixo em qualquer
+   distância; agora decai por `smoothstep(detailEnd, detailEnd * 2.0,
+   cameraDistance)` e a faixa far pula os fetches quando sobra menos de 0,002
+   de mistura. `detailEnd` é `uTextureNearDistance + uTextureFadeDistance` — o
+   mesmo ponto onde o crossfade de perto termina — então a rampa começa
+   exatamente onde a outra acaba, e acompanha as uniforms se alguém mexer
+   nelas.
+2. **Uma amostra em vez de duas nas bandas far.** `sampleTerrainTexture`
+   retorna depois do primeiro `textureGrad` quando `scaleMultiplier <
+   DECORRELATE_SCALE_MIN` (0,5 — entre o 0,14 da faixa far e o 1,0 da de
+   perto). A segunda amostra existe para descorrelacionar ladrilho, e ladrilho
+   é artefato de perto.
+
+**Por que não o corte de 9,7 ms da Etapa 3.** Devolver `baseColor` no desvio
+derruba a mistura de ~0,20 para 0 num único passo. As duas metades hoje se
+encontram em `blend(baseColor, farTex, farAmount)`, então aquele corte poria um
+anel visível no chão em 600 m. A rampa pega a maior parte do ganho sem a
+emenda.
+
+#### Medido ao contrário: o código novo é o baseline
+
+DPR 1, walker assentado, 468 draws, 6 repetições com **ordem
+contrabalanceada**, cada variante revertendo uma peça do que entrou:
+
+| revertido | economiza | dispersão | variante 1º / baseline 1º |
+|---|---|---|---|
+| as duas peças | **7,18 ms** | 1,0 | −7,07 / −7,30 |
+| só a rampa | 3,43 ms | 1,5 | −3,67 / −3,20 |
+| só a amostra única | 0,88 ms | 0,7 | −0,97 / −0,80 |
+| controle | 0,17 ms | 1,1 | −0,10 / −0,23 |
+
+As duas ordens concordam em todas as linhas, o que é o sinal de que o resultado
+é o efeito e não a deriva. Medido no sentido oposto (a mesma transformação
+aplicada por cima do código antigo) deu 7,83 ms, então os dois sentidos fecham
+dentro de 0,65 ms. **Frame 29,9 → 22,7 ms, 33,4 → 44,1 fps.**
+
+**As peças não somam, e isso é informação:** 3,43 + 0,88 = 4,31, não 7,18. Com
+a rampa desligada, tirar a segunda amostra vale 3,75 ms; com a rampa ligada
+vale 0,88, porque a rampa já eliminou os fragmentos que pagariam por ela. A
+segunda peça é pequena por si e fica porque não custa nada visualmente — quem
+quiser simplificar, é ela que sai.
+
+#### O que a mudança faz na tela
+
+Diff de pixel em DPR 2 (2940×1474), **com as nuvens congeladas**
+(`planet.cloudSpeed = 0`), medindo a diferença máxima por canal por pixel:
+
+| par | dif. média | % de pixels > 8 níveis |
+|---|---|---|
+| piso: novo vs novo | 0,395 / 0,559 | 0,98% / 1,72% |
+| **novo vs antigo** | **0,407 / 0,351** | **1,07% / 0,51%** |
+
+A mudança cai dentro do piso: a oscilação da própria cena entre dois frames
+iguais move mais pixel do que a edição. Isso é "não separável nesta câmera",
+não "idêntico" — a vista tem muita areia de perto e o painel do editor cobre um
+terço do quadro. Uma vista aberta para o horizonte é onde daria para ver, e o
+ganho lá também é maior que os 7,18 ms medidos aqui.
+
+**A primeira tentativa desse diff não mediu nada e quase passou por
+resultado:** sem congelar as nuvens, o piso "novo vs novo" deu 13 e 27 de
+diferença média, *maior* que o "novo vs antigo". A sombra de nuvem varre áreas
+grandes do terreno entre uma foto e outra. Um teste cujo piso é maior que o
+efeito não diz que o efeito é pequeno, diz que o teste está cego.
+
 ### Carregamento de chunk: o que mudou e o que foi refutado
 
 Promoção incremental por quadrante entrou em `6496c55`. O portão de irmãos em
@@ -248,10 +317,18 @@ Somam-se às da 0d.
    ligados ele chegou a 18,5 ms; numa tabela de ablação daquele dia só a
    primeira linha significava alguma coisa. Marque as outras como ruído em vez
    de as interpretar.
-5. **Stub de shader que reescreve a definição da função quebra a compilação** —
+5. **Ordem fixa num par A/B mede a deriva como se fosse o efeito.** Medindo
+   todo repeat como (variante, baseline), o controle — que recompila e não muda
+   trabalho nenhum — deu +1,2 ms numa rodada e +3,6 ms na seguinte, e uma
+   variante virou de +3,4 para −4,6 entre as duas. Quem mede em segundo herda a
+   deriva. Alterne a ordem entre repetições (ABBA), use número par delas, e
+   continue medindo o controle: ele é a checagem de que o cancelamento
+   funcionou. Depois disso o controle ficou em 0,17 ms e as duas ordens passaram
+   a concordar em todas as linhas.
+6. **Stub de shader que reescreve a definição da função quebra a compilação** —
    e aí todas as ablações "ganham" exatamente o mesmo tanto. Pule as ocorrências
    precedidas de tipo de retorno e valide a contagem de programas.
-6. **`probeSurfaceGaps` não enxerga fenda de T-junction.** Ele pergunta "existe
+7. **`probeSurfaceGaps` não enxerga fenda de T-junction.** Ele pergunta "existe
    chunk visível aqui", e numa fenda existe. Reportou 0 buracos no mesmo dia em
    que o Adriel viu buracos na tela. Para rachadura de borda o teste é
    `runStitchMaskChecks`, que compara o que o vizinho é informado, não o que a
@@ -1282,6 +1359,8 @@ import('/scripts/<arquivo>')).<função>()`. Todos leem `window.__nmsEditorDebug
 | `glsl-survey.mjs` | `node client/scripts/glsl-survey.mjs` | levantamento estático: grafo de chamadas a partir do `main()` do fragmento far, com desvios respeitados. Roda no fonte, imune a carga de máquina, e é o único que enxerga bloco incluído mas nunca alcançado. |
 | `far-block-costs.js` | `prepare`, `runFarBlockCosts` | custo por bloco GLSL, pareado e intercalado, com controle que recompila sem mudar trabalho. `prepare` é separado porque assentar leva minutos e o eval do CDP tem timeout. |
 | `far-cut-pricing.js` | `priceCuts` | preço de cada corte concreto, não do bloco inteiro. Aborta se o trecho a reescrever não existe mais -- um `replace` que não casa devolve a fonte intacta e reporta o ruído como ganho. |
+| `far-band-variants.js` | `priceVariants`, `applyVariant`, `restoreVariant` | variantes da faixa far com **ordem de par contrabalanceada** e `porOrdem` no resultado; é o único harness aqui cujo controle fecha em zero. Tem também as variantes inversas, para medir uma mudança já commitada revertendo-a. `applyVariant` existe para segurar uma variante parada e fotografar. |
+| `pngdiff.mjs` (scratchpad) | `node pngdiff.mjs a.png b.png` | diff de pixel sem biblioteca de imagem -- decodifica PNG de 8 bits com o `zlib` do Node. Esta máquina não tem PIL, numpy nem ImageMagick. Congele `planet.cloudSpeed` antes de usar. |
 | `shader-ablation.js` | `runFarShaderAblation` | custo do fragment shader far, com draws e triângulos controlados e guarda de programa quebrado. |
 | `shader-probe.js` | `probeTerrainShaders` | contagem de operações por shader — para escolher o que ablacionar antes de gastar uma rodada. |
 | `surface-perf-checks.js` | `runSurfacePerf`, `runSurfaceAblation2` | ablação por grupo na superfície, com piso de ruído medido e assentamento por platô de frame time. |

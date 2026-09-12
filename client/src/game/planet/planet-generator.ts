@@ -187,6 +187,9 @@ uniform float uTextureDetailScale;
 uniform float uTextureFarScale;
 uniform float uTextureFarStrength;
 
+// Between the far band's scale multiplier (0.14) and the near one (1.0).
+const float DECORRELATE_SCALE_MIN = 0.5;
+
 vec2 terrainTextureUv(vec3 sphereDir, float scale) {
   vec3 n = normalize(sphereDir);
   vec3 a = abs(n);
@@ -240,6 +243,13 @@ vec3 sampleTerrainTexture(sampler2D tex, vec3 sphereDir, float materialScale, fl
   vec2 a = sin(vec2(3.0, 7.0) * (cell + 1.0)) * 13.0;
   vec2 b = sin(vec2(3.0, 7.0) * (cell + 2.0)) * 13.0;
   vec3 first = textureGrad(tex, uv + a, dx, dy).rgb;
+  // The second sample exists to decorrelate tiling, and tiling is a near-field
+  // artefact: the far bands stretch the texture ~7x (scaleMultiplier 0.14) and
+  // blend the result at ~20%, so nothing there can resolve the difference. It
+  // is also half of the fetches in this block, and the fetches are what the
+  // block costs -- 8 of them measured 12.4 ms of a 30 ms frame, against a
+  // 3.6 ms floor.
+  if (scaleMultiplier < DECORRELATE_SCALE_MIN) return first;
   vec3 second = textureGrad(tex, uv + b, dx, dy).rgb;
   return mix(first, second, smoothstep(0.15, 0.85, fract(field)));
 }
@@ -280,12 +290,17 @@ vec3 applyTerrainTexture(vec3 baseColor, vec3 sphereDir, float planetKind, float
   float bedFilter = 1.0 - smoothstep(0.5, 2.0, fwidth(bedPhase));
   baseColor *= 1.0 + sin(bedPhase) * 0.085 * rockMask * (1.0 - snowMask)
     * bedFilter * (1.0 - step(0.5, planetKind));
-  float detailFade = 1.0 - smoothstep(
-    uTextureNearDistance,
-    uTextureNearDistance + max(uTextureFadeDistance, 0.001),
-    cameraDistance
-  );
-  float farAmount = uTextureBlend * 0.42;
+  float detailEnd = uTextureNearDistance + max(uTextureFadeDistance, 0.001);
+  float detailFade = 1.0 - smoothstep(uTextureNearDistance, detailEnd, cameraDistance);
+  // Past the crossfade the far texture is a ~20% tonal blend of something
+  // stretched 7x: it stops resolving long before it stops being sampled. Ramp
+  // it out over that same span again and skip the fetches once it is gone.
+  // Starting exactly where detailFade ends is what keeps this continuous --
+  // the two branches already meet at blend(baseColor, farTex, farAmount), so
+  // dropping the blend to zero at the branch instead of ramping it would put a
+  // visible ring on the ground at detailEnd.
+  float farAmount = uTextureBlend * 0.42
+    * (1.0 - smoothstep(detailEnd, detailEnd * 2.0, cameraDistance));
 
   if (detailFade >= 0.999) {
     vec3 nearTex = sampleBiomeTexture(dir, coast, rockMask, snowMask, moisture, 1.0);
@@ -293,6 +308,7 @@ vec3 applyTerrainTexture(vec3 baseColor, vec3 sphereDir, float planetKind, float
   }
 
   if (detailFade <= 0.001) {
+    if (farAmount <= 0.002) return baseColor;
     vec3 farTex = sampleBiomeTexture(dir, coast, rockMask, snowMask, moisture, 0.14);
     return blendTerrainTexture(baseColor, farTex, farAmount);
   }
