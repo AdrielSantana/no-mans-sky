@@ -14,7 +14,7 @@ export class WorldConnection {
   private signature = ''
   private connectedAt = 0
   private generation = 0
-  private status = 'Conectando ao universo…'
+  private status = 'Connecting to the universe…'
   private readonly tokenKey: string
   private readonly uri = import.meta.env.VITE_SPACETIMEDB_URI ?? 'ws://127.0.0.1:3000'
   private readonly database = import.meta.env.VITE_SPACETIMEDB_DATABASE ?? 'no-mans-sky'
@@ -40,7 +40,7 @@ export class WorldConnection {
     if (this.stopped) return
     const generation = ++this.generation
     const retry = () => { if (generation === this.generation) this.reconnect() }
-    this.report('Conectando ao universo…')
+    this.report('Connecting to the universe…')
     this.connectedAt = Date.now()
     this.connection = DbConnection.builder().withUri(this.uri).withDatabaseName(this.database)
       .withToken(sessionStorage.getItem(this.tokenKey) ?? undefined)
@@ -69,7 +69,7 @@ export class WorldConnection {
   private reconnect() {
     this.ready = false
     if (this.stopped || this.retry) return
-    this.report('Sem conexão — você pode continuar explorando. Reconectando…')
+    this.report('No connection — you can keep exploring. Reconnecting…')
     this.retry = setTimeout(() => {
       this.retry = undefined
       this.generation++
@@ -92,10 +92,10 @@ export class WorldConnection {
     // the body channel's world both move with the player.
     this.chat.sync(connection)
     const count = players.filter(p => p.connected).length
-    const status = `${count} ${count === 1 ? 'explorador online' : 'exploradores online'}`
+    const status = `${count} ${count === 1 ? 'explorer online' : 'explorers online'}`
     if (this.status !== status) this.report(status)
     const snapshot = this.system.getSnapshot()
-    if (snapshot) void connection.reducers.syncState(snapshot).catch(error => this.report(`Sincronização: ${String(error)}`))
+    if (snapshot) void connection.reducers.syncState(snapshot).catch(error => this.report(`Sync: ${String(error)}`))
   }
 
   dispose() {

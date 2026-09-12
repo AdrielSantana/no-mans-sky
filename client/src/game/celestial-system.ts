@@ -45,7 +45,7 @@ export class CelestialSystem {
   readonly engine: GameEngine
   constructor(engine: GameEngine) {
     this.engine = engine
-    this.walkerController = new PlanetWalkerController(engine)
+    this.walkerController = new PlanetWalkerController(engine, { toggleKeyEnabled: false })
     engine.setSunColor(MINERAL_WORLD.sunColor)
     window.addEventListener('keydown', this.onKeyDown)
     void loadShipModel({ lengthMeters: 12, renderer: engine.renderer }).then(ship => {
@@ -55,7 +55,7 @@ export class CelestialSystem {
       engine.scene.add(ship.object)
       ship.object.visible = false
       this.boarding = new ShipBoardingController(engine, this.walkerController, ship, this.landed)
-    }).catch(error => console.error('Falha ao carregar a nave', error))
+    }).catch(error => console.error('Failed to load the ship', error))
   }
 
   setInitialState(state: ExplorerState | null, joiningPeer = false) {

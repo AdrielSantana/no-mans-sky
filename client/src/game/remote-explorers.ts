@@ -36,7 +36,7 @@ export class RemoteExplorers {
           if (!created.alive) { ship.dispose(); return }
           created.ship = ship
           this.system.engine.scene.add(ship.object)
-        }).catch(error => console.error('Nave remota', error))
+        }).catch(error => console.error('Remote ship', error))
       } else if (actor.next.updatedAt.microsSinceUnixEpoch !== row.updatedAt.microsSinceUnixEpoch) {
         actor.previous = actor.next
         actor.next = row
