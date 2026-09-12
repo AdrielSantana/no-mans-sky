@@ -72,26 +72,116 @@ assim moveu 16 ms: o termo dominante é fragmento, e o overhead de chamada, seja
 qual for, cabe dentro dos ~14 ms de termo fixo. Isolá-lo continua não feito, mas
 o teto do ganho agora é conhecido e é pequeno.
 
-### Pendente: qual dos oito blocos custa o quê
+### O levantamento: qual dos oito blocos custa o quê — 2026-09-12
 
-`createFarLodMaterial` (`planet-renderer.ts:828`) já recebe a banda de LOD e
-`FAR_TEXTURE_LOD_BANDS` (`planet-renderer.ts:168`) já tem cinco níveis. O
-caminho é `#define` por banda: compilar as bandas distantes sem a amostragem de
-detalhe de `TERRAIN_TEXTURE_GLSL`, sem `TERRAIN_NOISE` e sem
-`TERRAIN_GRASS_AO_GLSL`, preservando bioma, iluminação e sombra de nuvem.
+Feito em duas etapas independentes, porque uma sozinha não bastava. O
+levantamento estático diz o que **executa**; a medição diz o que **custa**.
+Onde discordassem, a medição venceria — não discordaram.
 
-Quanto cada bloco vale isoladamente **não foi medido**. Duas tentativas
-falharam, e as duas falharam de um jeito que passa por resultado:
+#### Etapa 1: grafo de chamadas (`client/scripts/glsl-survey.mjs`)
 
-- o stub reescreveu também as definições das funções, o shader parou de
-  compilar, e as cinco ablações deram o mesmo "ganho" de 10 ms;
-- na segunda, o piso de ruído da máquina (11,3 ms) engoliu a diferença.
+Roda sobre o fonte, então carga de máquina não encosta nele. Parte de `main()`
+do fragmento far e só conta o que é alcançável, respeitando os desvios: a
+soma ingênua dos oito blocos inventa um fragmento que não existe.
 
-`runFarShaderAblation` (`client/scripts/shader-ablation.js`) já tem a guarda de
-programas quebrados. Falta uma janela de máquina quieta.
+Para um chunk far num planeta rochoso (o caso real: `planetType: 'rocky'`,
+`uTextureNearDistance 180` + `uTextureFadeDistance 420`, logo tudo além de
+600 m):
 
-**Onde cortar é decisão de arte, não de performance.** O teto é ~16 ms; até onde
-ir antes de o relevo distante achatar é do Adriel.
+| bloco | fetches | transcend. | alu | peso | % |
+|---|---|---|---|---|---|
+| `TERRAIN_TEXTURE_GLSL` | 8 | 18 | 264 | 400 | **65,5** |
+| `PLANET_LIGHTING_GLSL` | 0 | 8 | 56 | 88 | 14,4 |
+| main do far (bioma rochoso) | 0 | 4 | 46 | 62 | 10,1 |
+| `CLOUD_PATTERN_GLSL` | 1 | 5 | 10 | 38 | 6,2 |
+| `TERRAIN_GRASS_AO_GLSL` | 0 | 0 | 15 | 15 | 2,5 |
+| `TERRAIN_CLOUD_SHADOW_GLSL` | 0 | 2 | 0 | 8 | 1,3 |
+
+O peso é `fetch×8 + transcendental×4 + alu×1` — um chute sobre esta GPU, não
+uma medição dela. Mas o ranking não depende do chute: o bloco de textura tem 8
+dos 9 fetches **e** mais ALU que todos os outros somados.
+
+**Três blocos incluídos no shader nunca são alcançados a partir de `main()`:**
+`TERRAIN_NOISE`, `SIMPLEX_4D` e `TERRAIN_HEIGHT_GLSL`. `vHeight` chega como
+varying — o ruído roda no vertex shader. Eles inflam a contagem de linhas (869
+contra 856 do near) e o tempo de compilação, e custam **zero por fragmento**.
+Num planeta rochoso `PLANET_TYPE_BIOMES_GLSL` também não executa: `uPlanetKind`
+é uniforme, e o desvio escolhe `rockyBiome`, que mora no próprio far.
+
+Isso invalida metade do plano que esta seção continha até ontem. Cortar
+`TERRAIN_NOISE` do far não economiza nada, porque o compilador já o descartou.
+
+#### Etapa 2: ablação pareada (`client/scripts/far-block-costs.js`)
+
+DPR 1, walker na superfície, cena assentada, 468 draws, 5 repetições
+intercaladas por alvo, mediana das diferenças pareadas. Só materiais far.
+
+| alvo | ganho | dispersão | veredito |
+|---|---|---|---|
+| só os 8 `textureGrad` (`sampleBiomeTexture`) | **12,4 ms** | 2,8 | acima do piso |
+| bloco de textura inteiro (`applyTerrainTexture`) | **11,1 ms** | 8,3 | acima do piso |
+| controle (recompila sem mudar trabalho) | 0,1 ms | 3,6 | **piso = 3,6 ms** |
+| `PLANET_LIGHTING_GLSL` | — | 6,3 | abaixo do piso |
+| `TERRAIN_GRASS_AO_GLSL` | — | 18,7 | abaixo do piso |
+| macro AO | — | 5,5 | abaixo do piso |
+| `TERRAIN_CLOUD_SHADOW_GLSL` + nuvem | — | 27,9 | abaixo do piso |
+
+Os dois primeiros são iguais dentro do ruído, e é esse o resultado: **os
+fetches são o bloco**. O ruído em volta deles (mineral, estrata, bedPhase) não
+aparece na conta.
+
+Os quatro últimos **não foram medidos**, foram tentados: a dispersão passou do
+efeito. O estático diz que são pequenos, a medição não contradiz, e nenhuma das
+duas os quantifica. "Abaixo do piso" não é "zero".
+
+Onde estão os 8 fetches: `sampleBiomeTexture` chama `sampleTerrainTexture`
+quatro vezes (grama, rocha, areia, neve) e cada uma faz **dois** `textureGrad`
+para descorrelacionar o ladrilho. Na faixa de transição (180–600 m) são 16, por
+chamar o conjunto duas vezes para o crossfade.
+
+#### Etapa 3: preço de cada corte (`client/scripts/far-cut-pricing.js`)
+
+O que um bloco custa se sumir é um teto que ninguém entrega. Isto é o que cada
+edição concreta compra, medido do mesmo jeito:
+
+| corte | ganho | o que muda na tela |
+|---|---|---|
+| nenhuma textura de detalhe além de 600 m | **9,7 ms** | só a faixa far; perto e transição intactos |
+| 1 amostra em vez de 2 por material | **7,6 ms** | mantém a textura, devolve o ladrilho visível |
+| (teto: remover o bloco inteiro) | 11,1–12,4 ms | não é uma opção, é a régua |
+
+Controle da mesma rodada: 0,7 ms, dispersão 2,1. Frame base 29,5–37,6 ms, então
+9,7 ms é cerca de um terço do frame — na ordem de 33 → 50 fps.
+
+**A escolha é de arte e é do Adriel.** Os dois cortes têm custo visual
+diferente em lugares diferentes: um apaga detalhe longe, o outro deixa o padrão
+se repetir perto. Nenhum dos dois é a opção segura.
+
+#### O mecanismo para o corte já existe, e está inerte
+
+`FAR_TEXTURE_LOD_BANDS` (`planet-renderer.ts:168`) tem cinco bandas,
+`createFarLodMaterial` (`planet-renderer.ts:828`) cria um material por banda, e
+`planet-renderer.ts:2123` escolhe a banda pelo LOD. Verificado no runtime:
+
+- 5 materiais far, **1 fonte de fragmento distinta** — são o mesmo programa;
+- `uTextureDetailScale`, `uTextureFarScale` e `uTextureFarStrength` aparecem
+  **uma vez cada** no fragmento: a declaração. Nenhum é lido;
+- os cinco materiais carregam valores diferentes (0,06 a 0,65) que nada lê.
+
+Ou seja: a encanação por banda está pronta e passa água limpa. Um `#define` por
+banda em `createFarLodMaterial` aproveita tudo que já existe — falta o corte
+decidido, não a estrutura.
+
+#### Armadilha de método: amplificar por resolução mente aqui
+
+A primeira rodada mediu em DPR 2 para multiplicar o efeito por 4 e reescalou
+dividindo por 4. Deu 6,6 ms. Medido direto em DPR 1, o mesmo alvo deu 11,1 ms.
+
+O modelo `ganho ∝ dpr²` vale para trabalho de ALU por fragmento e **não vale
+para trabalho preso a fetch de textura** — a 4× a resolução o cache de textura
+se comporta de outro jeito, e a reescala subestimou por 2×. A amplificação
+continua útil para **ordenar** alvos; o valor absoluto tem de sair do DPR em que
+se quer a resposta.
 
 ### Carregamento de chunk: o que mudou e o que foi refutado
 
@@ -145,8 +235,12 @@ Somam-se às da 0d.
 2. **O HMR do Vite ejeta o walker.** Qualquer edição de arquivo reconstrói o
    planeta, `setTargets` (`planet-walker-controller.ts:115`) desliga o walker, e
    a medição vira silenciosamente uma leitura de órbita (42 draws em vez de
-   ~460). Custou três rodadas. Guarde em `draws > 300` e **não edite arquivo
-   entre assentar e medir**.
+   ~460). Custou três rodadas, e voltou a acontecer em 12/09 no meio deste
+   levantamento. **Criar** arquivo novo em `client/scripts/` é seguro; **editar**
+   um módulo que a página já importou não é. Guarde em `draws > 300`, registre
+   draws por repetição (se o walker cair entre pares, as duas metades do par
+   seguinte concordam em 42 e a checagem "draws iguais" passa mesmo assim) e
+   não edite arquivo entre assentar e medir.
 3. **Assentar exige platô de frame time, não só de geometria.** Com a checagem
    só de geometria, os baselines derivaram de 42,1 para 28,8 ms dentro da mesma
    rodada.
@@ -1185,6 +1279,9 @@ import('/scripts/<arquivo>')).<função>()`. Todos leem `window.__nmsEditorDebug
 |---|---|---|
 | `mask-index-checks.js` | `runMaskIndexChecks` | 23 asserções de álgebra de índice: mascarar um quadrante remove exatamente aquele quadrante, e as quatro máscaras particionam a patch. Sem timing — responde em máquina carregada. |
 | `mask-index-checks.js` | `runStitchMaskChecks` | 5 asserções sobre o que o vizinho é **informado**. É o único teste que pega fenda de T-junction; foi provado que discrimina a regressão que ele existe para pegar. |
+| `glsl-survey.mjs` | `node client/scripts/glsl-survey.mjs` | levantamento estático: grafo de chamadas a partir do `main()` do fragmento far, com desvios respeitados. Roda no fonte, imune a carga de máquina, e é o único que enxerga bloco incluído mas nunca alcançado. |
+| `far-block-costs.js` | `prepare`, `runFarBlockCosts` | custo por bloco GLSL, pareado e intercalado, com controle que recompila sem mudar trabalho. `prepare` é separado porque assentar leva minutos e o eval do CDP tem timeout. |
+| `far-cut-pricing.js` | `priceCuts` | preço de cada corte concreto, não do bloco inteiro. Aborta se o trecho a reescrever não existe mais -- um `replace` que não casa devolve a fonte intacta e reporta o ruído como ganho. |
 | `shader-ablation.js` | `runFarShaderAblation` | custo do fragment shader far, com draws e triângulos controlados e guarda de programa quebrado. |
 | `shader-probe.js` | `probeTerrainShaders` | contagem de operações por shader — para escolher o que ablacionar antes de gastar uma rodada. |
 | `surface-perf-checks.js` | `runSurfacePerf`, `runSurfaceAblation2` | ablação por grupo na superfície, com piso de ruído medido e assentamento por platô de frame time. |
